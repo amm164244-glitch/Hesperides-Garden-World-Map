@@ -1,7 +1,93 @@
 /**
- * Biome Grid Type Definitions & Color Palettes
- * Distinct from elevation: captures forest, grassland, desert, wetland, etc.
+ * Biome Grid Type Definitions & Dynamic Custom Biome Types
  */
+
+import { MapSymbolType } from './symbols';
+
+export interface BiomeSymbolRule {
+  kind: 'builtin' | 'custom';
+  symbolType?: MapSymbolType;     // kind が 'builtin' のとき
+  customAssetId?: string;         // kind が 'custom' のとき
+  weight: number;                 // 1〜10(選ばれやすさ)
+  scaleMin: number;               // 0.3〜3(初期値 0.8)
+  scaleMax: number;               // scaleMin 以上、3 まで(初期値 1.2)
+}
+
+export interface BiomeType {
+  slot: number;                   // 1〜255。biomeGrid に格納される番号。作成後は変えない
+  name: string;                   // 1〜20文字。他と重複しない
+  color: string;                  // '#rrggbb'
+  symbols: BiomeSymbolRule[];     // 対象シンボル(空でもよい)
+  density: number;                // 0〜100(%)。配置の濃さの目安。初期値 50
+  minDistance: number;            // 地図座標でのシンボル間の最小距離。初期値 8、範囲 2〜60
+  flipRandom: boolean;            // 左右反転をランダムにするか。初期値 true
+}
+
+export const DEFAULT_BIOME_TYPES: BiomeType[] = [
+  {
+    slot: 1,
+    name: '針葉樹林',
+    color: '#1f5d3a',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+  {
+    slot: 2,
+    name: '広葉樹林',
+    color: '#4f9a3c',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+  {
+    slot: 3,
+    name: '草原',
+    color: '#b9cf6a',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+  {
+    slot: 4,
+    name: '砂漠・荒地',
+    color: '#d9b46a',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+  {
+    slot: 5,
+    name: '湿地',
+    color: '#3f8f86',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+  {
+    slot: 6,
+    name: '雪原・ツンドラ',
+    color: '#e8eef2',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+  {
+    slot: 7,
+    name: '岩山',
+    color: '#8c7f74',
+    symbols: [],
+    density: 50,
+    minDistance: 8,
+    flipRandom: true,
+  },
+];
 
 export interface BiomeTypeDefinition {
   id: number;
@@ -81,16 +167,10 @@ export const BIOME_TYPES: readonly BiomeTypeDefinition[] = [
   },
 ] as const;
 
-/**
- * Fast lookup array indexed by biome id (0 to 7)
- */
 export const BIOME_BY_ID: Record<number, BiomeTypeDefinition> = Object.fromEntries(
   BIOME_TYPES.map((b) => [b.id, b])
 );
 
-/**
- * Selectable biomes (excluding ID 0 which is 'None / Erase')
- */
 export const SELECTABLE_BIOMES = BIOME_TYPES.filter((b) => b.id !== 0);
 
 export interface BiomePaintOptions {

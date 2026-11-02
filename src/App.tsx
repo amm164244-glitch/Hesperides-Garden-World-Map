@@ -35,6 +35,8 @@ import { BiomePalette } from './components/BiomePalette';
 import { PixelArtStudioModal } from './components/PixelArtStudioModal';
 import { ImageToPixelModal } from './components/ImageToPixelModal';
 import { ImageToTerrainModal, CroppedTerrainResult } from './components/ImageToTerrainModal';
+import { BiomeTypeEditor } from './components/BiomeTypeEditor';
+import { BiomeType, DEFAULT_BIOME_TYPES } from './types/biome';
 import {
   MapSymbolInstance,
   SymbolToolSettings,
@@ -115,6 +117,7 @@ export default function App() {
     return {
       ...initial,
       symbols: [],
+      biomeTypes: DEFAULT_BIOME_TYPES,
     };
   });
 
@@ -133,6 +136,65 @@ export default function App() {
     }
     return mapData.symbols || [];
   }, [activeRegionId, mapData.regionalMaps, mapData.symbols]);
+
+  // Biome Types (Custom terrain types, initialized from mapData or default 7 types)
+  const [biomeTypes, setBiomeTypes] = useState<BiomeType[]>(() => {
+    return mapData.biomeTypes && mapData.biomeTypes.length > 0
+      ? mapData.biomeTypes
+      : DEFAULT_BIOME_TYPES;
+  });
+  const [isBiomeTypeEditorOpen, setIsBiomeTypeEditorOpen] = useState<boolean>(false);
+
+  const handleSaveBiomeTypes = useCallback((updated: BiomeType[], removedSlots: number[]) => {
+    setBiomeTypes(updated);
+    setMapData((prev) => {
+      // If any slots were removed, sanitize grids across world and regional maps
+      if (removedSlots.length > 0) {
+        const removedSet = new Set(removedSlots);
+        if (prev.biomeGrid) {
+          const bg = prev.biomeGrid;
+          for (let i = 0; i < bg.length; i++) {
+            if (removedSet.has(bg[i])) {
+              bg[i] = 0;
+            }
+          }
+        }
+        if (prev.regionalMaps) {
+          for (const reg of Object.values(prev.regionalMaps)) {
+            if (reg.biomeGrid) {
+              const bg = reg.biomeGrid;
+              for (let i = 0; i < bg.length; i++) {
+                if (removedSet.has(bg[i])) {
+                  bg[i] = 0;
+                }
+              }
+            }
+          }
+        }
+      }
+      return {
+        ...prev,
+        biomeTypes: updated,
+      };
+    });
+
+    // If active selectedBiomeId was removed, point to first available biome
+    setBiomeSettings((prev) => {
+      if (removedSlots.includes(prev.selectedBiomeId)) {
+        return {
+          ...prev,
+          selectedBiomeId: updated[0]?.slot ?? 1,
+        };
+      }
+      return prev;
+    });
+
+    // Clear history if slots were removed to prevent restoring invalid cells
+    if (removedSlots.length > 0) {
+      setUndoStack([]);
+      setRedoStack([]);
+    }
+  }, []);
 
   // Update symbols for the currently active map (World or Regional)
   const handleUpdateSymbols = useCallback(
@@ -488,7 +550,12 @@ export default function App() {
         if (data.type === 'progress') {
           setGenerationProgress({ progress: data.progress, message: data.message });
         } else if (data.type === 'success') {
-          setMapData({ ...data.mapData, symbols: [], biomeGrid: undefined });
+          setMapData((prev) => ({
+            ...data.mapData,
+            symbols: [],
+            biomeGrid: undefined,
+            biomeTypes: prev.biomeTypes || biomeTypes,
+          }));
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -550,7 +617,12 @@ export default function App() {
       setTimeout(() => {
         try {
           const nextMap = generateTectonicWorld(width, height, config);
-          setMapData({ ...nextMap, symbols: [], biomeGrid: undefined });
+          setMapData((prev) => ({
+            ...nextMap,
+            symbols: [],
+            biomeGrid: undefined,
+            biomeTypes: prev.biomeTypes || biomeTypes,
+          }));
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -562,7 +634,7 @@ export default function App() {
         }
       }, 50);
     }
-  }, [config]);
+  }, [config, biomeTypes]);
 
   // Generate 100% Blank Ocean for pure manual sculpting
   const handleGenerateBlankOcean = useCallback(() => {
@@ -582,7 +654,12 @@ export default function App() {
       setTimeout(() => {
         try {
           const blankMap = generateBlankOceanWorld(width, height, config);
-          setMapData({ ...blankMap, symbols: [], biomeGrid: undefined });
+          setMapData((prev) => ({
+            ...blankMap,
+            symbols: [],
+            biomeGrid: undefined,
+            biomeTypes: prev.biomeTypes || biomeTypes,
+          }));
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -594,11 +671,15 @@ export default function App() {
         }
       }, 50);
     }
-  }, [config]);
+  }, [config, biomeTypes]);
 
   // Apply world map directly from ImageToTerrainModal manual mask correction
   const handleApplyWorldMapFromImage = useCallback((newMapData: MapData) => {
-    setMapData({ ...newMapData, biomeGrid: undefined });
+    setMapData((prev) => ({
+      ...newMapData,
+      biomeGrid: undefined,
+      biomeTypes: prev.biomeTypes || biomeTypes,
+    }));
     setConfig(newMapData.config);
     setActiveRegionId(null);
     setSelectedSymbolId(null);
@@ -960,6 +1041,7 @@ export default function App() {
           selectedSymbolId={selectedSymbolId}
           onSelectSymbolId={setSelectedSymbolId}
           biomeSettings={biomeSettings}
+          biomeTypes={biomeTypes}
           onCommitHistory={handleCommitHistory}
           onHoverCell={setHoveredCell}
           onSelectRegionBounds={(bounds, adjusted = false, shapePolygon) =>
@@ -974,7 +1056,7 @@ export default function App() {
         />
 
         {/* Floating Toolbar (Top Left) */}
-        <div className="absolute top-4 left-4 z-30 max-w-2xl">
+        <div className="absolute top-3 left-3 z-30 max-w-2xl max-h-[calc(100vh-4.5rem)] flex flex-col min-h-0">
           <Toolbar
             brushSettings={brushSettings}
             onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
@@ -1068,6 +1150,8 @@ export default function App() {
               onClose={() =>
                 setBrushSettings((prev) => ({ ...prev, mode: 'pan' }))
               }
+              biomeTypes={biomeTypes}
+              onOpenEditor={() => setIsBiomeTypeEditorOpen(true)}
             />
           </div>
         )}
@@ -1167,6 +1251,16 @@ export default function App() {
             onCancel={() => setPendingRegionInfo(null)}
           />
         )}
+
+        {/* Biome Type Editor Modal */}
+        <BiomeTypeEditor
+          isOpen={isBiomeTypeEditorOpen}
+          onClose={() => setIsBiomeTypeEditorOpen(false)}
+          biomeTypes={biomeTypes}
+          onSave={handleSaveBiomeTypes}
+          mapData={mapData}
+          customAssets={customAssets}
+        />
       </div>
 
       {/* Bottom Inspector Bar */}
@@ -1185,6 +1279,11 @@ export default function App() {
         mapData={mapData}
         onLoadMap={(loadedMap) => {
           setMapData(loadedMap);
+          if (loadedMap.biomeTypes && loadedMap.biomeTypes.length > 0) {
+            setBiomeTypes(loadedMap.biomeTypes);
+          } else {
+            setBiomeTypes(DEFAULT_BIOME_TYPES);
+          }
           setConfig(loadedMap.config);
           setActiveRegionId(null);
           setSelectedSymbolId(null);

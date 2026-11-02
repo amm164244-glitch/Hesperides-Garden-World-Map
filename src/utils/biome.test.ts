@@ -278,3 +278,291 @@ test('encodeBiomeGrid / decodeBiomeGrid: roundtrips correctly and produces compa
   const restoredFromB64 = base64ToBiomeGrid(b64, total);
   assert.deepEqual(Array.from(restoredFromB64), Array.from(grid), 'Base64 roundtrip must match');
 });
+
+// ==========================================
+// Tests for Customizable Biome Types (Step 10)
+// ==========================================
+import {
+  DEFAULT_BIOME_TYPES,
+  BiomeType,
+} from '../types/biome';
+import {
+  addBiomeType,
+  updateBiomeType,
+  removeBiomeType,
+  countBiomeUsage,
+  moveBiomeType,
+  resetToDefaultBiomeTypes,
+  buildBiomeColorTable,
+  resolveSymbolRule,
+  checkColorProximity,
+} from './biomeTypes';
+import { serializeMapData, deserializeMapData } from './serialization';
+import { MapData } from '../types/map';
+
+test('addBiomeType: assigns smallest unused slot and validates name & constraints', () => {
+  const initial = DEFAULT_BIOME_TYPES; // slots 1..7
+  assert.equal(initial.length, 7);
+
+  // Add 8th biome -> should get slot 8
+  const step1 = addBiomeType(initial, '水晶平原', '#9933ff');
+  assert.equal(step1.length, 8);
+  assert.equal(step1[7].slot, 8);
+  assert.equal(step1[7].name, '水晶平原');
+  assert.equal(step1[7].color, '#9933ff');
+
+  // If slot 3 was removed, new addition should reuse slot 3 (smallest unused)
+  const missingSlot3 = step1.filter((b) => b.slot !== 3);
+  const step2 = addBiomeType(missingSlot3, '竹林', '#33aa55');
+  const reusedBiome = step2.find((b) => b.name === '竹林');
+  assert(reusedBiome);
+  assert.equal(reusedBiome.slot, 3, 'Must reuse smallest unused slot (3)');
+
+  // Duplicate name check
+  assert.throws(() => {
+    addBiomeType(step1, '水晶平原', '#112233');
+  }, /重複/);
+
+  // Empty name check
+  assert.throws(() => {
+    addBiomeType(step1, '   ', '#112233');
+  }, /1〜20文字/);
+
+  // Too long name (>20 chars)
+  assert.throws(() => {
+    addBiomeType(step1, '123456789012345678901', '#112233');
+  }, /1〜20文字/);
+});
+
+test('removeBiomeType: replaces cells with 0 across world and regional maps and counts replaced cells', () => {
+  const biomeTypes = [...DEFAULT_BIOME_TYPES];
+  const worldCols = 10;
+  const worldRows = 10;
+  const worldGrid = new Uint8Array(worldCols * worldRows);
+
+  // Paint 5 cells with slot 2 (広葉樹林)
+  worldGrid[0] = 2;
+  worldGrid[1] = 2;
+  worldGrid[2] = 2;
+  worldGrid[10] = 2;
+  worldGrid[11] = 2;
+
+  // Regional map with 3 cells of slot 2
+  const regCols = 5;
+  const regRows = 5;
+  const regGrid = new Uint8Array(regCols * regRows);
+  regGrid[0] = 2;
+  regGrid[1] = 2;
+  regGrid[2] = 2;
+
+  const mapData: MapData = {
+    width: 100,
+    height: 100,
+    gridCols: worldCols,
+    gridRows: worldRows,
+    worldWidthKm: 40000,
+    seaLevel: 35.0,
+    seed: 123,
+    cellCount: worldCols * worldRows,
+    createdAt: new Date().toISOString(),
+    elevationGrid: new Float32Array(worldCols * worldRows),
+    temperatureGrid: new Float32Array(worldCols * worldRows),
+    biomeGrid: worldGrid,
+    biomeTypes,
+    cells: [],
+    symbols: [],
+    regionalMaps: {
+      reg1: {
+        id: 'reg1',
+        name: '地方',
+        bounds: { minX: 0, minY: 0, maxX: 50, maxY: 50 },
+        zoomScale: 4,
+        width: 100,
+        height: 100,
+        gridCols: regCols,
+        gridRows: regRows,
+        widthKm: 10000,
+        seaLevel: 35.0,
+        seed: 456,
+        createdAt: new Date().toISOString(),
+        parentId: null,
+        elevationGrid: new Float32Array(regCols * regRows),
+        temperatureGrid: new Float32Array(regCols * regRows),
+        biomeGrid: regGrid,
+        symbols: [],
+      },
+    },
+    config: {} as any,
+  };
+
+  // Pre-check usage count
+  const usage = countBiomeUsage(mapData);
+  assert.equal(usage[2], 8, 'Total 5 world + 3 regional = 8 cells');
+
+  // Remove slot 2
+  const removeResult = removeBiomeType(biomeTypes, 2, mapData);
+  assert.equal(removeResult.replacedCells, 8);
+  assert.equal(removeResult.biomeTypes.some((b) => b.slot === 2), false);
+
+  // Verify world grid cells became 0
+  assert.equal(worldGrid[0], 0);
+  assert.equal(worldGrid[1], 0);
+  assert.equal(worldGrid[2], 0);
+  assert.equal(worldGrid[10], 0);
+  assert.equal(worldGrid[11], 0);
+
+  // Verify regional grid cells became 0
+  assert.equal(regGrid[0], 0);
+  assert.equal(regGrid[1], 0);
+  assert.equal(regGrid[2], 0);
+});
+
+test('buildBiomeColorTable: correctly maps 256 slots and reads custom biome RGBA', () => {
+  const customTypes: BiomeType[] = [
+    {
+      slot: 1,
+      name: '針葉樹林',
+      color: '#2d6a4f',
+      symbols: [],
+      density: 50,
+      minDistance: 16,
+      flipRandom: true,
+    },
+    {
+      slot: 42,
+      name: '溶岩大地',
+      color: '#ff4500',
+      symbols: [],
+      density: 70,
+      minDistance: 20,
+      flipRandom: true,
+    },
+  ];
+
+  const table = buildBiomeColorTable(customTypes);
+  assert.equal(table.length, 256);
+
+  // Slot 0 must be transparent
+  assert.deepEqual(Array.from(table[0]), [0, 0, 0, 0]);
+
+  // Slot 1 (#2d6a4f -> r:45, g:106, b:79)
+  assert.equal(table[1][0], 0x2d);
+  assert.equal(table[1][1], 0x6a);
+  assert.equal(table[1][2], 0x4f);
+  assert.equal(table[1][3], 215);
+
+  // Slot 42 (#ff4500 -> r:255, g:69, b:0)
+  assert.equal(table[42][0], 255);
+  assert.equal(table[42][1], 69);
+  assert.equal(table[42][2], 0);
+  assert.equal(table[42][3], 215);
+
+  // Unassigned slot 99 must be transparent
+  assert.deepEqual(Array.from(table[99]), [0, 0, 0, 0]);
+});
+
+test('checkColorProximity: detects colors that are too close in RGB distance', () => {
+  const biomes: BiomeType[] = [
+    { slot: 1, name: 'フォレストA', color: '#105010', symbols: [], density: 50, minDistance: 16, flipRandom: true },
+    { slot: 2, name: 'デザート', color: '#d4a373', symbols: [], density: 50, minDistance: 16, flipRandom: true },
+  ];
+
+  // Very similar green (#125212 has distance ~3.4 < 50)
+  const warning = checkColorProximity('#125212', biomes);
+  assert(warning);
+  assert.equal(warning.otherName, 'フォレストA');
+
+  // Completely different blue (#0033aa has distance > 100)
+  const noWarning = checkColorProximity('#0033aa', biomes);
+  assert.equal(noWarning, null);
+});
+
+test('resolveSymbolRule: distinguishes custom vs builtin and detects missing custom assets', () => {
+  const customAssets = [
+    {
+      id: 'asset_tree_1',
+      name: '自作ドット木',
+      category: 'cat_nature',
+      dataUrl: 'data:image/png;base64,abc',
+      width: 32,
+      height: 32,
+      originX: 0.5,
+      originY: 0.9,
+      createdAt: 1,
+    },
+  ];
+
+  // Builtin rule
+  const ruleBuiltin = {
+    kind: 'builtin' as const,
+    symbolType: 'tree_pine' as const,
+    weight: 5,
+    scaleMin: 0.8,
+    scaleMax: 1.2,
+  };
+  const resolvedBuiltin = resolveSymbolRule(ruleBuiltin, customAssets);
+  assert.equal(resolvedBuiltin.displayName, '針葉樹（スプルース）');
+  assert.equal(resolvedBuiltin.isMissing, false);
+
+  // Existing custom asset rule
+  const ruleCustom = {
+    kind: 'custom' as const,
+    customAssetId: 'asset_tree_1',
+    weight: 7,
+    scaleMin: 1.0,
+    scaleMax: 1.5,
+  };
+  const resolvedCustom = resolveSymbolRule(ruleCustom, customAssets);
+  assert.equal(resolvedCustom.displayName, '自作ドット木');
+  assert.equal(resolvedCustom.isMissing, false);
+
+  // Missing custom asset rule
+  const ruleDeleted = {
+    kind: 'custom' as const,
+    customAssetId: 'asset_deleted_999',
+    weight: 5,
+    scaleMin: 0.8,
+    scaleMax: 1.2,
+  };
+  const resolvedDeleted = resolveSymbolRule(ruleDeleted, customAssets);
+  assert.equal(resolvedDeleted.isMissing, true);
+});
+
+test('serialization: biomeTypes roundtrip and sanitizes unknown biome slots in grids', () => {
+  const worldCols = 4;
+  const worldRows = 4;
+  const worldGrid = new Uint8Array(worldCols * worldRows);
+
+  // Slot 1 (valid default) and Slot 99 (orphaned slot not in biomeTypes)
+  worldGrid[0] = 1;
+  worldGrid[1] = 99; // Should become 0 upon deserialize
+
+  const mapData: MapData = {
+    width: 40,
+    height: 40,
+    gridCols: worldCols,
+    gridRows: worldRows,
+    worldWidthKm: 40000,
+    seaLevel: 35.0,
+    seed: 123,
+    cellCount: worldCols * worldRows,
+    createdAt: new Date().toISOString(),
+    elevationGrid: new Float32Array(worldCols * worldRows),
+    temperatureGrid: new Float32Array(worldCols * worldRows),
+    biomeGrid: worldGrid,
+    biomeTypes: DEFAULT_BIOME_TYPES, // only slots 1..7 exist
+    cells: [],
+    symbols: [],
+    regionalMaps: {},
+    config: {} as any,
+  };
+
+  const serialized = serializeMapData(mapData);
+  assert(serialized.biomeTypes);
+  assert.equal(serialized.biomeTypes.length, 7);
+
+  const deserialized = deserializeMapData(serialized);
+  assert(deserialized.biomeGrid);
+  assert.equal(deserialized.biomeGrid[0], 1, 'Valid slot 1 must be kept');
+  assert.equal(deserialized.biomeGrid[1], 0, 'Invalid slot 99 must be sanitized to 0');
+});

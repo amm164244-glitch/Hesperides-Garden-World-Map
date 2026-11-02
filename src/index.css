@@ -9,3 +9,24 @@ html, body, #root {
   background-color: #08111c;
   font-family: 'Noto Sans JP', 'IPAGothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
+
+/* Sleek custom scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 113, 108, 0.45);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(217, 119, 6, 0.7);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 113, 108, 0.45) transparent;
+}
+

@@ -1,4 +1,5 @@
 import { MapData, RegionalMapData } from '../types/map';
+import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { biomeGridToBase64, base64ToBiomeGrid } from './biomePainter';
 
 /**
@@ -74,6 +75,7 @@ export function serializeMapData(mapData: MapData): any {
 
   return {
     ...mapData,
+    biomeTypes: mapData.biomeTypes || DEFAULT_BIOME_TYPES,
     symbols: mapData.symbols || [],
     elevationGridBase64: float32ToBase64(mapData.elevationGrid),
     temperatureGridBase64: float32ToBase64(mapData.temperatureGrid),
@@ -83,6 +85,17 @@ export function serializeMapData(mapData: MapData): any {
     biomeGrid: undefined,
     regionalMaps: regionalMapsSerialized,
   };
+}
+
+function sanitizeBiomeGrid(grid: Uint8Array | undefined, validSlots: Set<number>): Uint8Array | undefined {
+  if (!grid) return undefined;
+  for (let i = 0; i < grid.length; i++) {
+    const slot = grid[i];
+    if (slot !== 0 && !validSlots.has(slot)) {
+      grid[i] = 0;
+    }
+  }
+  return grid;
 }
 
 /**
@@ -105,6 +118,12 @@ export function deserializeMapData(raw: any): MapData {
     ? base64ToFloat32(raw.temperatureGridBase64)
     : ensureFloat32Array(raw.temperatureGrid, expectedTotal);
 
+  // Restore biomeTypes, falling back to defaults if absent
+  const biomeTypes: BiomeType[] = Array.isArray(raw.biomeTypes) && raw.biomeTypes.length > 0
+    ? raw.biomeTypes
+    : DEFAULT_BIOME_TYPES;
+  const validSlots = new Set<number>(biomeTypes.map((b) => b.slot));
+
   const regionalMaps: Record<string, RegionalMapData> = {};
   if (raw.regionalMaps && typeof raw.regionalMaps === 'object') {
     for (const [id, regRaw] of Object.entries(raw.regionalMaps as Record<string, any>)) {
@@ -120,9 +139,11 @@ export function deserializeMapData(raw: any): MapData {
         ? base64ToFloat32(regRaw.temperatureGridBase64)
         : ensureFloat32Array(regRaw.temperatureGrid, regTotal);
 
-      const regBiome = regRaw.biomeGridBase64
+      let regBiome = regRaw.biomeGridBase64
         ? base64ToBiomeGrid(regRaw.biomeGridBase64, regTotal)
         : (regRaw.biomeGrid instanceof Uint8Array ? regRaw.biomeGrid : undefined);
+
+      regBiome = sanitizeBiomeGrid(regBiome, validSlots);
 
       const parentId = regRaw.parentId !== undefined ? regRaw.parentId : null;
       const seed = regRaw.seed !== undefined
@@ -158,9 +179,11 @@ export function deserializeMapData(raw: any): MapData {
     }
   }
 
-  const biomeGrid = raw.biomeGridBase64
+  let biomeGrid = raw.biomeGridBase64
     ? base64ToBiomeGrid(raw.biomeGridBase64, expectedTotal)
     : (raw.biomeGrid instanceof Uint8Array ? raw.biomeGrid : undefined);
+
+  biomeGrid = sanitizeBiomeGrid(biomeGrid, validSlots);
 
   return {
     ...raw,
@@ -169,6 +192,7 @@ export function deserializeMapData(raw: any): MapData {
     elevationGrid,
     temperatureGrid,
     biomeGrid,
+    biomeTypes,
     symbols: Array.isArray(raw.symbols) ? raw.symbols : [],
     regionalMaps,
     cells: Array.isArray(raw.cells) ? raw.cells : [],

@@ -10,8 +10,9 @@ import {
   Sliders,
   Check,
   AlertTriangle,
+  Palette,
 } from 'lucide-react';
-import { SELECTABLE_BIOMES, BIOME_BY_ID } from '../types/biome';
+import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { BrushMode } from '../types/map';
 
 export interface BiomePaletteProps {
@@ -31,6 +32,8 @@ export interface BiomePaletteProps {
   onChangeOpacity: (opacity: number) => void;
   onClearBiomeGrid: () => void;
   onClose: () => void;
+  biomeTypes?: BiomeType[];
+  onOpenEditor?: () => void;
 }
 
 export const BiomePalette: React.FC<BiomePaletteProps> = ({
@@ -50,8 +53,12 @@ export const BiomePalette: React.FC<BiomePaletteProps> = ({
   onChangeOpacity,
   onClearBiomeGrid,
   onClose,
+  biomeTypes,
+  onOpenEditor,
 }) => {
   const [showConfirmClear, setShowConfirmClear] = useState<boolean>(false);
+  const activeBiomeTypes = biomeTypes && biomeTypes.length > 0 ? biomeTypes : DEFAULT_BIOME_TYPES;
+  const currentBiome = activeBiomeTypes.find((b) => b.slot === selectedBiomeId);
 
   return (
     <div className="w-80 max-w-[calc(100vw-2rem)] bg-stone-900/95 backdrop-blur-md text-stone-200 p-3 rounded-xl border border-stone-700/80 shadow-2xl flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-150">
@@ -120,19 +127,19 @@ export const BiomePalette: React.FC<BiomePaletteProps> = ({
         <div className="flex items-center justify-between text-[11px] text-stone-400">
           <span>選択中の地形タイプ:</span>
           <span className="font-semibold text-emerald-300">
-            {brushMode === 'biomeErase' ? '消去 (指定なし)' : BIOME_BY_ID[selectedBiomeId]?.name}
+            {brushMode === 'biomeErase' ? '消去 (指定なし)' : (currentBiome?.name || '未設定')}
           </span>
         </div>
 
         <div className="grid grid-cols-2 gap-1.5 max-h-52 overflow-y-auto pr-0.5">
-          {SELECTABLE_BIOMES.map((biome) => {
-            const isSelected = selectedBiomeId === biome.id && brushMode !== 'biomeErase';
+          {activeBiomeTypes.map((biome) => {
+            const isSelected = selectedBiomeId === biome.slot && brushMode !== 'biomeErase';
             return (
               <button
-                key={biome.id}
+                key={biome.slot}
                 type="button"
                 onClick={() => {
-                  onSelectBiomeId(biome.id);
+                  onSelectBiomeId(biome.slot);
                   if (brushMode === 'biomeErase') {
                     onChangeBrushMode('biomePaint');
                   }
@@ -149,18 +156,32 @@ export const BiomePalette: React.FC<BiomePaletteProps> = ({
                 >
                   {isSelected && <Check className="w-2.5 h-2.5 text-stone-950 drop-shadow" />}
                 </div>
-                <div className="flex flex-col min-w-0">
+                <div className="flex flex-col min-w-0 flex-1">
                   <span className="text-[11px] font-medium text-stone-200 truncate leading-tight">
                     {biome.name}
                   </span>
-                  <span className="text-[9px] text-stone-500 truncate leading-none mt-0.5">
-                    {biome.nameEn}
-                  </span>
+                  {biome.symbols && biome.symbols.length > 0 && (
+                    <span className="text-[9px] text-amber-400/80 truncate leading-none mt-0.5">
+                      {biome.symbols.length} シンボル
+                    </span>
+                  )}
                 </div>
               </button>
             );
           })}
         </div>
+
+        {/* Button to open BiomeTypeEditor */}
+        {onOpenEditor && (
+          <button
+            type="button"
+            onClick={onOpenEditor}
+            className="flex items-center justify-center gap-1.5 py-1.5 px-3 mt-1 bg-stone-950/80 hover:bg-stone-800 text-amber-300 hover:text-amber-200 border border-stone-800 hover:border-amber-500/50 rounded-lg text-xs font-medium transition shadow-sm"
+          >
+            <Palette className="w-3.5 h-3.5 text-emerald-400" />
+            <span>🎨 地形タイプを編集…</span>
+          </button>
+        )}
       </div>
 
       {/* Brush Settings: Softness & Radius */}

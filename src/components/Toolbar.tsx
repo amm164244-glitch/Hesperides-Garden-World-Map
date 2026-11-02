@@ -133,107 +133,110 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   // Collapsed Mode: slim floating bar with icons only
   if (isCollapsed) {
     return (
-      <div className="flex flex-col gap-1.5 bg-stone-900/85 backdrop-blur-md text-stone-200 p-2 rounded-xl border border-stone-700/80 shadow-2xl animate-in fade-in duration-200">
-        {/* Expand button */}
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="p-2 bg-stone-800 hover:bg-stone-700 text-amber-400 hover:text-amber-300 rounded-lg text-xs flex items-center justify-center transition shadow"
-          title="操作パネルを展開 (Tab)"
-          aria-label="操作パネルを展開"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
-
-        {/* Symbol Palette button in collapsed mode */}
-        <button
-          type="button"
-          onClick={onToggleSymbolPalette}
-          className={`p-2 rounded-lg text-xs flex items-center justify-center transition-all ${
-            isSymbolPaletteOpen
-              ? 'bg-amber-500 text-stone-950 font-bold shadow-md ring-2 ring-amber-300'
-              : 'bg-stone-800/80 hover:bg-stone-700 text-amber-300'
-          }`}
-          title="スタンプ・シンボルパネル"
-          aria-label="スタンプ・シンボル"
-        >
-          <Sparkles className="w-4 h-4" />
-        </button>
-
-        {/* Auto region switch toggle in collapsed mode */}
-        {onToggleAutoRegionSwitch && (
+      <div className="flex flex-col bg-stone-900/90 backdrop-blur-md text-stone-200 p-1.5 rounded-xl border border-stone-700/80 shadow-2xl max-h-[calc(100vh-4.5rem)] min-h-0 overflow-hidden animate-in fade-in duration-200">
+        {/* Top pinned actions */}
+        <div className="flex flex-col gap-1 shrink-0 pb-1 border-b border-stone-800">
+          {/* Expand button */}
           <button
             type="button"
-            onClick={onToggleAutoRegionSwitch}
-            className={`p-2 rounded-lg text-xs flex items-center justify-center transition shadow ${
-              autoRegionSwitch
-                ? 'bg-sky-900/80 text-sky-200 border border-sky-600/70'
-                : 'bg-stone-800 hover:bg-stone-700 text-stone-500'
-            }`}
-            title={`階層ズーム自動切替: ${autoRegionSwitch ? 'ON' : 'OFF'}`}
-            aria-label="階層ズーム自動切替"
+            onClick={onToggleCollapse}
+            className="p-1.5 bg-stone-800 hover:bg-stone-700 text-amber-400 hover:text-amber-300 rounded-lg text-xs flex items-center justify-center transition shadow"
+            title="操作パネルを展開 (Tab)"
+            aria-label="操作パネルを展開"
           >
-            <Layers className="w-4 h-4" />
+            <Maximize2 className="w-4 h-4" />
           </button>
-        )}
 
-        <div className="w-full h-px bg-stone-800 my-0.5" />
+          {/* Symbol Palette button in collapsed mode */}
+          <button
+            type="button"
+            onClick={onToggleSymbolPalette}
+            className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition-all ${
+              isSymbolPaletteOpen
+                ? 'bg-amber-500 text-stone-950 font-bold shadow-md ring-2 ring-amber-300'
+                : 'bg-stone-800/80 hover:bg-stone-700 text-amber-300'
+            }`}
+            title="スタンプ・シンボルパネル"
+            aria-label="スタンプ・シンボル"
+          >
+            <Sparkles className="w-4 h-4" />
+          </button>
 
-        {/* Brush Tool Icons */}
-        {tools.map((t) => {
-          const isActive = brushSettings.mode === t.id;
-          return (
+          {/* Auto region switch toggle in collapsed mode */}
+          {onToggleAutoRegionSwitch && (
             <button
-              key={t.id}
               type="button"
-              onClick={() => onUpdateBrush({ mode: t.id })}
-              className={`p-2 rounded-lg text-xs flex items-center justify-center transition-all ${
-                isActive
-                  ? 'bg-amber-500 text-stone-950 font-bold shadow-md ring-2 ring-amber-300 scale-105'
-                  : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300'
+              onClick={onToggleAutoRegionSwitch}
+              className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition shadow ${
+                autoRegionSwitch
+                  ? 'bg-sky-900/80 text-sky-200 border border-sky-600/70'
+                  : 'bg-stone-800 hover:bg-stone-700 text-stone-500'
               }`}
-              title={`${t.label}: ${t.desc}`}
-              aria-label={t.label}
+              title={`階層ズーム自動切替: ${autoRegionSwitch ? 'ON' : 'OFF'}`}
+              aria-label="階層ズーム自動切替"
             >
-              {t.icon}
+              <Layers className="w-4 h-4" />
             </button>
-          );
-        })}
+          )}
+        </div>
 
-        <div className="w-full h-px bg-stone-800 my-0.5" />
+        {/* Scrollable middle Brush Tool Icons */}
+        <div className="flex flex-col gap-1 overflow-y-auto overflow-x-hidden py-1 min-h-0 pr-0.5">
+          {tools.map((t) => {
+            const isActive = brushSettings.mode === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onUpdateBrush({ mode: t.id })}
+                className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition-all shrink-0 ${
+                  isActive
+                    ? 'bg-amber-500 text-stone-950 font-bold shadow-md ring-2 ring-amber-300 scale-105'
+                    : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300'
+                }`}
+                title={`${t.label}: ${t.desc}`}
+                aria-label={t.label}
+              >
+                {t.icon}
+              </button>
+            );
+          })}
+        </div>
 
-        {/* Quick Undo / Redo */}
-        <button
-          type="button"
-          disabled={!canUndo}
-          onClick={onUndo}
-          className={`p-2 rounded-lg text-xs flex items-center justify-center transition-all ${
-            canUndo ? 'bg-stone-800 hover:bg-stone-700 text-stone-200' : 'text-stone-600 bg-stone-900 cursor-not-allowed'
-          }`}
-          title={`元に戻す (Ctrl+Z) [残り ${undoCount}回]`}
-          aria-label="元に戻す"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-        </button>
+        {/* Bottom pinned Quick Undo / Redo */}
+        <div className="flex flex-col gap-1 shrink-0 pt-1 border-t border-stone-800">
+          <button
+            type="button"
+            disabled={!canUndo}
+            onClick={onUndo}
+            className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition-all ${
+              canUndo ? 'bg-stone-800 hover:bg-stone-700 text-stone-200' : 'text-stone-600 bg-stone-900 cursor-not-allowed'
+            }`}
+            title={`元に戻す (Ctrl+Z) [残り ${undoCount}回]`}
+            aria-label="元に戻す"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
 
-        <button
-          type="button"
-          disabled={!canRedo}
-          onClick={onRedo}
-          className={`p-2 rounded-lg text-xs flex items-center justify-center transition-all ${
-            canRedo ? 'bg-stone-800 hover:bg-stone-700 text-stone-200' : 'text-stone-600 bg-stone-900 cursor-not-allowed'
-          }`}
-          title={`やり直し (Ctrl+Y) [残り ${redoCount}回]`}
-          aria-label="やり直し"
-        >
-          <RotateCw className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            disabled={!canRedo}
+            onClick={onRedo}
+            className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition-all ${
+              canRedo ? 'bg-stone-800 hover:bg-stone-700 text-stone-200' : 'text-stone-600 bg-stone-900 cursor-not-allowed'
+            }`}
+            title={`やり直し (Ctrl+Y) [残り ${redoCount}回]`}
+            aria-label="やり直し"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2 bg-stone-900/90 backdrop-blur-md text-stone-200 p-2.5 rounded-xl border border-stone-700/80 shadow-2xl">
+    <div className="flex flex-col gap-2 bg-stone-900/90 backdrop-blur-md text-stone-200 p-2.5 rounded-xl border border-stone-700/80 shadow-2xl max-h-[calc(100vh-4.5rem)] min-h-0 overflow-y-auto">
       {/* Hierarchical Regional Map Banner with Breadcrumbs */}
       {activeRegionalMap || activeRegionName ? (
         <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-950/80 border border-amber-600/70 rounded-lg px-2.5 py-1.5 text-xs">

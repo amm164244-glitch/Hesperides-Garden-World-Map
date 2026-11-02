@@ -127,8 +127,11 @@ export interface MapData {
   // Placed cartographic symbols (Tolkien mountains, trees, settlements, etc.)
   symbols?: import('./symbols').MapSymbolInstance[];
 
-  // Biome Grid (Terrain type raster overlay: 1 byte per cell, 0 to 7)
+  // Biome Grid (Terrain type raster overlay: 1 byte per cell, 0 to 255)
   biomeGrid?: Uint8Array;
+
+  // Project-wide custom biome types (defaults to DEFAULT_BIOME_TYPES)
+  biomeTypes?: import('./biome').BiomeType[];
 }
 
 export interface SupabaseMapRecord {

@@ -20,7 +20,8 @@ import {
 import { drawSortedSymbols } from '../utils/symbolRenderer';
 import { scatterSymbolsUnderBrush } from '../utils/symbolGenerator';
 import { MapSymbolInstance, SymbolToolSettings, CustomMapAsset } from '../types/symbols';
-import { BIOME_BY_ID } from '../types/biome';
+import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
+import { buildBiomeColorTable } from '../utils/biomeTypes';
 import { paintBiomeCircle, floodFillBiome, BiomeBoundingBox } from '../utils/biomePainter';
 import { fitBoundsToLimits } from '../utils/regionLayout';
 import { ScaleBar } from './ScaleBar';
@@ -73,11 +74,13 @@ interface MapCanvasProps {
   onClearMapBackground?: () => void;
   maxZoom?: number;
   onInteractingChange?: (isInteracting: boolean) => void;
+  biomeTypes?: BiomeType[];
 }
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
   mapData,
   activeRegionalMap,
+  biomeTypes,
   viewport,
   onUpdateViewport,
   brushSettings,
@@ -343,6 +346,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     showRipples,
   ]);
 
+  // Biome color lookup table for dynamic custom biome slots (1-255)
+  const biomeColorTable = useMemo(() => {
+    return buildBiomeColorTable(biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES);
+  }, [biomeTypes, mapData.biomeTypes]);
+
   // Rebuild offscreen canvas for biome data
   const rebuildBiomeCanvas = useCallback(
     (grid: Uint8Array | undefined, cols: number, rows: number) => {
@@ -368,13 +376,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         for (let i = 0; i < grid.length; i++) {
           const bId = grid[i];
           if (bId !== 0) {
-            const b = BIOME_BY_ID[bId];
-            if (b) {
+            const rgba = biomeColorTable[bId];
+            if (rgba) {
               const px = i * 4;
-              data[px] = b.rgba[0];
-              data[px + 1] = b.rgba[1];
-              data[px + 2] = b.rgba[2];
-              data[px + 3] = b.rgba[3];
+              data[px] = rgba[0];
+              data[px + 1] = rgba[1];
+              data[px + 2] = rgba[2];
+              data[px + 3] = rgba[3];
             }
           }
         }
@@ -382,7 +390,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.putImageData(imgData, 0, 0);
       biomeImageDataRef.current = imgData;
     },
-    []
+    [biomeColorTable]
   );
 
   // Update dirty subregion of offscreen biome canvas for zero-latency brush strokes
@@ -400,12 +408,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         const px = ch.gridIndex * 4;
         const bId = ch.next;
         if (bId !== 0) {
-          const b = BIOME_BY_ID[bId];
-          if (b) {
-            data[px] = b.rgba[0];
-            data[px + 1] = b.rgba[1];
-            data[px + 2] = b.rgba[2];
-            data[px + 3] = b.rgba[3];
+          const rgba = biomeColorTable[bId];
+          if (rgba) {
+            data[px] = rgba[0];
+            data[px + 1] = rgba[1];
+            data[px + 2] = rgba[2];
+            data[px + 3] = rgba[3];
           }
         } else {
           data[px] = 0;
@@ -423,7 +431,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         ctx.putImageData(imgData, 0, 0);
       }
     },
-    []
+    [biomeColorTable]
   );
 
   // Get or lazily initialize the biome grid on first paint
@@ -1166,8 +1174,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (result.changes.length > 0) {
         updateBiomeSubRegion(result.changes, result.bounds);
         renderOverlay();
+        const activeList = biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES;
+        const bName = activeList.find((b) => b.slot === biomeId)?.name || '';
         onCommitHistory({
-          description: `地形タイプ塗りつぶし (${BIOME_BY_ID[biomeId]?.name || ''})`,
+          description: `地形タイプ塗りつぶし (${bName})`,
           timestamp: Date.now(),
           biomeChanges: result.changes,
         });
@@ -1553,9 +1563,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
       if (biomeChanges.length > 0) {
         const isErase = brushSettings.mode === 'biomeErase';
-        const biomeName = BIOME_BY_ID[biomeSettings?.selectedBiomeId ?? 1]?.name || '';
+        const activeList = biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES;
+        const bName = activeList.find((b) => b.slot === (biomeSettings?.selectedBiomeId ?? 1))?.name || '';
         onCommitHistory({
-          description: isErase ? '地形タイプ消去' : `地形タイプ塗り (${biomeName})`,
+          description: isErase ? '地形タイプ消去' : `地形タイプ塗り (${bName})`,
           timestamp: Date.now(),
           biomeChanges,
         });
@@ -1600,7 +1611,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         setFreehandPoints([]);
         freehandPointsRef.current = [];
       }
-    }
     } else if (!isPanningRef.current && activeStrokeChangesRef.current.size > 0) {
       const changesList: { gridIndex: number; prevElevation: number; newElevation: number }[] = [];
       for (const [gIdx, record] of activeStrokeChangesRef.current.entries()) {
@@ -1653,40 +1663,62 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         cursorPosRef.current = null;
         renderCursorOverlay();
       }}
+      onDoubleClick={() => {
+        if (brushSettings.mode === 'selectRegion' && selectMethod === 'polygon' && polygonPoints.length >= 3) {
+          commitShapeSelection(polygonPoints);
+        }
+      }}
       onContextMenu={(e) => e.preventDefault()}
     >
       <canvas ref={glCanvasRef} className="absolute inset-0 block w-full h-full" />
       <canvas ref={overlayCanvasRef} className="absolute inset-0 block w-full h-full pointer-events-none" />
       <canvas ref={cursorCanvasRef} className="absolute inset-0 block w-full h-full pointer-events-none" />
 
-      {/* Aspect Ratio Lock bar for Region Selection */}
+      {/* Region Shape & Selection Mode Tools Toolbar */}
       {brushSettings.mode === 'selectRegion' && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-stone-900/95 backdrop-blur-md border border-amber-600/70 rounded-xl px-3 py-1.5 shadow-2xl flex items-center gap-2 text-xs text-stone-200 pointer-events-auto animate-in fade-in slide-in-from-top-2">
-          <span className="font-semibold text-amber-300">縦横比を固定:</span>
-          <div className="flex items-center gap-1 bg-stone-950/80 p-0.5 rounded-lg border border-stone-800">
-            {(
-              [
-                { id: 'free', label: 'なし' },
-                { id: '2:1', label: '2:1' },
-                { id: '1:1', label: '1:1' },
-                { id: 'current', label: '表示中マップと同じ' },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => setRegionAspect(opt.id)}
-                className={`px-2.5 py-1 rounded text-[11px] font-medium transition ${
-                  regionAspect === opt.id
-                    ? 'bg-amber-600 text-stone-950 font-bold shadow'
-                    : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <RegionShapeTools
+          method={selectMethod}
+          onChangeMethod={(m) => {
+            setSelectMethod(m);
+            setPolygonPoints([]);
+            setFreehandPoints([]);
+            freehandPointsRef.current = [];
+            setRect2Start(null);
+            setSelectionBox(null);
+            setConfirmedShape(null);
+            renderOverlay();
+          }}
+          aspect={regionAspect}
+          onChangeAspect={(a) => {
+            setRegionAspect(a);
+            renderOverlay();
+          }}
+          smooth={smoothShape}
+          onToggleSmooth={(s) => {
+            setSmoothShape(s);
+            renderOverlay();
+          }}
+          marginPercent={marginPercent}
+          onChangeMargin={(m) => {
+            setMarginPercent(m);
+            renderOverlay();
+          }}
+          polygonPointCount={polygonPoints.length}
+          onFinishPolygon={() => {
+            if (polygonPoints.length >= 3) {
+              commitShapeSelection(polygonPoints);
+            }
+          }}
+          onCancelPolygon={() => {
+            setPolygonPoints([]);
+            setFreehandPoints([]);
+            freehandPointsRef.current = [];
+            setRect2Start(null);
+            setSelectionBox(null);
+            setConfirmedShape(null);
+            renderOverlay();
+          }}
+        />
       )}
 
       {/* Cartographic Scale Bar (Bottom-Left) if outer border is turned off */}

@@ -178,3 +178,49 @@ export interface SymbolToolSettings {
   randomScaleVar: number; // 0.1 .. 0.4
   colorTheme?: SymbolColorTheme; // Active color theme
 }
+
+export interface BuiltinSymbolInfo {
+  type: MapSymbolType;
+  name: string;
+  category: string;
+}
+
+export const BUILTIN_SYMBOL_OPTIONS: BuiltinSymbolInfo[] = [
+  // 樹木・森林
+  { type: 'tree_pine', name: '針葉樹（スプルース）', category: '樹木・森林' },
+  { type: 'tree_pine_cluster', name: '密集した針葉樹林', category: '樹木・森林' },
+  { type: 'tree_oak', name: '広葉樹（オーク）', category: '樹木・森林' },
+  { type: 'tree_oak_cluster', name: '広葉樹樹海', category: '樹木・森林' },
+  { type: 'tree_dead', name: '荒野の枯木', category: '樹木・森林' },
+  // 山岳・丘陵
+  { type: 'mountain_snow', name: '峻厳な雪冠主峰', category: '山岳・丘陵' },
+  { type: 'mountain_rock', name: '鋭利な岩峰', category: '山岳・丘陵' },
+  { type: 'mountain_ridge', name: '連続する岩稜', category: '山岳・丘陵' },
+  { type: 'hill_mound', name: 'なだらかな丘陵群', category: '山岳・丘陵' },
+  { type: 'volcano', name: '火山・孤高の噴火口', category: '山岳・丘陵' },
+  // 集落・村
+  { type: 'village_hamlet', name: '茅葺きの集落', category: '集落・村' },
+  { type: 'village_palisade', name: '丸太防塞の村', category: '集落・村' },
+  { type: 'village_farm', name: '風車と農村', category: '集落・村' },
+  { type: 'village_coastal', name: '水辺の漁村', category: '集落・村' },
+  // 都市・城塞
+  { type: 'city_spires', name: '尖塔大聖堂都市', category: '都市・城塞' },
+  { type: 'town_walled', name: '城郭市街・中世都市', category: '都市・城塞' },
+  { type: 'town_canal', name: '運河商業街', category: '都市・城塞' },
+  { type: 'city_hilltop', name: '丘上城塞都市', category: '都市・城塞' },
+  // 港・沿岸
+  { type: 'port_harbor', name: '交易港・波止場', category: '港・沿岸' },
+  { type: 'port_lighthouse', name: '灯台港・岬の灯台', category: '港・沿岸' },
+  // 塔・砦
+  { type: 'tower_wizard', name: '孤高の魔術師の尖塔', category: '塔・砦' },
+  { type: 'tower_beacon', name: '沿岸狼煙台・烽火塔', category: '塔・砦' },
+  { type: 'tower_bastion', name: '防衛監視砦塔', category: '塔・砦' },
+  // ダンジョン・遺跡
+  { type: 'dungeon_cave', name: '龍の洞窟・魔窟', category: 'ダンジョン・遺跡' },
+  { type: 'dungeon_ruins', name: '古代巨石の崩落神殿', category: 'ダンジョン・遺跡' },
+  { type: 'dungeon_crypt', name: '地下迷宮・古代霊廟', category: 'ダンジョン・遺跡' },
+  { type: 'dungeon_portal', name: '異界の門・ストーンポータル', category: 'ダンジョン・遺跡' },
+  // 海洋・神話
+  { type: 'sailing_ship', name: '3本マスト帆船', category: '海洋・神話' },
+  { type: 'sea_serpent', name: '海竜・リヴァイアサン', category: '海洋・神話' },
+];
