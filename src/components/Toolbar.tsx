@@ -55,6 +55,10 @@ interface ToolbarProps {
   isGeneratorOpen: boolean;
   onOpenStorage: () => void;
   activeRegionName?: string;
+  activeRegionalMap?: import('../types/map').RegionalMapData | null;
+  breadcrumbs?: { id: string | null; name: string }[];
+  onNavigateBreadcrumb?: (id: string | null) => void;
+  onGoBackOneLevel?: () => void;
   onExitRegion?: () => void;
   regionList?: { id: string; name: string }[];
   onSelectRegionMap?: (id: string) => void;
@@ -94,6 +98,10 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   isGeneratorOpen,
   onOpenStorage,
   activeRegionName,
+  activeRegionalMap,
+  breadcrumbs,
+  onNavigateBreadcrumb,
+  onGoBackOneLevel,
   onExitRegion,
   regionList,
   onSelectRegionMap,
@@ -199,19 +207,45 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
   return (
     <div className="flex flex-col gap-2 bg-stone-900/90 backdrop-blur-md text-stone-200 p-2.5 rounded-xl border border-stone-700/80 shadow-2xl">
-      {/* Regional Map active banner or Region selector */}
-      {activeRegionName ? (
-        <div className="flex items-center justify-between bg-amber-950/80 border border-amber-600/70 rounded-lg px-2.5 py-1 text-xs">
-          <div className="flex items-center gap-1.5 text-amber-200">
-            <Layers className="w-3.5 h-3.5 text-amber-400" />
-            <span className="font-semibold truncate max-w-[200px]">{activeRegionName}</span>
+      {/* Hierarchical Regional Map Banner with Breadcrumbs */}
+      {activeRegionalMap || activeRegionName ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-950/80 border border-amber-600/70 rounded-lg px-2.5 py-1.5 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 text-amber-200">
+            <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            {breadcrumbs && breadcrumbs.length > 0 ? (
+              breadcrumbs.map((crumb, idx) => {
+                const isLast = idx === breadcrumbs.length - 1;
+                return (
+                  <React.Fragment key={crumb.id ?? 'world-root'}>
+                    {idx > 0 && <span className="text-amber-500/70 text-[10px] select-none">&gt;</span>}
+                    {isLast ? (
+                      <span className="font-bold text-amber-100 truncate max-w-[140px] sm:max-w-[200px]" title={crumb.name}>
+                        {crumb.name}
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onNavigateBreadcrumb?.(crumb.id)}
+                        className="hover:underline hover:text-amber-300 text-stone-300 truncate max-w-[100px] sm:max-w-[160px] cursor-pointer"
+                        title={`${crumb.name} へ移動`}
+                      >
+                        {crumb.name}
+                      </button>
+                    )}
+                  </React.Fragment>
+                );
+              })
+            ) : (
+              <span className="font-semibold truncate max-w-[200px]">{activeRegionName}</span>
+            )}
           </div>
           <button
             type="button"
-            onClick={onExitRegion}
-            className="px-2 py-0.5 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded text-[11px] transition shadow shrink-0"
+            onClick={onGoBackOneLevel || onExitRegion}
+            className="px-2.5 py-0.5 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded text-[11px] transition shadow shrink-0 flex items-center gap-1 cursor-pointer"
+            title="1つ上の親マップ階層へ戻る"
           >
-            世界マップに戻る
+            <span>1つ上の階層へ戻る</span>
           </button>
         </div>
       ) : regionList && regionList.length > 0 ? (
@@ -234,6 +268,28 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           </select>
         </div>
       ) : null}
+
+      {/* Child Regions Selector if present in current active region */}
+      {activeRegionalMap && regionList && regionList.length > 0 && (
+        <div className="flex items-center justify-between bg-stone-950/70 border border-stone-800/80 rounded-lg px-2.5 py-1 text-xs">
+          <span className="text-stone-400 text-[11px] flex items-center gap-1">
+            <Layers className="w-3 h-3 text-sky-400" />
+            配下の地域:
+          </span>
+          <select
+            onChange={(e) => {
+              if (e.target.value) onSelectRegionMap?.(e.target.value);
+            }}
+            defaultValue=""
+            className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
+          >
+            <option value="" disabled>配下の地域マップを選択...</option>
+            {regionList.map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Top action row */}
       <div className="flex items-center justify-between gap-2 border-b border-stone-800 pb-2">

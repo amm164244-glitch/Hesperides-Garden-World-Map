@@ -13,7 +13,7 @@ import {
   Viewport,
 } from './types/map';
 import { generateTectonicWorld, generateBlankOceanWorld } from './utils/tectonicGenerator';
-import { generateRegionalMap } from './utils/regionGenerator';
+import { generateRegionalMap, toParentMapSource } from './utils/regionGenerator';
 import { SpatialIndex } from './utils/terrainEditor';
 import { Toolbar } from './components/Toolbar';
 import { GeneratorPanel } from './components/GeneratorPanel';
@@ -87,7 +87,7 @@ export default function App() {
   // World Map state
   const [mapData, setMapData] = useState<MapData>(() => {
     const dims = getResolutionDimensions('1024x512');
-    return generateTectonicWorld(dims.width, dims.height, {
+    const initial = generateTectonicWorld(dims.width, dims.height, {
       seed: 738491,
       gridResolution: '1024x512',
       worldWidthKm: 40000,
@@ -101,6 +101,10 @@ export default function App() {
       erosionIterations: 15,
       erosionStrength: 5,
     });
+    return {
+      ...initial,
+      symbols: [],
+    };
   });
 
   // Active Hierarchical Map state: null = World Map, or region ID
@@ -110,6 +114,39 @@ export default function App() {
       ? mapData.regionalMaps[activeRegionId]
       : null;
   }, [activeRegionId, mapData.regionalMaps]);
+
+  // Current active map symbols (derived from active regional map or world map)
+  const currentSymbols = useMemo(() => {
+    if (activeRegionId && mapData.regionalMaps[activeRegionId]) {
+      return mapData.regionalMaps[activeRegionId].symbols || [];
+    }
+    return mapData.symbols || [];
+  }, [activeRegionId, mapData.regionalMaps, mapData.symbols]);
+
+  // Update symbols for the currently active map (World or Regional)
+  const handleUpdateSymbols = useCallback(
+    (nextSymbols: MapSymbolInstance[]) => {
+      setMapData((prev) => {
+        if (activeRegionId && prev.regionalMaps[activeRegionId]) {
+          return {
+            ...prev,
+            regionalMaps: {
+              ...prev.regionalMaps,
+              [activeRegionId]: {
+                ...prev.regionalMaps[activeRegionId],
+                symbols: nextSymbols,
+              },
+            },
+          };
+        }
+        return {
+          ...prev,
+          symbols: nextSymbols,
+        };
+      });
+    },
+    [activeRegionId]
+  );
 
   // Pending Region Selection Bounds for modal prompt
   const [pendingRegionBounds, setPendingRegionBounds] = useState<RegionalBounds | null>(null);
@@ -143,8 +180,7 @@ export default function App() {
   const [showBorder, setShowBorder] = useState<boolean>(true);
   const [compassPos, setCompassPos] = useState<{ x: number; y: number }>({ x: 280, y: 320 });
 
-  // Placed Map Symbols (Start empty per user request - "今あるシンボルをすべて消してください")
-  const [symbols, setSymbols] = useState<MapSymbolInstance[]>([]);
+  // Placed Map Symbols display settings and selection
   const [showSymbols, setShowSymbols] = useState<boolean>(true);
   const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState<boolean>(false);
   const [selectedSymbolId, setSelectedSymbolId] = useState<string | null>(null);
@@ -313,8 +349,7 @@ export default function App() {
         if (data.type === 'progress') {
           setGenerationProgress({ progress: data.progress, message: data.message });
         } else if (data.type === 'success') {
-          setMapData(data.mapData);
-          setSymbols([]); // Keep map clean without automatic symbols
+          setMapData({ ...data.mapData, symbols: [] });
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -326,7 +361,10 @@ export default function App() {
             ...prev,
             regionalMaps: {
               ...prev.regionalMaps,
-              [newRegion.id]: newRegion,
+              [newRegion.id]: {
+                ...newRegion,
+                symbols: newRegion.symbols || [],
+              },
             },
           }));
           setActiveRegionId(newRegion.id);
@@ -372,8 +410,7 @@ export default function App() {
       setTimeout(() => {
         try {
           const nextMap = generateTectonicWorld(width, height, config);
-          setMapData(nextMap);
-          setSymbols([]); // Keep map clean without automatic symbols
+          setMapData({ ...nextMap, symbols: [] });
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -405,8 +442,7 @@ export default function App() {
       setTimeout(() => {
         try {
           const blankMap = generateBlankOceanWorld(width, height, config);
-          setMapData(blankMap);
-          setSymbols([]);
+          setMapData({ ...blankMap, symbols: [] });
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -427,12 +463,16 @@ export default function App() {
       setIsGenerating(true);
       setGenerationProgress({ progress: 10, message: '地域マップを4x/16x解像度で合成中...' });
 
+      // Parent is active regional map if viewing one, otherwise the world map
+      const parentSource = activeRegionalMap || mapData;
+      const parentMapInput = toParentMapSource(parentSource);
+
       if (workerRef.current) {
         workerRef.current.postMessage({
           action: 'generateRegion',
-          width: mapData.width,
-          height: mapData.height,
-          worldMap: mapData,
+          width: parentMapInput.width,
+          height: parentMapInput.height,
+          parentMap: parentMapInput,
           bounds,
           zoomScale,
           name,
@@ -440,7 +480,7 @@ export default function App() {
       } else {
         setTimeout(() => {
           try {
-            const newRegion = generateRegionalMap(mapData, bounds, zoomScale, name);
+            const newRegion = generateRegionalMap(parentMapInput, bounds, zoomScale, name);
             setMapData((prev) => ({
               ...prev,
               regionalMaps: {
@@ -465,7 +505,7 @@ export default function App() {
         }, 50);
       }
     },
-    [mapData]
+    [mapData, activeRegionalMap]
   );
 
   // Commit history record
@@ -496,14 +536,14 @@ export default function App() {
     }
 
     if (lastRecord.symbolChanges) {
-      setSymbols(lastRecord.symbolChanges.prevSymbols);
+      handleUpdateSymbols(lastRecord.symbolChanges.prevSymbols);
       setSelectedSymbolId(null);
     }
 
     setUndoStack((prev) => prev.slice(0, prev.length - 1));
     setRedoStack((prev) => [...prev, lastRecord]);
     setMapData((prev) => ({ ...prev }));
-  }, [undoStack, activeRegionalMap, mapData]);
+  }, [undoStack, activeRegionalMap, mapData, handleUpdateSymbols]);
 
   // Redo
   const handleRedo = useCallback(() => {
@@ -523,14 +563,14 @@ export default function App() {
     }
 
     if (nextRecord.symbolChanges) {
-      setSymbols(nextRecord.symbolChanges.newSymbols);
+      handleUpdateSymbols(nextRecord.symbolChanges.newSymbols);
       setSelectedSymbolId(null);
     }
 
     setRedoStack((prev) => prev.slice(0, prev.length - 1));
     setUndoStack((prev) => [...prev, nextRecord]);
     setMapData((prev) => ({ ...prev }));
-  }, [redoStack, activeRegionalMap, mapData]);
+  }, [redoStack, activeRegionalMap, mapData, handleUpdateSymbols]);
 
   // Clear all symbols
   const handleClearSymbols = useCallback(() => {
@@ -538,13 +578,13 @@ export default function App() {
       description: '全シンボル消去',
       timestamp: Date.now(),
       symbolChanges: {
-        prevSymbols: symbols,
+        prevSymbols: currentSymbols,
         newSymbols: [],
       },
     });
-    setSymbols([]);
+    handleUpdateSymbols([]);
     setSelectedSymbolId(null);
-  }, [symbols, handleCommitHistory]);
+  }, [currentSymbols, handleCommitHistory, handleUpdateSymbols]);
 
   // Reset View
   const handleResetView = useCallback(() => {
@@ -603,12 +643,57 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleUndo, handleRedo, handleToggleCollapse]);
 
+  // Breadcrumb Trail from World -> Parent Regions -> Current Region
+  const breadcrumbs = useMemo(() => {
+    const trail: { id: string | null; name: string }[] = [{ id: null, name: '世界' }];
+    if (!activeRegionId || !mapData.regionalMaps[activeRegionId]) return trail;
+
+    const chain: RegionalMapData[] = [];
+    const visited = new Set<string>();
+    let currId: string | null = activeRegionId;
+
+    while (currId && mapData.regionalMaps[currId] && !visited.has(currId)) {
+      visited.add(currId);
+      const reg: RegionalMapData = mapData.regionalMaps[currId];
+      chain.unshift(reg);
+      currId = reg.parentId;
+    }
+
+    for (const reg of chain) {
+      trail.push({ id: reg.id, name: reg.name });
+    }
+
+    return trail;
+  }, [activeRegionId, mapData.regionalMaps]);
+
+  // Navigate to any hierarchical map level (resetting undo/redo and view)
+  const handleNavigateToRegion = useCallback(
+    (targetId: string | null) => {
+      setActiveRegionId(targetId);
+      setSelectedSymbolId(null);
+      setUndoStack([]);
+      setRedoStack([]);
+      handleResetView();
+    },
+    [handleResetView]
+  );
+
+  // Return to direct parent map (1つ上の階層へ戻る)
+  const handleGoBackOneLevel = useCallback(() => {
+    if (!activeRegionalMap) return;
+    handleNavigateToRegion(activeRegionalMap.parentId);
+  }, [activeRegionalMap, handleNavigateToRegion]);
+
+  // Child regions available under current map view
   const regionList = useMemo(() => {
-    return Object.values(mapData.regionalMaps).map((r) => ({
-      id: r.id,
-      name: r.name,
-    }));
-  }, [mapData.regionalMaps]);
+    const currentId = activeRegionalMap ? activeRegionalMap.id : null;
+    return Object.values(mapData.regionalMaps)
+      .filter((r) => (r.parentId ?? null) === currentId)
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+      }));
+  }, [activeRegionalMap, mapData.regionalMaps]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-[#08111c] text-stone-100 font-sans">
@@ -663,11 +748,11 @@ export default function App() {
           showBorder={showBorder}
           compassPos={compassPos}
           onUpdateCompassPos={setCompassPos}
-          symbols={symbols}
+          symbols={currentSymbols}
           showSymbols={showSymbols}
           symbolToolSettings={symbolToolSettings}
           customAssets={customAssets}
-          onUpdateSymbols={setSymbols}
+          onUpdateSymbols={handleUpdateSymbols}
           selectedSymbolId={selectedSymbolId}
           onSelectSymbolId={setSelectedSymbolId}
           onCommitHistory={handleCommitHistory}
@@ -703,7 +788,7 @@ export default function App() {
             isSymbolPaletteOpen={isSymbolPaletteOpen}
             onToggleSymbolPalette={() => setIsSymbolPaletteOpen((v) => !v)}
             onOpenImageToPixel={() => setIsImageToPixelOpen(true)}
-            symbolCount={symbols.length}
+            symbolCount={currentSymbols.length}
             onResetView={handleResetView}
             zoom={viewport.zoom}
             onZoomChange={(delta) =>
@@ -715,16 +800,14 @@ export default function App() {
             onToggleGenerator={() => setIsGeneratorOpen((v) => !v)}
             isGeneratorOpen={isGeneratorOpen}
             onOpenStorage={() => setIsStorageOpen(true)}
+            activeRegionalMap={activeRegionalMap}
             activeRegionName={activeRegionalMap?.name}
-            onExitRegion={() => {
-              setActiveRegionId(null);
-              handleResetView();
-            }}
+            breadcrumbs={breadcrumbs}
+            onNavigateBreadcrumb={handleNavigateToRegion}
+            onGoBackOneLevel={handleGoBackOneLevel}
+            onExitRegion={handleGoBackOneLevel}
             regionList={regionList}
-            onSelectRegionMap={(id) => {
-              setActiveRegionId(id);
-              handleResetView();
-            }}
+            onSelectRegionMap={handleNavigateToRegion}
             isCollapsed={isToolbarCollapsed}
             onToggleCollapse={handleToggleCollapse}
           />
@@ -738,7 +821,7 @@ export default function App() {
               onChangeBrushMode={(mode) => setBrushSettings((prev) => ({ ...prev, mode }))}
               toolSettings={symbolToolSettings}
               onUpdateToolSettings={(patch) => setSymbolToolSettings((prev) => ({ ...prev, ...patch }))}
-              symbolCount={symbols.length}
+              symbolCount={currentSymbols.length}
               customAssets={customAssets}
               categories={categories}
               onAddCategory={handleAddCategory}
@@ -805,8 +888,8 @@ export default function App() {
         {pendingRegionBounds && (
           <RegionSelector
             bounds={pendingRegionBounds}
-            worldWidthKm={mapData.worldWidthKm || 40000}
-            mapWidth={mapData.width}
+            worldWidthKm={activeRegionalMap ? activeRegionalMap.widthKm : (mapData.worldWidthKm || 40000)}
+            mapWidth={activeRegionalMap ? activeRegionalMap.width : mapData.width}
             onGenerate={handleCreateRegionalMap}
             onCancel={() => setPendingRegionBounds(null)}
           />
@@ -831,8 +914,10 @@ export default function App() {
           setMapData(loadedMap);
           setConfig(loadedMap.config);
           setActiveRegionId(null);
+          setSelectedSymbolId(null);
           setUndoStack([]);
           setRedoStack([]);
+          handleResetView();
         }}
       />
     </div>

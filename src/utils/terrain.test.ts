@@ -85,12 +85,20 @@ test('generateRegionalMap inherits macro terrain and adds micro detail at 4x and
   assert.equal(region4x.zoomScale, 4);
   assert.equal(region4x.gridCols, 1024);
   assert.equal(region4x.gridRows, 512);
+  assert.equal(region4x.parentId, null);
+  assert.equal(region4x.widthKm, Math.round(worldMap.worldWidthKm * (400 / 2000)));
   assert(region4x.elevationGrid instanceof Float32Array);
 
   const region16x = generateRegionalMap(worldMap, bounds, 16, 'テスト地域16x');
   assert.equal(region16x.zoomScale, 16);
   assert.equal(region16x.gridCols, 2048);
   assert.equal(region16x.gridRows, 1024);
+
+  // Test recursive child regional map generation (Region -> Subregion)
+  const subRegion = generateRegionalMap(region4x, { minX: 100, minY: 100, maxX: 300, maxY: 300 }, 4, 'テスト小地域');
+  assert.equal(subRegion.parentId, region4x.id);
+  assert.equal(subRegion.widthKm, Math.round(region4x.widthKm * (200 / 2000)));
+  assert(typeof subRegion.seed === 'number');
 });
 
 test('applyBrushToElevationGrid smoothly modifies elevation with Gaussian falloff', () => {
@@ -139,19 +147,28 @@ test('serializeMapData and deserializeMapData preserve Float32Array grids and re
   const region = generateRegionalMap(worldMap, { minX: 100, minY: 100, maxX: 500, maxY: 400 }, 4, '保存テスト地域');
   worldMap.regionalMaps[region.id] = region;
 
+  worldMap.symbols = [{ id: 'world_sym1', type: 'mountain_snow', x: 250, y: 150, scale: 1.2, rotation: 0 }];
+  region.symbols = [{ id: 'region_sym1', type: 'village_hamlet', x: 80, y: 120, scale: 0.9, rotation: 0 }];
+
   const serialized = serializeMapData(worldMap);
   assert(typeof serialized.elevationGridBase64 === 'string', 'Should produce base64 string for elevation');
   assert(typeof serialized.regionalMaps[region.id].elevationGridBase64 === 'string', 'Should serialize region grids');
+  assert.equal(serialized.symbols.length, 1);
+  assert.equal(serialized.regionalMaps[region.id].symbols.length, 1);
 
   const restored = deserializeMapData(serialized);
   assert(restored.elevationGrid instanceof Float32Array, 'Should restore Float32Array for world elevation');
   assert.equal(restored.elevationGrid.length, worldMap.elevationGrid.length);
   assert.equal(restored.elevationGrid[500], worldMap.elevationGrid[500]);
+  assert.equal(restored.symbols?.length, 1);
+  assert.equal(restored.symbols?.[0].id, 'world_sym1');
 
   const restoredRegion = restored.regionalMaps[region.id];
   assert(restoredRegion, 'Should restore regional map');
   assert(restoredRegion.elevationGrid instanceof Float32Array);
   assert.equal(restoredRegion.elevationGrid[200], region.elevationGrid[200]);
+  assert.equal(restoredRegion.symbols?.length, 1);
+  assert.equal(restoredRegion.symbols?.[0].id, 'region_sym1');
 });
 
 test('applyErosion smooths steep talus slopes and carves valleys', () => {

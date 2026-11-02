@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BrushSettings,
   HistoryRecord,
@@ -113,6 +113,36 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const currentElevation = isRegion ? activeRegionalMap.elevationGrid : mapData.elevationGrid;
   const currentTemperature = isRegion ? activeRegionalMap.temperatureGrid : mapData.temperatureGrid;
   const currentSeaLevel = isRegion ? activeRegionalMap.seaLevel : mapData.seaLevel;
+
+  // Real-world map width in km (handles World map, and recursive Regional/Town maps)
+  const effectiveWidthKm = useMemo(() => {
+    if (!activeRegionalMap) {
+      return mapData.worldWidthKm || 40000;
+    }
+
+    // Helper to compute widthKm for any region, falling back recursively to parent
+    const computeRegionWidthKm = (reg: RegionalMapData): number => {
+      if (typeof reg.widthKm === 'number' && reg.widthKm > 0) {
+        return reg.widthKm;
+      }
+      const boundsWidth = reg.bounds
+        ? Math.abs(reg.bounds.maxX - reg.bounds.minX)
+        : reg.width;
+
+      if (!reg.parentId || !mapData.regionalMaps[reg.parentId]) {
+        const parentKm = mapData.worldWidthKm || 40000;
+        const parentW = mapData.width || 2000;
+        return parentKm * (boundsWidth / parentW);
+      }
+
+      const parentReg = mapData.regionalMaps[reg.parentId];
+      const parentKm = computeRegionWidthKm(parentReg);
+      const parentW = parentReg.width || 2000;
+      return parentKm * (boundsWidth / parentW);
+    };
+
+    return computeRegionWidthKm(activeRegionalMap) || 1000;
+  }, [activeRegionalMap, mapData.worldWidthKm, mapData.width, mapData.regionalMaps]);
 
   // Interaction tracking refs
   const isMouseDownRef = useRef<boolean>(false);
@@ -331,7 +361,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         42,
         currentHeight - 56,
         currentWidth,
-        mapData.worldWidthKm || 40000,
+        effectiveWidthKm,
         viewport.zoom * dpr
       );
     } else {
@@ -345,13 +375,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     viewport,
     selectionBox,
     isRegion,
+    activeRegionalMap,
     mapData.regionalMaps,
     currentWidth,
     currentHeight,
     showCompass,
     showBorder,
     compassPos,
-    mapData.worldWidthKm,
+    effectiveWidthKm,
     symbols,
     showSymbols,
     selectedSymbolId,
@@ -936,7 +967,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       {!showBorder && (
         <div className="absolute bottom-3 left-4 z-20">
           <ScaleBar
-            worldWidthKm={mapData.worldWidthKm || 40000}
+            worldWidthKm={effectiveWidthKm}
             mapWidth={currentWidth}
             viewport={viewport}
           />

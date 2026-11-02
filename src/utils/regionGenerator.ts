@@ -172,6 +172,7 @@ export function generateRegionalMap(
     parentId: parent.id ?? null,
     seed,
     widthKm,
+    symbols: [],
   };
 }
 

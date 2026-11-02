@@ -60,6 +60,7 @@ export function serializeMapData(mapData: MapData): any {
         parentId: reg.parentId ?? null,
         seed: reg.seed,
         widthKm: reg.widthKm,
+        symbols: reg.symbols || [],
         elevationGridBase64: float32ToBase64(reg.elevationGrid),
         temperatureGridBase64: float32ToBase64(reg.temperatureGrid),
         elevationGrid: undefined,
@@ -70,6 +71,7 @@ export function serializeMapData(mapData: MapData): any {
 
   return {
     ...mapData,
+    symbols: mapData.symbols || [],
     elevationGridBase64: float32ToBase64(mapData.elevationGrid),
     temperatureGridBase64: float32ToBase64(mapData.temperatureGrid),
     elevationGrid: undefined,
@@ -140,6 +142,7 @@ export function deserializeMapData(raw: any): MapData {
         parentId,
         seed,
         widthKm,
+        symbols: Array.isArray(regRaw.symbols) ? regRaw.symbols : [],
       };
     }
   }
@@ -150,6 +153,7 @@ export function deserializeMapData(raw: any): MapData {
     gridRows,
     elevationGrid,
     temperatureGrid,
+    symbols: Array.isArray(raw.symbols) ? raw.symbols : [],
     regionalMaps,
     cells: Array.isArray(raw.cells) ? raw.cells : [],
     config: raw.config || {

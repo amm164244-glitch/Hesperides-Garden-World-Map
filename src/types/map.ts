@@ -55,6 +55,7 @@ export interface RegionalMapData {
   parentId: string | null; // null = 世界マップが親
   seed: number;            // 親のseedと bounds から決める
   widthKm: number;         // このマップ全体の実距離。親のwidthKm × (bounds幅 ÷ 親のwidth)
+  symbols?: import('./symbols').MapSymbolInstance[];
 }
 
 export interface ParentMapSource {

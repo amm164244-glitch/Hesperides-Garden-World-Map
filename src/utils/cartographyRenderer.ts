@@ -444,7 +444,7 @@ export function drawDecorativeBorder(
 }
 
 /**
- * Draws the authentic Checkerboard Nautical Scale Bar (Miles)
+ * Draws the authentic Checkerboard Nautical Scale Bar
  */
 export function drawAntiqueScaleBar(
   ctx: CanvasRenderingContext2D,
@@ -457,15 +457,62 @@ export function drawAntiqueScaleBar(
   ctx.save();
   ctx.translate(x, y);
 
-  // 1 km = 0.621371 miles
-  const worldWidthMiles = worldWidthKm * 0.621371;
-  const pixelsPerMile = mapWidth / worldWidthMiles;
-
-  // Choose scale step: 20 miles per segment
-  const segmentMiles = 20;
-  const segmentPx = segmentMiles * pixelsPerMile;
-  const totalSegments = 12; // 0 to 240 Miles
+  const isWorldScale = worldWidthKm >= 39000;
+  const totalSegments = 12; // Maintain identical 12 segments
   const barHeight = 8;
+
+  let segmentPx: number;
+  let unitLabel: string;
+  let getVal: (i: number) => number;
+
+  if (isWorldScale) {
+    // Preserve exact original nautical miles display for World map
+    // 1 km = 0.621371 miles
+    const worldWidthMiles = worldWidthKm * 0.621371;
+    const pixelsPerMile = mapWidth / worldWidthMiles;
+    const segmentMiles = 20;
+    segmentPx = segmentMiles * pixelsPerMile;
+    unitLabel = 'Miles';
+    getVal = (i: number) => i * segmentMiles;
+  } else {
+    // Regional & Town maps: adjust candidate values and units (m for <1km, km for >=1km)
+    const pixelsPerKm = mapWidth / worldWidthKm;
+    const candidateStepsKm = [
+      0.005, 0.01, 0.02, 0.025, 0.05, 0.1, 0.2, 0.25, 0.5,
+      1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000,
+    ];
+
+    let chosenStepKm = candidateStepsKm[0];
+    let found = false;
+    for (const step of candidateStepsKm) {
+      const px = step * pixelsPerKm;
+      if (px >= 10 && px <= 35) {
+        chosenStepKm = step;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      let minDiff = Infinity;
+      for (const step of candidateStepsKm) {
+        const diff = Math.abs(step * pixelsPerKm - 20);
+        if (diff < minDiff) {
+          minDiff = diff;
+          chosenStepKm = step;
+        }
+      }
+    }
+
+    segmentPx = chosenStepKm * pixelsPerKm;
+    if (chosenStepKm < 1) {
+      unitLabel = 'm';
+      const stepMeters = Math.round(chosenStepKm * 1000);
+      getVal = (i: number) => i * stepMeters;
+    } else {
+      unitLabel = 'km';
+      getVal = (i: number) => i * chosenStepKm;
+    }
+  }
 
   // Background Parchment Plaque
   const plaqueW = totalSegments * segmentPx + 48;
@@ -490,24 +537,24 @@ export function drawAntiqueScaleBar(
     ctx.lineWidth = 0.8 / zoom;
     ctx.strokeRect(sx, 0, segmentPx, barHeight);
 
-    // Number label every 20 miles
-    const milesVal = i * segmentMiles;
+    // Number label every segment
+    const val = getVal(i);
     ctx.font = `bold ${Math.max(9, Math.round(9 / zoom))}px "Cinzel", "Times New Roman", serif`;
     ctx.fillStyle = '#e8d4a2';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
-    ctx.fillText(String(milesVal), sx, -2);
+    ctx.fillText(String(val), sx, -2);
   }
 
-  // Final 240 label
-  ctx.fillText(String(totalSegments * segmentMiles), totalSegments * segmentPx, -2);
+  // Final label
+  ctx.fillText(String(getVal(totalSegments)), totalSegments * segmentPx, -2);
 
-  // Unit label "Miles"
+  // Unit label
   ctx.font = `italic bold ${Math.max(10, Math.round(10 / zoom))}px "Cinzel", serif`;
   ctx.fillStyle = '#f3cc65';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText('Miles', totalSegments * segmentPx + 8, barHeight / 2);
+  ctx.fillText(unitLabel, totalSegments * segmentPx + 8, barHeight / 2);
 
   ctx.restore();
 }
