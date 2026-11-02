@@ -85,7 +85,7 @@ const TEMPLATES: PixelTemplate[] = [
   {
     name: '村の家 (Hamlet)',
     icon: '🛖',
-    category: 'cat_village',
+    category: '',
     size: 16,
     generate: () => {
       const g = Array.from({ length: 16 }, () => Array(16).fill(''));
@@ -126,7 +126,7 @@ const TEMPLATES: PixelTemplate[] = [
   {
     name: '城砦・尖塔 (Castle)',
     icon: '🏰',
-    category: 'cat_town',
+    category: '',
     size: 24,
     generate: () => {
       const g = Array.from({ length: 24 }, () => Array(24).fill(''));
@@ -331,7 +331,7 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
   // Metadata
   const [symbolName, setSymbolName] = useState<string>(initialAsset?.name || 'ドット絵シンボル');
   const [selectedCategory, setSelectedCategory] = useState<string>(
-    initialAsset?.category || (categories[0]?.id ?? 'cat_village')
+    initialAsset?.category || (categories[0]?.id ?? '')
   );
 
   // Quick category creation inside modal
@@ -1133,6 +1133,7 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
                     onChange={(e) => setSelectedCategory(e.target.value)}
                     className="w-full bg-[#100e0c] border border-[#3d3326] rounded-lg px-2.5 py-1.5 text-xs text-[#f5ebd9] focus:outline-none focus:border-amber-500"
                   >
+                    <option value="">未分類 (指定なし)</option>
                     {categories.map((cat) => (
                       <option key={cat.id} value={cat.id}>
                         {cat.icon} {cat.name}

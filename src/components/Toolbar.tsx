@@ -25,10 +25,13 @@ import {
   Eraser,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
+import { SymbolToolSettings } from '../types/symbols';
 
 interface ToolbarProps {
   brushSettings: BrushSettings;
   onUpdateBrush: (newSettings: Partial<BrushSettings>) => void;
+  symbolToolSettings?: SymbolToolSettings;
+  onUpdateSymbolToolSettings?: (patch: Partial<SymbolToolSettings>) => void;
   canUndo: boolean;
   canRedo: boolean;
   onUndo: () => void;
@@ -74,6 +77,8 @@ interface ToolbarProps {
 export const Toolbar: React.FC<ToolbarProps> = ({
   brushSettings,
   onUpdateBrush,
+  symbolToolSettings,
+  onUpdateSymbolToolSettings,
   canUndo,
   canRedo,
   onUndo,
@@ -457,7 +462,128 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       </div>
 
       {/* Brush parameters (when not in pan mode) */}
-      {brushSettings.mode !== 'pan' && (
+      {brushSettings.mode === 'symbolBrush' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-stone-950/60 p-2.5 rounded-lg border border-amber-900/50 text-xs">
+          {/* Symbol Size / Scale */}
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-stone-400">
+              <span>シンボル大きさ:</span>
+              <span className="font-mono text-amber-400 font-bold">
+                {Math.round((symbolToolSettings?.scale ?? 1.0) * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0.05}
+              max={2.5}
+              step={0.01}
+              value={symbolToolSettings?.scale ?? 1.0}
+              onChange={(e) => onUpdateSymbolToolSettings?.({ scale: Number(e.target.value) })}
+              className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+            />
+          </div>
+
+          {/* Scatter Radius */}
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-stone-400">
+              <span>散布半径:</span>
+              <span className="font-mono text-amber-400 font-bold">
+                {symbolToolSettings?.scatterRadius ?? 60} px
+              </span>
+            </div>
+            <input
+              type="range"
+              min={15}
+              max={200}
+              step={5}
+              value={symbolToolSettings?.scatterRadius ?? 60}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                onUpdateSymbolToolSettings?.({ scatterRadius: val });
+                onUpdateBrush({ radius: val });
+              }}
+              className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+            />
+          </div>
+
+          {/* Scatter Density */}
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-stone-400">
+              <span>散布密度:</span>
+              <span className="font-mono text-amber-400 font-bold">
+                {symbolToolSettings?.density ?? 3}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={10}
+              step={1}
+              value={symbolToolSettings?.density ?? 3}
+              onChange={(e) => onUpdateSymbolToolSettings?.({ density: Number(e.target.value) })}
+              className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+            />
+          </div>
+
+          {/* Terrain Type Constraint Note */}
+          <div className="sm:col-span-3 text-[11px] text-amber-300/85 flex items-center gap-1.5 pt-1 border-t border-amber-900/40 font-medium">
+            <span>🧭</span>
+            <span>カーソルのある地形タイプ（同バイオーム・海域）にのみシンボルが散布配置されます</span>
+          </div>
+        </div>
+      ) : brushSettings.mode === 'stamp' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-950/60 p-2.5 rounded-lg border border-amber-900/50 text-xs">
+          {/* Symbol Size / Scale */}
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-stone-400">
+              <span>シンボル大きさ:</span>
+              <span className="font-mono text-amber-400 font-bold">
+                {Math.round((symbolToolSettings?.scale ?? 1.0) * 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0.05}
+              max={2.5}
+              step={0.01}
+              value={symbolToolSettings?.scale ?? 1.0}
+              onChange={(e) => onUpdateSymbolToolSettings?.({ scale: Number(e.target.value) })}
+              className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+            />
+          </div>
+          <div className="flex items-center text-[11px] text-stone-400">
+            ※ 地図上をクリックして配置。配置済みシンボルをクリックして移動・選択。
+          </div>
+        </div>
+      ) : brushSettings.mode === 'symbolEraser' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-stone-950/60 p-2.5 rounded-lg border border-red-900/50 text-xs">
+          {/* Eraser Radius */}
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-stone-400">
+              <span>消しゴム半径:</span>
+              <span className="font-mono text-red-400 font-bold">
+                {symbolToolSettings?.scatterRadius ?? 60} px
+              </span>
+            </div>
+            <input
+              type="range"
+              min={15}
+              max={200}
+              step={5}
+              value={symbolToolSettings?.scatterRadius ?? 60}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                onUpdateSymbolToolSettings?.({ scatterRadius: val });
+                onUpdateBrush({ radius: val });
+              }}
+              className="accent-red-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+            />
+          </div>
+          <div className="flex items-center text-[11px] text-stone-400">
+            ※ ドラッグして円内のシンボルを一括消去
+          </div>
+        </div>
+      ) : brushSettings.mode !== 'pan' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-stone-950/60 p-2.5 rounded-lg border border-stone-800 text-xs">
           {/* Radius */}
           <div className="flex flex-col gap-1">

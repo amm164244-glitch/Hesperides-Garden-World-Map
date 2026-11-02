@@ -71,13 +71,7 @@ export interface CustomSymbolCategory {
   createdAt: number;
 }
 
-export const DEFAULT_CUSTOM_CATEGORIES: CustomSymbolCategory[] = [
-  { id: 'cat_village', name: '村・集落', icon: '🛖', color: '#10b981', createdAt: 1 },
-  { id: 'cat_town', name: '街・城塞', icon: '🏰', color: '#3b82f6', createdAt: 2 },
-  { id: 'cat_dungeon', name: 'ダンジョン・遺跡', icon: '💀', color: '#8b5cf6', createdAt: 3 },
-  { id: 'cat_nature', name: '自然・地形', icon: '🌲', color: '#84cc16', createdAt: 4 },
-  { id: 'cat_quest', name: 'クエスト・拠点', icon: '⚔️', color: '#f59e0b', createdAt: 5 },
-];
+export const DEFAULT_CUSTOM_CATEGORIES: CustomSymbolCategory[] = [];
 
 export interface CustomMapAsset {
   id: string;
@@ -161,7 +155,7 @@ export interface MapSymbolInstance {
   customAssetId?: string; // If type === 'custom'
   x: number;              // World coordinates (0 .. MAP_WIDTH)
   y: number;              // World coordinates (0 .. MAP_HEIGHT)
-  scale: number;          // 0.6 .. 2.0 (default 1.0)
+  scale: number;          // 0.05 .. 3.0 (default 1.0)
   rotation?: number;      // Radians (-0.15 .. +0.15 for organic tilt)
   flipX?: boolean;        // Mirror horizontally for visual variety
   variant?: number;       // 0, 1, 2 for subtle ridge/branch variations
@@ -172,10 +166,10 @@ export interface SymbolToolSettings {
   selectedType: MapSymbolType;
   selectedCustomAssetId?: string | null;
   category: string;       // Custom category ID or category name
-  scale: number;          // 0.6 .. 2.0
+  scale: number;          // 0.05 .. 3.0 (supports micro/compact symbols)
   density: number;        // For scatter brush (1 .. 10)
-  scatterRadius: number;  // 20 .. 150
-  randomScaleVar: number; // 0.1 .. 0.4
+  scatterRadius: number;  // 15 .. 200 px
+  randomScaleVar: number; // 0.0 .. 0.4
   colorTheme?: SymbolColorTheme; // Active color theme
 }
 

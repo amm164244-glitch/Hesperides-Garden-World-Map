@@ -167,6 +167,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const currentSeaLevel = isRegion ? activeRegionalMap.seaLevel : mapData.seaLevel;
   const currentBiomeGrid = isRegion ? activeRegionalMap?.biomeGrid : mapData.biomeGrid;
 
+  // Context for terrain-type-aware operations (e.g. symbol scattering restricted to cursor's terrain)
+  const terrainContext = useMemo(() => ({
+    biomeGrid: currentBiomeGrid,
+    elevationGrid: currentElevation,
+    gridCols: currentCols,
+    gridRows: currentRows,
+    mapWidth: currentWidth,
+    mapHeight: currentHeight,
+    seaLevel: currentSeaLevel ?? 35.0,
+  }), [currentBiomeGrid, currentElevation, currentCols, currentRows, currentWidth, currentHeight, currentSeaLevel]);
+
   // Real-world map width in km (handles World map, and recursive Regional/Town maps)
   const effectiveWidthKm = useMemo(() => {
     if (!activeRegionalMap) {
@@ -764,20 +775,31 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     ctx.setTransform(viewport.zoom * dpr, 0, 0, viewport.zoom * dpr, viewport.x * dpr, viewport.y * dpr);
 
     const { x, y } = curPos;
-    const radius = brushSettings.radius;
+    const isSymbolTool = brushSettings.mode === 'symbolBrush' || brushSettings.mode === 'symbolEraser';
+    const radius = isSymbolTool
+      ? (symbolToolSettings?.scatterRadius ?? 60)
+      : brushSettings.radius;
     const active = isMouseDownRef.current && !isPanningRef.current;
 
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = active ? 'rgba(215, 65, 35, 0.95)' : 'rgba(255, 255, 255, 0.75)';
+    ctx.strokeStyle = active
+      ? 'rgba(215, 65, 35, 0.95)'
+      : isSymbolTool
+      ? 'rgba(245, 158, 11, 0.85)'
+      : 'rgba(255, 255, 255, 0.75)';
     ctx.lineWidth = (active ? 2.5 : 1.5) / viewport.zoom;
     ctx.stroke();
 
-    ctx.fillStyle = active ? 'rgba(215, 65, 35, 0.16)' : 'rgba(255, 255, 255, 0.05)';
+    ctx.fillStyle = active
+      ? 'rgba(215, 65, 35, 0.16)'
+      : isSymbolTool
+      ? 'rgba(245, 158, 11, 0.08)'
+      : 'rgba(255, 255, 255, 0.05)';
     ctx.fill();
 
     ctx.restore();
-  }, [viewport, brushSettings.mode, brushSettings.radius]);
+  }, [viewport, brushSettings.mode, brushSettings.radius, symbolToolSettings?.scatterRadius]);
 
   // Unified redraw
   const redraw = useCallback(() => {
@@ -1072,7 +1094,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       let hit: MapSymbolInstance | null = null;
       for (let i = symList.length - 1; i >= 0; i--) {
         const s = symList[i];
-        const hitR = 24 * (s.scale || 1.0);
+        // Ensure even very small symbols have a comfortable hit target (min 12px)
+        const hitR = Math.max(12, 24 * (s.scale ?? 1.0));
         if (Math.hypot(worldPos.x - s.x, worldPos.y - s.y) <= hitR) {
           hit = s;
           break;
@@ -1088,14 +1111,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       } else {
         // Place new single stamp symbol
         onSelectSymbolId?.(null);
-        const isCustom = symbolToolSettings?.selectedType === 'custom';
+        const isCustom = symbolToolSettings?.selectedType === 'custom' || !!symbolToolSettings?.selectedCustomAssetId;
+        const type = isCustom ? 'custom' : (symbolToolSettings?.selectedType || 'mountain_snow');
+        const customAssetId = isCustom ? (symbolToolSettings?.selectedCustomAssetId || customAssets?.[0]?.id) : undefined;
         const newSym: MapSymbolInstance = {
           id: `sym_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          type: symbolToolSettings?.selectedType || 'mountain_snow',
-          customAssetId: isCustom ? symbolToolSettings?.selectedCustomAssetId || undefined : undefined,
+          type,
+          customAssetId,
           x: Math.round(worldPos.x),
           y: Math.round(worldPos.y),
-          scale: symbolToolSettings?.scale || 1.0,
+          scale: symbolToolSettings?.scale ?? 1.0,
           rotation: (Math.random() - 0.5) * 0.12,
           flipX: Math.random() < 0.5,
           variant: Math.floor(Math.random() * 3),
@@ -1117,16 +1142,25 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (brushSettings.mode === 'symbolBrush') {
       const symList = [...(symbols || [])];
       symbolStrokeSnapshotRef.current = symList;
-      const type = symbolToolSettings?.selectedType || 'tree_pine_cluster';
-      const customAssetId = type === 'custom' ? symbolToolSettings?.selectedCustomAssetId || undefined : undefined;
+      const isCustom = symbolToolSettings?.selectedType === 'custom' || !!symbolToolSettings?.selectedCustomAssetId;
+      const type = isCustom ? 'custom' : (symbolToolSettings?.selectedType || 'tree_pine_cluster');
+      const customAssetId = isCustom ? (symbolToolSettings?.selectedCustomAssetId || customAssets?.[0]?.id) : undefined;
+      const scatterRadius = symbolToolSettings?.scatterRadius ?? 60;
+      const density = symbolToolSettings?.density ?? 3;
+      const baseScale = symbolToolSettings?.scale ?? 1.0;
+      const randomVar = symbolToolSettings?.randomScaleVar ?? 0.15;
+
       const added = scatterSymbolsUnderBrush(
         worldPos.x,
         worldPos.y,
         type,
-        brushSettings.radius,
-        symbolToolSettings?.density || 3,
+        scatterRadius,
+        density,
         symList,
-        customAssetId
+        customAssetId,
+        baseScale,
+        randomVar,
+        terrainContext
       );
       if (added.length > 0) {
         onUpdateSymbols?.(symList);
@@ -1137,7 +1171,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (brushSettings.mode === 'symbolEraser') {
       const symList = symbols || [];
       symbolStrokeSnapshotRef.current = [...symList];
-      const rad = brushSettings.radius;
+      const rad = symbolToolSettings?.scatterRadius ?? brushSettings.radius;
       const remaining = symList.filter((s) => Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > rad);
       if (remaining.length !== symList.length) {
         onUpdateSymbols?.(remaining);
@@ -1437,19 +1471,27 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       });
       renderOverlay();
     } else if (brushSettings.mode === 'symbolBrush') {
-      if (Math.hypot(worldPos.x - lastWorldPosRef.current.x, worldPos.y - lastWorldPosRef.current.y) >= 16) {
+      const scatterRadius = symbolToolSettings?.scatterRadius ?? 60;
+      const minStep = Math.max(8, Math.min(24, scatterRadius * 0.25));
+      if (Math.hypot(worldPos.x - lastWorldPosRef.current.x, worldPos.y - lastWorldPosRef.current.y) >= minStep) {
         const symList = [...(symbols || [])];
         const isCustom = symbolToolSettings?.selectedType === 'custom' || !!symbolToolSettings?.selectedCustomAssetId;
-        const type = isCustom ? 'custom' : (symbolToolSettings?.selectedType || 'custom');
+        const type = isCustom ? 'custom' : (symbolToolSettings?.selectedType || 'tree_pine_cluster');
         const customAssetId = isCustom ? (symbolToolSettings?.selectedCustomAssetId || customAssets?.[0]?.id) : undefined;
+        const density = symbolToolSettings?.density ?? 3;
+        const baseScale = symbolToolSettings?.scale ?? 1.0;
+        const randomVar = symbolToolSettings?.randomScaleVar ?? 0.15;
         const added = scatterSymbolsUnderBrush(
           worldPos.x,
           worldPos.y,
           type,
-          brushSettings.radius,
-          symbolToolSettings?.density || 3,
+          scatterRadius,
+          density,
           symList,
-          customAssetId
+          customAssetId,
+          baseScale,
+          randomVar,
+          terrainContext
         );
         if (added.length > 0) {
           onUpdateSymbols?.(symList);
@@ -1459,7 +1501,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       renderOverlay();
     } else if (brushSettings.mode === 'symbolEraser') {
       const symList = symbols || [];
-      const rad = brushSettings.radius;
+      const rad = symbolToolSettings?.scatterRadius ?? brushSettings.radius;
       const remaining = symList.filter((s) => Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > rad);
       if (remaining.length !== symList.length) {
         onUpdateSymbols?.(remaining);

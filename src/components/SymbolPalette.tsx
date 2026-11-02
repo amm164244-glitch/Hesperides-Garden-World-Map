@@ -280,35 +280,41 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
 
               {/* Existing Categories List */}
               <div className="space-y-1 max-h-32 overflow-y-auto pt-1 border-t border-[#2d261e]">
-                {categories.map((cat) => (
-                  <div
-                    key={cat.id}
-                    className="flex items-center justify-between p-1 rounded bg-[#1a1713] border border-[#2d261e] text-[11px]"
-                  >
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
-                      <span>{cat.icon}</span>
-                      <span className="text-[#f5ebd9] truncate">{cat.name}</span>
-                      <span className="text-stone-500 text-[10px]">({categoryCounts[cat.id] || 0})</span>
+                {categories.length === 0 ? (
+                  <p className="text-center text-[11px] text-[#9e907d] py-2">
+                    登録されているカテゴリはありません。上のフォームから自由に追加できます。
+                  </p>
+                ) : (
+                  categories.map((cat) => (
+                    <div
+                      key={cat.id}
+                      className="flex items-center justify-between p-1 rounded bg-[#1a1713] border border-[#2d261e] text-[11px]"
+                    >
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
+                        <span>{cat.icon}</span>
+                        <span className="text-[#f5ebd9] truncate">{cat.name}</span>
+                        <span className="text-stone-500 text-[10px]">({categoryCounts[cat.id] || 0})</span>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={() => startEditCategory(cat)}
+                          className="p-1 text-stone-400 hover:text-amber-300"
+                          title="名前・色を変更"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => onDeleteCategory(cat.id)}
+                          className="p-1 text-stone-400 hover:text-red-400"
+                          title="カテゴリを削除"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => startEditCategory(cat)}
-                        className="p-1 text-stone-400 hover:text-amber-300"
-                        title="名前・色を変更"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                      </button>
-                      <button
-                        onClick={() => onDeleteCategory(cat.id)}
-                        className="p-1 text-stone-400 hover:text-red-400"
-                        title="カテゴリを削除"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           )}
@@ -351,52 +357,155 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
         </div>
 
         {/* Scale & Brush Controls */}
-        <div className="bg-[#191612] p-2.5 rounded-lg border border-[#2d261e] space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-[#baa993]">シンボルの大きさ (スケール)</span>
-            <span className="font-mono text-amber-400 font-bold">
-              {Math.round(toolSettings.scale * 100)}%
-            </span>
+        <div className="bg-[#191612] p-2.5 rounded-lg border border-[#2d261e] space-y-2.5">
+          {/* Symbol Size / Scale */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-[#baa993] font-medium">シンボルの大きさ (スケール)</span>
+              <div className="flex items-center gap-1 font-mono">
+                <button
+                  type="button"
+                  onClick={() => onUpdateToolSettings({ scale: Math.max(0.05, Number((toolSettings.scale - 0.05).toFixed(2))) })}
+                  className="px-1.5 py-0.5 rounded bg-[#241f19] hover:bg-[#322920] text-amber-300 text-[10px] border border-[#3d3326] transition-colors"
+                  title="5%小さくする"
+                >
+                  -5%
+                </button>
+                <span className="text-amber-400 font-bold min-w-[42px] text-center">
+                  {Math.round(toolSettings.scale * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onUpdateToolSettings({ scale: Math.min(2.5, Number((toolSettings.scale + 0.05).toFixed(2))) })}
+                  className="px-1.5 py-0.5 rounded bg-[#241f19] hover:bg-[#322920] text-amber-300 text-[10px] border border-[#3d3326] transition-colors"
+                  title="5%大きくする"
+                >
+                  +5%
+                </button>
+              </div>
+            </div>
+            <input
+              type="range"
+              min="0.05"
+              max="2.5"
+              step="0.01"
+              value={toolSettings.scale}
+              onChange={(e) => onUpdateToolSettings({ scale: parseFloat(e.target.value) })}
+              className="w-full accent-amber-500 h-1.5 bg-[#2d261e] rounded-lg cursor-pointer"
+            />
+            {/* Quick Scale Presets (Micro to Large) */}
+            <div className="flex items-center justify-between gap-1 pt-0.5">
+              {[
+                { label: '極小 10%', val: 0.10 },
+                { label: '微小 20%', val: 0.20 },
+                { label: '小 40%', val: 0.40 },
+                { label: '中 70%', val: 0.70 },
+                { label: '標準 100%', val: 1.00 },
+                { label: '大 150%', val: 1.50 },
+              ].map((p) => {
+                const isSelected = Math.abs(toolSettings.scale - p.val) < 0.04;
+                return (
+                  <button
+                    key={p.val}
+                    type="button"
+                    onClick={() => onUpdateToolSettings({ scale: p.val })}
+                    className={`flex-1 py-0.5 px-1 rounded text-[10px] font-mono transition-all text-center ${
+                      isSelected
+                        ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
+                        : 'bg-[#241f19] text-[#9e907d] hover:text-[#f5ebd9] hover:bg-[#2e271f]'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <input
-            type="range"
-            min="0.4"
-            max="2.5"
-            step="0.05"
-            value={toolSettings.scale}
-            onChange={(e) => onUpdateToolSettings({ scale: parseFloat(e.target.value) })}
-            className="w-full accent-amber-500 h-1 bg-[#2d261e] rounded-lg cursor-pointer"
-          />
 
           {brushMode === 'symbolBrush' && (
-            <>
-              <div className="flex items-center justify-between text-xs pt-1 border-t border-[#2d261e]">
-                <span className="text-[#baa993]">散布密度</span>
-                <span className="font-mono text-amber-400">{toolSettings.density}</span>
+            <div className="pt-2 border-t border-[#2d261e] space-y-2.5">
+              {/* Scatter Density */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[#baa993]">散布密度 (1〜10)</span>
+                  <span className="font-mono text-amber-400 font-bold">{toolSettings.density}</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={toolSettings.density}
+                  onChange={(e) => onUpdateToolSettings({ density: parseInt(e.target.value, 10) })}
+                  className="w-full accent-amber-500 h-1.5 bg-[#2d261e] rounded-lg cursor-pointer"
+                />
+                <div className="flex items-center gap-1">
+                  {[
+                    { label: 'まばら (1)', val: 1 },
+                    { label: '標準 (3)', val: 3 },
+                    { label: '密 (6)', val: 6 },
+                    { label: '超密集 (10)', val: 10 },
+                  ].map((d) => (
+                    <button
+                      key={d.val}
+                      type="button"
+                      onClick={() => onUpdateToolSettings({ density: d.val })}
+                      className={`flex-1 py-0.5 rounded text-[10px] transition-all text-center ${
+                        toolSettings.density === d.val
+                          ? 'bg-amber-500 text-stone-950 font-bold'
+                          : 'bg-[#241f19] text-[#9e907d] hover:text-[#f5ebd9]'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <input
-                type="range"
-                min="1"
-                max="8"
-                step="1"
-                value={toolSettings.density}
-                onChange={(e) => onUpdateToolSettings({ density: parseInt(e.target.value, 10) })}
-                className="w-full accent-amber-500 h-1 bg-[#2d261e] rounded-lg cursor-pointer"
-              />
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-[#baa993]">散布半径</span>
-                <span className="font-mono text-amber-400">{toolSettings.scatterRadius}px</span>
+
+              {/* Scatter Radius */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[#baa993]">散布半径</span>
+                  <span className="font-mono text-amber-400 font-bold">{toolSettings.scatterRadius}px</span>
+                </div>
+                <input
+                  type="range"
+                  min="15"
+                  max="200"
+                  step="5"
+                  value={toolSettings.scatterRadius}
+                  onChange={(e) => onUpdateToolSettings({ scatterRadius: parseInt(e.target.value, 10) })}
+                  className="w-full accent-amber-500 h-1.5 bg-[#2d261e] rounded-lg cursor-pointer"
+                />
+                <div className="flex items-center gap-1">
+                  {[
+                    { label: '小 (30px)', val: 30 },
+                    { label: '中 (60px)', val: 60 },
+                    { label: '大 (100px)', val: 100 },
+                    { label: '広域 (160px)', val: 160 },
+                  ].map((r) => (
+                    <button
+                      key={r.val}
+                      type="button"
+                      onClick={() => onUpdateToolSettings({ scatterRadius: r.val })}
+                      className={`flex-1 py-0.5 rounded text-[10px] transition-all text-center ${
+                        toolSettings.scatterRadius === r.val
+                          ? 'bg-amber-500 text-stone-950 font-bold'
+                          : 'bg-[#241f19] text-[#9e907d] hover:text-[#f5ebd9]'
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <input
-                type="range"
-                min="25"
-                max="120"
-                step="5"
-                value={toolSettings.scatterRadius}
-                onChange={(e) => onUpdateToolSettings({ scatterRadius: parseInt(e.target.value, 10) })}
-                className="w-full accent-amber-500 h-1 bg-[#2d261e] rounded-lg cursor-pointer"
-              />
-            </>
+
+              {/* Terrain Type Constraint Note */}
+              <div className="text-[11px] text-amber-200/90 bg-[#120f0d] p-2 rounded-lg border border-amber-900/40 flex items-start gap-1.5 leading-relaxed">
+                <span className="text-amber-400 shrink-0">🧭</span>
+                <span>散布ブラシは、<strong>カーソルのある地形タイプ（同一バイオーム・海域）</strong>にのみ配置されます。異なる地形タイプにははみ出して配置されません。</span>
+              </div>
+            </div>
           )}
         </div>
 

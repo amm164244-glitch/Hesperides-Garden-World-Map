@@ -92,7 +92,7 @@ export const ImageToPixelModal: React.FC<ImageToPixelModalProps> = ({
 
   // Registration Form
   const [assetName, setAssetName] = useState<string>('高精細ピクセルカタコンベ');
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('cat_dungeon');
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>(categories[0]?.id || '');
   const [isSavedSuccess, setIsSavedSuccess] = useState<boolean>(false);
 
   // Download scale factor
@@ -836,6 +836,7 @@ export const ImageToPixelModal: React.FC<ImageToPixelModalProps> = ({
                 onChange={(e) => setSelectedCategoryId(e.target.value)}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
               >
+                <option value="">未分類 (指定なし)</option>
                 {categories.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.icon} {c.name}

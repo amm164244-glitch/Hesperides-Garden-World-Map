@@ -271,13 +271,24 @@ export default function App() {
     opacity: 55,
   });
 
-  // Custom Categories (Persisted in localStorage)
+  // Custom Categories (Starts empty, persisted in localStorage)
   const [categories, setCategories] = useState<CustomSymbolCategory[]>(() => {
     try {
       const saved = localStorage.getItem('fantasy_map_custom_categories');
-      return saved ? JSON.parse(saved) : DEFAULT_CUSTOM_CATEGORIES;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // If stored categories are just the legacy default 5, purge them so it starts empty as requested
+          const isOldDefaults = parsed.length === 5 &&
+            parsed.every((c: any) => ['cat_village', 'cat_town', 'cat_dungeon', 'cat_nature', 'cat_quest'].includes(c?.id));
+          if (!isOldDefaults) {
+            return parsed;
+          }
+        }
+      }
+      return [];
     } catch {
-      return DEFAULT_CUSTOM_CATEGORIES;
+      return [];
     }
   });
 
@@ -310,7 +321,7 @@ export default function App() {
       return next;
     });
     setCustomAssets((prev) => {
-      const next = prev.map((a) => (a.category === catId ? { ...a, category: 'cat_village' } : a));
+      const next = prev.map((a) => (a.category === catId ? { ...a, category: '' } : a));
       try {
         localStorage.setItem('fantasy_map_custom_assets', JSON.stringify(next));
       } catch {}
@@ -334,7 +345,7 @@ export default function App() {
     }
   });
 
-  // Ensure clean state on mount (purge any previous starter symbols)
+  // Ensure clean state on mount (purge any previous starter symbols and old default categories)
   useEffect(() => {
     try {
       const saved = localStorage.getItem('fantasy_map_custom_assets');
@@ -345,6 +356,17 @@ export default function App() {
           localStorage.setItem('fantasy_map_custom_assets', JSON.stringify(userOnly));
         }
       }
+      const savedCats = localStorage.getItem('fantasy_map_custom_categories');
+      if (savedCats) {
+        const parsed = JSON.parse(savedCats);
+        if (Array.isArray(parsed)) {
+          const isOldDefaults = parsed.length === 5 &&
+            parsed.every((c: any) => ['cat_village', 'cat_town', 'cat_dungeon', 'cat_nature', 'cat_quest'].includes(c?.id));
+          if (isOldDefaults) {
+            localStorage.removeItem('fantasy_map_custom_categories');
+          }
+        }
+      }
     } catch {}
   }, []);
 
@@ -352,7 +374,7 @@ export default function App() {
     return {
       selectedType: 'custom',
       selectedCustomAssetId: null,
-      category: 'cat_village',
+      category: '',
       scale: 1.0,
       density: 3,
       scatterRadius: 75,
@@ -360,6 +382,13 @@ export default function App() {
       colorTheme: DEFAULT_SYMBOL_COLOR_THEME,
     };
   });
+
+  const handleUpdateSymbolToolSettings = useCallback((patch: Partial<SymbolToolSettings>) => {
+    setSymbolToolSettings((prev) => ({ ...prev, ...patch }));
+    if (patch.scatterRadius !== undefined) {
+      setBrushSettings((prev) => ({ ...prev, radius: patch.scatterRadius! }));
+    }
+  }, []);
 
   const [isPixelStudioOpen, setIsPixelStudioOpen] = useState<boolean>(false);
   const [editingPixelAsset, setEditingPixelAsset] = useState<CustomMapAsset | null>(null);
@@ -1060,6 +1089,8 @@ export default function App() {
           <Toolbar
             brushSettings={brushSettings}
             onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
+            symbolToolSettings={symbolToolSettings}
+            onUpdateSymbolToolSettings={handleUpdateSymbolToolSettings}
             canUndo={undoStack.length > 0}
             canRedo={redoStack.length > 0}
             onUndo={handleUndo}
@@ -1163,7 +1194,7 @@ export default function App() {
               brushMode={brushSettings.mode}
               onChangeBrushMode={(mode) => setBrushSettings((prev) => ({ ...prev, mode }))}
               toolSettings={symbolToolSettings}
-              onUpdateToolSettings={(patch) => setSymbolToolSettings((prev) => ({ ...prev, ...patch }))}
+              onUpdateToolSettings={handleUpdateSymbolToolSettings}
               symbolCount={currentSymbols.length}
               customAssets={customAssets}
               categories={categories}
