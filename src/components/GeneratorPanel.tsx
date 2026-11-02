@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RefreshCw, Shuffle, Sliders, X, Globe, Layers, Waves } from 'lucide-react';
+import { RefreshCw, Shuffle, Sliders, X, Globe, Layers, Waves, FileImage } from 'lucide-react';
 import { GeneratorConfig } from '../types/map';
 import { hashStringToSeed } from '../utils/prng';
 
@@ -8,6 +8,7 @@ interface GeneratorPanelProps {
   onUpdateConfig: (newConfig: Partial<GeneratorConfig>) => void;
   onRegenerate: () => void;
   onGenerateBlankOcean?: () => void;
+  onOpenImageToTerrain?: () => void;
   isGenerating: boolean;
   generationProgress?: { progress: number; message: string };
   onClose: () => void;
@@ -18,6 +19,7 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
   onUpdateConfig,
   onRegenerate,
   onGenerateBlankOcean,
+  onOpenImageToTerrain,
   isGenerating,
   generationProgress,
   onClose,
@@ -335,6 +337,20 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
         <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
         <span>{isGenerating ? 'Web Workerで計算中...' : '地形を自動生成する'}</span>
       </button>
+
+      {/* Image to Terrain Button */}
+      {onOpenImageToTerrain && (
+        <button
+          type="button"
+          disabled={isGenerating}
+          onClick={onOpenImageToTerrain}
+          className="py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all bg-emerald-950/90 hover:bg-emerald-900 text-emerald-200 border border-emerald-600/70 shadow-lg cursor-pointer hover:border-emerald-400 hover:text-white active:scale-98"
+          title="既存の地図画像やイラストを2:1で切り抜いて世界マップの形状を作成します"
+        >
+          <FileImage className="w-4 h-4 text-emerald-400" />
+          <span>🖼️ 画像から地形を作る</span>
+        </button>
+      )}
 
       {/* Blank Ocean Button for Pure Manual Sculpting */}
       {onGenerateBlankOcean && (

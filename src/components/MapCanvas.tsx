@@ -49,6 +49,8 @@ interface MapCanvasProps {
   onSelectRegionBounds?: (bounds: RegionalBounds) => void;
   mapBackgroundUrl?: string | null;
   onClearMapBackground?: () => void;
+  maxZoom?: number;
+  onInteractingChange?: (isInteracting: boolean) => void;
 }
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
@@ -78,6 +80,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onSelectRegionBounds,
   mapBackgroundUrl,
   onClearMapBackground,
+  maxZoom,
+  onInteractingChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -550,7 +554,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const { mouseX: mx, mouseY: my, factor } = pendingWheelZoomRef.current;
           pendingWheelZoomRef.current = null;
 
-          const newZoom = Math.max(0.15, Math.min(12.0, viewport.zoom * factor));
+          const currentMaxZoom = maxZoom ?? 12.0;
+          const newZoom = Math.max(0.15, Math.min(currentMaxZoom, viewport.zoom * factor));
           const newX = mx - (mx - viewport.x) * (newZoom / viewport.zoom);
           const newY = my - (my - viewport.y) * (newZoom / viewport.zoom);
 
@@ -568,7 +573,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       container.removeEventListener('wheel', handleWheel);
       if (wheelRafRef.current) cancelAnimationFrame(wheelRafRef.current);
     };
-  }, [viewport, onUpdateViewport]);
+  }, [viewport, onUpdateViewport, maxZoom]);
 
   // Execute Brush Stroke (subregion upload for near-zero latency)
   const executeBrushStroke = useCallback(
@@ -640,6 +645,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   // Mouse Down
   const handleMouseDown = (e: React.MouseEvent) => {
     isMouseDownRef.current = true;
+    onInteractingChange?.(true);
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     const worldPos = screenToWorld(e.clientX, e.clientY);
     lastWorldPosRef.current = worldPos;
@@ -810,10 +816,34 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         });
       }
     } else if (isSelectingRef.current && selectionBox) {
+      const sx = selectionBox.startX;
+      const sy = selectionBox.startY;
+      const aspect = currentWidth / currentHeight; // Maintain exact map aspect ratio (usually 2:1)
+      const dx = worldPos.x - sx;
+      const dy = worldPos.y - sy;
+      const signX = dx >= 0 ? 1 : -1;
+      const signY = dy >= 0 ? 1 : -1;
+
+      // Base width on horizontal drag distance
+      let w = Math.abs(dx);
+
+      // Boundary limits in the direction of drag
+      const maxW = signX > 0 ? Math.max(0, currentWidth - sx) : Math.max(0, sx);
+      const maxH = signY > 0 ? Math.max(0, currentHeight - sy) : Math.max(0, sy);
+      const maxWFromH = maxH * aspect;
+
+      // Clamp width while preserving exact aspect ratio
+      const allowedW = Math.min(maxW, maxWFromH);
+      w = Math.min(w, allowedW);
+      const h = w / aspect;
+
+      const currentX = sx + signX * w;
+      const currentY = sy + signY * h;
+
       setSelectionBox({
         ...selectionBox,
-        currentX: worldPos.x,
-        currentY: worldPos.y,
+        currentX,
+        currentY,
       });
       renderOverlay();
     } else if (brushSettings.mode === 'symbolBrush') {
@@ -892,6 +922,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
     if (!isMouseDownRef.current) return;
     isMouseDownRef.current = false;
+    onInteractingChange?.(false);
 
     if (isSelectingRef.current && selectionBox) {
       isSelectingRef.current = false;

@@ -14,6 +14,14 @@ import {
 } from './types/map';
 import { generateTectonicWorld, generateBlankOceanWorld } from './utils/tectonicGenerator';
 import { generateRegionalMap, toParentMapSource } from './utils/regionGenerator';
+import {
+  isUniformChild,
+  parentToChildViewport,
+  childToParentViewport,
+  findChildToEnter,
+  shouldExitToParent,
+  getMaxZoomForMap,
+} from './utils/regionNavigation';
 import { SpatialIndex } from './utils/terrainEditor';
 import { Toolbar } from './components/Toolbar';
 import { GeneratorPanel } from './components/GeneratorPanel';
@@ -24,6 +32,7 @@ import { RegionSelector } from './components/RegionSelector';
 import { SymbolPalette } from './components/SymbolPalette';
 import { PixelArtStudioModal } from './components/PixelArtStudioModal';
 import { ImageToPixelModal } from './components/ImageToPixelModal';
+import { ImageToTerrainModal, CroppedTerrainResult } from './components/ImageToTerrainModal';
 import {
   MapSymbolInstance,
   SymbolToolSettings,
@@ -278,6 +287,7 @@ export default function App() {
   const [isPixelStudioOpen, setIsPixelStudioOpen] = useState<boolean>(false);
   const [editingPixelAsset, setEditingPixelAsset] = useState<CustomMapAsset | null>(null);
   const [isImageToPixelOpen, setIsImageToPixelOpen] = useState<boolean>(false);
+  const [isImageToTerrainOpen, setIsImageToTerrainOpen] = useState<boolean>(false);
   const [mapBackgroundUrl, setMapBackgroundUrl] = useState<string | null>(null);
 
   const handleOpenPixelStudio = useCallback((asset?: CustomMapAsset) => {
@@ -334,6 +344,119 @@ export default function App() {
   // Undo / Redo history
   const [undoStack, setUndoStack] = useState<HistoryRecord[]>([]);
   const [redoStack, setRedoStack] = useState<HistoryRecord[]>([]);
+
+  // Auto region switch toggle (hierarchical zoom navigation)
+  const [autoRegionSwitch, setAutoRegionSwitch] = useState<boolean>(true);
+  const prevZoomRef = useRef<number>(viewport.zoom);
+  const isInteractingRef = useRef<boolean>(false);
+  const transitionCooldownRef = useRef<number>(0);
+  const isTransitioningRef = useRef<boolean>(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+
+  // Current active map dimensions
+  const currentParentDim = useMemo(() => {
+    return activeRegionalMap
+      ? { width: activeRegionalMap.width, height: activeRegionalMap.height }
+      : { width: mapData.width, height: mapData.height };
+  }, [activeRegionalMap, mapData.width, mapData.height]);
+
+  // Child regions belonging directly to the current view
+  const currentChildRegions = useMemo(() => {
+    const currentMapId = activeRegionalMap ? activeRegionalMap.id : null;
+    return Object.values(mapData.regionalMaps).filter(
+      (reg) => (reg.parentId ?? null) === currentMapId
+    );
+  }, [activeRegionalMap, mapData.regionalMaps]);
+
+  // Dynamic maximum zoom to ensure deep regional maps can be entered
+  const maxZoom = useMemo(() => {
+    return getMaxZoomForMap(currentChildRegions, currentParentDim);
+  }, [currentChildRegions, currentParentDim]);
+
+  // Seamless auto hierarchical zoom transition
+  useEffect(() => {
+    const prevZoom = prevZoomRef.current;
+    const currZoom = viewport.zoom;
+    prevZoomRef.current = currZoom;
+
+    // Only evaluate auto transition if zoom changed (not on pure pan)
+    if (Math.abs(currZoom - prevZoom) < 1e-4) {
+      return;
+    }
+
+    if (!autoRegionSwitch) return;
+    if (isInteractingRef.current) return;
+    if (Date.now() < transitionCooldownRef.current) return;
+    if (isTransitioningRef.current) return;
+
+    const screenW = workspaceRef.current?.clientWidth || window.innerWidth;
+    const screenH =
+      workspaceRef.current?.clientHeight || Math.max(400, window.innerHeight - 88);
+
+    // Case 1: Active map is a child region, zooming OUT -> check if should exit to parent
+    if (activeRegionalMap && shouldExitToParent(viewport)) {
+      const parentMap = activeRegionalMap.parentId
+        ? mapData.regionalMaps[activeRegionalMap.parentId]
+        : null;
+      const parentDim = parentMap
+        ? { width: parentMap.width, height: parentMap.height }
+        : { width: mapData.width, height: mapData.height };
+
+      if (isUniformChild(activeRegionalMap, parentDim)) {
+        isTransitioningRef.current = true;
+        transitionCooldownRef.current = Date.now() + 400;
+
+        const newVp = childToParentViewport(viewport, activeRegionalMap);
+        setActiveRegionId(activeRegionalMap.parentId);
+        setViewport(newVp);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedSymbolId(null);
+
+        setTimeout(() => {
+          isTransitioningRef.current = false;
+        }, 50);
+        return;
+      }
+    }
+
+    // Case 2: Zooming IN -> check if should enter any child region
+    if (currZoom > prevZoom && currentChildRegions.length > 0) {
+      const childToEnter = findChildToEnter(
+        viewport,
+        currentChildRegions,
+        currentParentDim,
+        screenW,
+        screenH
+      );
+
+      if (childToEnter) {
+        isTransitioningRef.current = true;
+        transitionCooldownRef.current = Date.now() + 400;
+
+        const newVp = parentToChildViewport(viewport, childToEnter);
+        setActiveRegionId(childToEnter.id);
+        setViewport(newVp);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedSymbolId(null);
+
+        setTimeout(() => {
+          isTransitioningRef.current = false;
+        }, 50);
+        return;
+      }
+    }
+  }, [
+    viewport,
+    autoRegionSwitch,
+    activeRegionalMap,
+    currentChildRegions,
+    currentParentDim,
+    mapData.width,
+    mapData.height,
+    mapData.regionalMaps,
+  ]);
 
   // Web Worker
   const workerRef = useRef<Worker | null>(null);
@@ -731,7 +854,7 @@ export default function App() {
       </header>
 
       {/* Main Workspace */}
-      <div className="relative flex-1 w-full h-[calc(100vh-3rem-2.5rem)] overflow-hidden">
+      <div ref={workspaceRef} className="relative flex-1 w-full h-[calc(100vh-3rem-2.5rem)] overflow-hidden">
         {/* Interactive Canvas */}
         <MapCanvas
           mapData={mapData}
@@ -760,6 +883,10 @@ export default function App() {
           onSelectRegionBounds={(bounds) => setPendingRegionBounds(bounds)}
           mapBackgroundUrl={mapBackgroundUrl}
           onClearMapBackground={() => setMapBackgroundUrl(null)}
+          maxZoom={maxZoom}
+          onInteractingChange={(interacting) => {
+            isInteractingRef.current = interacting;
+          }}
         />
 
         {/* Floating Toolbar (Top Left) */}
@@ -794,7 +921,7 @@ export default function App() {
             onZoomChange={(delta) =>
               setViewport((v) => ({
                 ...v,
-                zoom: Math.max(0.15, Math.min(12.0, v.zoom + delta)),
+                zoom: Math.max(0.15, Math.min(maxZoom, v.zoom + delta)),
               }))
             }
             onToggleGenerator={() => setIsGeneratorOpen((v) => !v)}
@@ -810,6 +937,8 @@ export default function App() {
             onSelectRegionMap={handleNavigateToRegion}
             isCollapsed={isToolbarCollapsed}
             onToggleCollapse={handleToggleCollapse}
+            autoRegionSwitch={autoRegionSwitch}
+            onToggleAutoRegionSwitch={() => setAutoRegionSwitch((v) => !v)}
           />
         </div>
 
@@ -846,6 +975,7 @@ export default function App() {
               onUpdateConfig={(patch) => setConfig((prev) => ({ ...prev, ...patch }))}
               onRegenerate={handleRegenerate}
               onGenerateBlankOcean={handleGenerateBlankOcean}
+              onOpenImageToTerrain={() => setIsImageToTerrainOpen(true)}
               isGenerating={isGenerating}
               generationProgress={generationProgress}
               onClose={() => setIsGeneratorOpen(false)}
@@ -881,6 +1011,15 @@ export default function App() {
           }}
           onSetMapBackground={(dataUrl) => {
             setMapBackgroundUrl(dataUrl);
+          }}
+        />
+
+        {/* Image to Terrain Crop Modal (Phase 1) */}
+        <ImageToTerrainModal
+          isOpen={isImageToTerrainOpen}
+          onClose={() => setIsImageToTerrainOpen(false)}
+          onCropped={(result) => {
+            console.log('Image cropped for terrain generation:', result);
           }}
         />
 

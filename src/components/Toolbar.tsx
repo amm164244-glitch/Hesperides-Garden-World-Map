@@ -64,6 +64,8 @@ interface ToolbarProps {
   onSelectRegionMap?: (id: string) => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  autoRegionSwitch?: boolean;
+  onToggleAutoRegionSwitch?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -107,6 +109,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onSelectRegionMap,
   isCollapsed,
   onToggleCollapse,
+  autoRegionSwitch = true,
+  onToggleAutoRegionSwitch,
 }) => {
   const tools: { id: BrushMode; label: string; icon: React.ReactNode; desc: string }[] = [
     { id: 'pan', label: '視点移動', icon: <Hand className="w-4 h-4" />, desc: '地図をドラッグして移動 (Spaceキーでも可能)' },
@@ -149,6 +153,23 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         >
           <Sparkles className="w-4 h-4" />
         </button>
+
+        {/* Auto region switch toggle in collapsed mode */}
+        {onToggleAutoRegionSwitch && (
+          <button
+            type="button"
+            onClick={onToggleAutoRegionSwitch}
+            className={`p-2 rounded-lg text-xs flex items-center justify-center transition shadow ${
+              autoRegionSwitch
+                ? 'bg-sky-900/80 text-sky-200 border border-sky-600/70'
+                : 'bg-stone-800 hover:bg-stone-700 text-stone-500'
+            }`}
+            title={`階層ズーム自動切替: ${autoRegionSwitch ? 'ON' : 'OFF'}`}
+            aria-label="階層ズーム自動切替"
+          >
+            <Layers className="w-4 h-4" />
+          </button>
+        )}
 
         <div className="w-full h-px bg-stone-800 my-0.5" />
 
@@ -590,6 +611,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <Square className="w-3.5 h-3.5" />
             <span>装飾枠</span>
           </button>
+
+          {onToggleAutoRegionSwitch && (
+            <button
+              type="button"
+              onClick={onToggleAutoRegionSwitch}
+              className={`px-2 py-1 rounded text-xs flex items-center gap-1 transition-all ${
+                autoRegionSwitch
+                  ? 'bg-sky-900/60 text-sky-300 border border-sky-600/60'
+                  : 'bg-stone-800 text-stone-500'
+              }`}
+              title="マウスホイールによる親子マップ階層の自動ズーム切り替え"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>階層ズーム</span>
+            </button>
+          )}
         </div>
 
         {/* Zoom controls */}
