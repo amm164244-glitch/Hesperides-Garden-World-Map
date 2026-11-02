@@ -288,6 +288,7 @@ export default function App() {
   const [editingPixelAsset, setEditingPixelAsset] = useState<CustomMapAsset | null>(null);
   const [isImageToPixelOpen, setIsImageToPixelOpen] = useState<boolean>(false);
   const [isImageToTerrainOpen, setIsImageToTerrainOpen] = useState<boolean>(false);
+  const [segmentedTerrainResult, setSegmentedTerrainResult] = useState<CroppedTerrainResult | null>(null);
   const [mapBackgroundUrl, setMapBackgroundUrl] = useState<string | null>(null);
 
   const handleOpenPixelStudio = useCallback((asset?: CustomMapAsset) => {
@@ -578,6 +579,22 @@ export default function App() {
       }, 50);
     }
   }, [config]);
+
+  // Apply world map directly from ImageToTerrainModal manual mask correction
+  const handleApplyWorldMapFromImage = useCallback((newMapData: MapData) => {
+    setMapData(newMapData);
+    setConfig(newMapData.config);
+    setActiveRegionId(null);
+    setSelectedSymbolId(null);
+    setUndoStack([]);
+    setRedoStack([]);
+    const defaultDims = getResolutionDimensions(newMapData.config.gridResolution);
+    const zoom = 0.65;
+    const x = Math.max(20, (window.innerWidth - defaultDims.width * zoom) / 2);
+    const y = Math.max(20, (window.innerHeight - defaultDims.height * zoom) / 2);
+    setViewport({ x, y, zoom });
+    setIsImageToTerrainOpen(false);
+  }, []);
 
   // Create Regional Map from selection
   const handleCreateRegionalMap = useCallback(
@@ -1014,13 +1031,15 @@ export default function App() {
           }}
         />
 
-        {/* Image to Terrain Crop Modal (Phase 1) */}
+        {/* Image to Terrain Crop Modal (Phase 1, 2 & 3: Crop, Segment, Manual Correction) */}
         <ImageToTerrainModal
           isOpen={isImageToTerrainOpen}
           onClose={() => setIsImageToTerrainOpen(false)}
           onCropped={(result) => {
-            console.log('Image cropped for terrain generation:', result);
+            setSegmentedTerrainResult(result);
+            console.log('Land/sea segmented terrain result saved to parent state:', result);
           }}
+          onApplyToWorldMap={handleApplyWorldMapFromImage}
         />
 
         {/* Region Selector Modal */}

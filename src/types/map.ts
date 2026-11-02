@@ -56,6 +56,7 @@ export interface RegionalMapData {
   seed: number;            // 親のseedと bounds から決める
   widthKm: number;         // このマップ全体の実距離。親のwidthKm × (bounds幅 ÷ 親のwidth)
   symbols?: import('./symbols').MapSymbolInstance[];
+  biomeGrid?: Uint8Array;
 }
 
 export interface ParentMapSource {
@@ -118,6 +119,9 @@ export interface MapData {
 
   // Placed cartographic symbols (Tolkien mountains, trees, settlements, etc.)
   symbols?: import('./symbols').MapSymbolInstance[];
+
+  // Biome Grid (Terrain type raster overlay: 1 byte per cell, 0 to 7)
+  biomeGrid?: Uint8Array;
 }
 
 export interface SupabaseMapRecord {
@@ -140,6 +144,9 @@ export type BrushMode =
   | 'stamp'        // スタンプ配置・選択移動
   | 'symbolBrush'  // シンボル散布ペイント（森林・山脈）
   | 'symbolEraser' // シンボル消しゴム
+  | 'biomePaint'   // 地形タイプブラシ
+  | 'biomeFill'    // 地形タイプバケツ塗りつぶし
+  | 'biomeErase'   // 地形タイプ消しゴム
   | 'selectRegion' // 地域範囲選択
   | 'pan';         // 視点移動
 
@@ -172,4 +179,9 @@ export interface HistoryRecord {
     prevSymbols: import('./symbols').MapSymbolInstance[];
     newSymbols: import('./symbols').MapSymbolInstance[];
   };
+  biomeChanges?: {
+    gridIndex: number;
+    prev: number;
+    next: number;
+  }[];
 }

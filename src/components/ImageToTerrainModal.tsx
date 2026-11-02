@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
   Upload,
@@ -22,15 +22,37 @@ import {
   Trash2,
   Waves,
   Mountain,
+  Paintbrush,
+  PaintBucket,
+  Undo2,
+  Redo2,
+  Globe,
+  Spline,
+  Palette,
 } from 'lucide-react';
 import {
   ColorSample,
   SegmentationOptions,
   SegmentationResult,
   SegmentationStats,
+  SeedCounts,
+  ColorCluster,
   rgbToLab,
   segmentLandSea,
+  computeCoastlineOutline,
+  runLabKMeans,
+  analyzeSeeds,
 } from '../utils/imageTerrain/segmentLandSea';
+import {
+  MaskPatch,
+  applyBrushToMask,
+  applyBrushStrokeToMask,
+  applyPatchToMask,
+  floodFillMask,
+  applyPolygonToMask,
+  createMapDataFromMask,
+} from '../utils/imageTerrain/maskEditor';
+import { MapData } from '../types/map';
 import {
   SegmentationWorkerRequest,
   SegmentationWorkerResponse,
@@ -53,6 +75,7 @@ export interface ImageToTerrainModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCropped?: (result: CroppedTerrainResult) => void;
+  onApplyToWorldMap?: (mapData: MapData) => void;
 }
 
 interface CropRect {
@@ -79,9 +102,10 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   isOpen,
   onClose,
   onCropped,
+  onApplyToWorldMap,
 }) => {
-  // Steps: 1: 画像を読み込む, 2: 切り抜き, 3: 陸海の自動判定
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  // Steps: 1: 画像を読み込む, 2: 切り抜き, 3: 陸海の自動判定, 4: 陸海の手動補正
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Source image data (Step 1 & 2)
   const [sourceCanvas, setSourceCanvas] = useState<HTMLCanvasElement | null>(null);
@@ -126,11 +150,22 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   });
 
   // Step 3 Parameters
-  const [medianRadius, setMedianRadius] = useState<number>(2);
+  const [medianRadius, setMedianRadius] = useState<number>(3);
   const [tolerance, setTolerance] = useState<number>(18);
   const [minIslandAreaRatio, setMinIslandAreaRatio] = useState<number>(0.002); // 0.20%
   const [smoothingIterations, setSmoothingIterations] = useState<number>(1);
-  const [marginPx, setMarginPx] = useState<number>(6);
+  const [marginPercent, setMarginPercent] = useState<number>(3); // 0 to 8% (default 3%)
+
+  // Seed visualization & status
+  const [showSeeds, setShowSeeds] = useState<boolean>(false);
+  const [seedMask, setSeedMask] = useState<Uint8Array | null>(null);
+  const [seedCounts, setSeedCounts] = useState<SeedCounts | null>(null);
+  const [seedError, setSeedError] = useState<string | null>(null);
+
+  // Suggested color clusters (k-means)
+  const [suggestedClusters, setSuggestedClusters] = useState<ColorCluster[]>([]);
+  const [clusterAssignments, setClusterAssignments] = useState<Record<string, 'sea' | 'land' | 'ignore'>>({});
+  const [isGeneratingClusters, setIsGeneratingClusters] = useState<boolean>(false);
 
   // Eyedropper & Samples
   const [seaSamples, setSeaSamples] = useState<ColorSample[]>([]);
@@ -164,6 +199,40 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
     startVp: { x: 0, y: 0 },
   });
 
+  // Step 4: Manual correction states & refs
+  const [manualMask, setManualMask] = useState<Uint8Array | null>(null);
+  const [initialStep3Mask, setInitialStep3Mask] = useState<Uint8Array | null>(null);
+  const [maskUndoStack, setMaskUndoStack] = useState<MaskPatch[]>([]);
+  const [maskRedoStack, setMaskRedoStack] = useState<MaskPatch[]>([]);
+  const [hasEditedStep4, setHasEditedStep4] = useState<boolean>(false);
+  const [step4Tool, setStep4Tool] = useState<'brush_land' | 'brush_sea' | 'bucket' | 'lasso' | 'pan'>('brush_land');
+  const [step4BrushRadius, setStep4BrushRadius] = useState<number>(15);
+  const [step4OverlayOpacity, setStep4OverlayOpacity] = useState<number>(0.6);
+  const [step4LassoPoints, setStep4LassoPoints] = useState<[number, number][]>([]);
+  const [step4Viewport, setStep4Viewport] = useState<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 });
+  const [step4MousePos, setStep4MousePos] = useState<{ x: number; y: number } | null>(null);
+  const [step4RedrawTrigger, setStep4RedrawTrigger] = useState<number>(0);
+
+  // Dialog states
+  const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
+  const [showConfirmReSegment, setShowConfirmReSegment] = useState<boolean>(false);
+  const [showConfirmApply, setShowConfirmApply] = useState<boolean>(false);
+
+  // Step 4 Canvas & interaction refs
+  const step4CanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const step4ContainerRef = useRef<HTMLDivElement | null>(null);
+  const step4DragRef = useRef<{ isDragging: boolean; startX: number; startY: number; startVp: { x: number; y: number } }>({
+    isDragging: false,
+    startX: 0,
+    startY: 0,
+    startVp: { x: 0, y: 0 },
+  });
+  const isStep4DrawingRef = useRef<boolean>(false);
+  const strokeStartMaskSnapshot = useRef<Uint8Array | null>(null);
+  const step4MaskCanvasCache = useRef<HTMLCanvasElement | null>(null);
+  const step4OutlineCanvasCache = useRef<HTMLCanvasElement | null>(null);
+  const lastBrushPosRef = useRef<{ x: number; y: number } | null>(null);
+
   // Worker reference
   const segWorkerRef = useRef<Worker | null>(null);
 
@@ -171,6 +240,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   const maskCanvasCache = useRef<HTMLCanvasElement | null>(null);
   const overlayCanvasCache = useRef<HTMLCanvasElement | null>(null);
   const originalCanvasCache = useRef<HTMLCanvasElement | null>(null);
+  const seedCanvasCache = useRef<HTMLCanvasElement | null>(null);
 
   // Canvas elements
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -195,9 +265,23 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
           setSegmentationMask(data.result.mask);
           setBoundaryMask(data.result.boundaryMask);
           setSegmentationStats(data.result.stats);
+          if (data.result.seedMask) {
+            setSeedMask(data.result.seedMask);
+          }
+          if (data.result.seedCounts) {
+            setSeedCounts(data.result.seedCounts);
+          }
+          setSeedError(null);
           setIsSegmenting(false);
         } else if (data.type === 'error') {
           console.error('Segmentation worker error:', data.error);
+          setSeedError(data.error);
+          if (data.seedCounts) {
+            setSeedCounts(data.seedCounts);
+          }
+          if (data.seedMask) {
+            setSeedMask(data.seedMask);
+          }
           setIsSegmenting(false);
         }
       };
@@ -770,12 +854,9 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
 
   // Run Segmentation calculation via Web Worker (or synchronous fallback)
   const triggerSegmentation = useCallback(
-    (targetCropped?: CroppedTerrainResult, customOptions?: Partial<SegmentationOptions>) => {
+    (targetCropped?: CroppedTerrainResult | null, customOptions?: Partial<SegmentationOptions>) => {
       const activeCropped = targetCropped || croppedResult;
       if (!activeCropped) return;
-
-      setIsSegmenting(true);
-      setSegmentProgress({ step: 'セグメンテーション開始...', percent: 5 });
 
       const options: SegmentationOptions = {
         seaSamples,
@@ -784,9 +865,27 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
         medianRadius,
         minIslandAreaRatio,
         smoothingIterations,
-        marginPx,
+        marginPercent,
         ...customOptions,
       };
+
+      // 1. Analyze seeds first to get counts and check sufficiency threshold (0.5%)
+      const seedAnalysis = analyzeSeeds(activeCropped.imageData, options);
+      setSeedMask(seedAnalysis.seedMask);
+      setSeedCounts(seedAnalysis.seedCounts);
+
+      if (!seedAnalysis.seedCounts.isSufficient) {
+        setSeedError(
+          seedAnalysis.seedCounts.errorMessage ||
+          '海(または陸)の目印が足りません。スポイトで色を指定してください'
+        );
+        setIsSegmenting(false);
+        return;
+      }
+
+      setSeedError(null);
+      setIsSegmenting(true);
+      setSegmentProgress({ step: 'セグメンテーション開始...', percent: 5 });
 
       if (segWorkerRef.current) {
         const clampedCopy = new Uint8ClampedArray(activeCropped.imageData.data);
@@ -809,15 +908,72 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
             setSegmentationMask(res.mask);
             setBoundaryMask(res.boundaryMask);
             setSegmentationStats(res.stats);
-          } catch (err) {
+            if (res.seedMask) setSeedMask(res.seedMask);
+            if (res.seedCounts) setSeedCounts(res.seedCounts);
+            setSeedError(null);
+          } catch (err: any) {
             console.error('Segmentation error:', err);
+            setSeedError(err?.message || '陸海判定処理中にエラーが発生しました');
+            if (err?.seedCounts) setSeedCounts(err.seedCounts);
+            if (err?.seedMask) setSeedMask(err.seedMask);
           } finally {
             setIsSegmenting(false);
           }
         }, 15);
       }
     },
-    [croppedResult, seaSamples, landSamples, tolerance, medianRadius, minIslandAreaRatio, smoothingIterations, marginPx]
+    [croppedResult, seaSamples, landSamples, tolerance, medianRadius, minIslandAreaRatio, smoothingIterations, marginPercent]
+  );
+
+  // Propose color clusters using k-means (k=6)
+  const handleProposeColors = useCallback(() => {
+    if (!croppedResult) return;
+    setIsGeneratingClusters(true);
+    setTimeout(() => {
+      try {
+        const clusters = runLabKMeans(croppedResult.imageData, 6);
+        setSuggestedClusters(clusters);
+      } catch (err) {
+        console.error('Failed to run Lab k-means:', err);
+      } finally {
+        setIsGeneratingClusters(false);
+      }
+    }, 10);
+  }, [croppedResult]);
+
+  // Handle color cluster assignment ('sea' | 'land' | 'ignore')
+  const handleAssignClusterColor = useCallback(
+    (cluster: ColorCluster, role: 'sea' | 'land' | 'ignore') => {
+      setClusterAssignments((prev) => ({ ...prev, [cluster.id]: role }));
+
+      const nextSea = seaSamples.filter((s) => s.id !== cluster.id);
+      const nextLand = landSamples.filter((l) => l.id !== cluster.id);
+
+      if (role === 'sea') {
+        nextSea.push({
+          id: cluster.id,
+          r: cluster.r,
+          g: cluster.g,
+          b: cluster.b,
+          lab: cluster.lab,
+          type: 'sea',
+        });
+      } else if (role === 'land') {
+        nextLand.push({
+          id: cluster.id,
+          r: cluster.r,
+          g: cluster.g,
+          b: cluster.b,
+          lab: cluster.lab,
+          type: 'land',
+        });
+      }
+
+      setSeaSamples(nextSea);
+      setLandSamples(nextLand);
+      triggerSegmentation(croppedResult, { seaSamples: nextSea, landSamples: nextLand });
+    },
+    [croppedResult, seaSamples, landSamples, triggerSegmentation]
   );
 
   // Step 2 -> Step 3: Perform crop and trigger segmentation
@@ -892,64 +1048,97 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
     }, 50);
   };
 
-  // Re-build cached offscreen canvases whenever segmentation masks update
+  // Re-build cached offscreen canvases whenever segmentation masks or seeds update
   useEffect(() => {
-    if (!croppedResult || !segmentationMask || !boundaryMask) return;
+    if (!croppedResult) return;
 
     const { width, height, imageData } = croppedResult;
     const size = width * height;
 
-    // 1. Build Mask Canvas (Land: light yellow #fef3c7, Sea: rich blue #2563eb)
-    const mCanvas = document.createElement('canvas');
-    mCanvas.width = width;
-    mCanvas.height = height;
-    const mCtx = mCanvas.getContext('2d');
-    if (mCtx) {
-      const maskImgData = mCtx.createImageData(width, height);
-      for (let i = 0; i < size; i++) {
-        const outIdx = i * 4;
-        if (segmentationMask[i] === 1) {
-          // Land: #fef3c7 (Warm antique cream yellow)
-          maskImgData.data[outIdx] = 254;
-          maskImgData.data[outIdx + 1] = 243;
-          maskImgData.data[outIdx + 2] = 199;
-          maskImgData.data[outIdx + 3] = 255;
-        } else {
-          // Sea: #2563eb (Vibrant ocean blue)
-          maskImgData.data[outIdx] = 37;
-          maskImgData.data[outIdx + 1] = 99;
-          maskImgData.data[outIdx + 2] = 235;
-          maskImgData.data[outIdx + 3] = 255;
-        }
-      }
-      mCtx.putImageData(maskImgData, 0, 0);
-      maskCanvasCache.current = mCanvas;
-    }
-
-    // 2. Build Overlay Canvas (Original image + Red Coastline Outline #ef4444)
-    const oCanvas = document.createElement('canvas');
-    oCanvas.width = width;
-    oCanvas.height = height;
-    const oCtx = oCanvas.getContext('2d');
-    if (oCtx) {
-      const overlayImgData = oCtx.createImageData(width, height);
-      // Copy original image RGB
-      overlayImgData.data.set(imageData.data);
-
-      // Highlight coastline boundary pixels in vivid red
-      for (let i = 0; i < size; i++) {
-        if (boundaryMask[i] === 1) {
+    if (segmentationMask && boundaryMask) {
+      // 1. Build Mask Canvas (Land: light yellow #fef3c7, Sea: rich blue #2563eb)
+      const mCanvas = document.createElement('canvas');
+      mCanvas.width = width;
+      mCanvas.height = height;
+      const mCtx = mCanvas.getContext('2d');
+      if (mCtx) {
+        const maskImgData = mCtx.createImageData(width, height);
+        for (let i = 0; i < size; i++) {
           const outIdx = i * 4;
-          overlayImgData.data[outIdx] = 239; // Red #ef4444
-          overlayImgData.data[outIdx + 1] = 68;
-          overlayImgData.data[outIdx + 2] = 68;
-          overlayImgData.data[outIdx + 3] = 255;
+          if (segmentationMask[i] === 1) {
+            // Land: #fef3c7 (Warm antique cream yellow)
+            maskImgData.data[outIdx] = 254;
+            maskImgData.data[outIdx + 1] = 243;
+            maskImgData.data[outIdx + 2] = 199;
+            maskImgData.data[outIdx + 3] = 255;
+          } else {
+            // Sea: #2563eb (Vibrant ocean blue)
+            maskImgData.data[outIdx] = 37;
+            maskImgData.data[outIdx + 1] = 99;
+            maskImgData.data[outIdx + 2] = 235;
+            maskImgData.data[outIdx + 3] = 255;
+          }
         }
+        mCtx.putImageData(maskImgData, 0, 0);
+        maskCanvasCache.current = mCanvas;
       }
-      oCtx.putImageData(overlayImgData, 0, 0);
-      overlayCanvasCache.current = oCanvas;
+
+      // 2. Build Overlay Canvas (Original image + Red Coastline Outline #ef4444)
+      const oCanvas = document.createElement('canvas');
+      oCanvas.width = width;
+      oCanvas.height = height;
+      const oCtx = oCanvas.getContext('2d');
+      if (oCtx) {
+        const overlayImgData = oCtx.createImageData(width, height);
+        // Copy original image RGB
+        overlayImgData.data.set(imageData.data);
+
+        // Highlight coastline boundary pixels in vivid red
+        for (let i = 0; i < size; i++) {
+          if (boundaryMask[i] === 1) {
+            const outIdx = i * 4;
+            overlayImgData.data[outIdx] = 239; // Red #ef4444
+            overlayImgData.data[outIdx + 1] = 68;
+            overlayImgData.data[outIdx + 2] = 68;
+            overlayImgData.data[outIdx + 3] = 255;
+          }
+        }
+        oCtx.putImageData(overlayImgData, 0, 0);
+        overlayCanvasCache.current = oCanvas;
+      }
     }
-  }, [croppedResult, segmentationMask, boundaryMask]);
+
+    // 3. Build Seed Canvas Cache (Sea: blue #3b82f6, Land: red #ef4444)
+    if (seedMask) {
+      const sCanvas = document.createElement('canvas');
+      sCanvas.width = width;
+      sCanvas.height = height;
+      const sCtx = sCanvas.getContext('2d');
+      if (sCtx) {
+        const sImgData = sCtx.createImageData(width, height);
+        for (let i = 0; i < size; i++) {
+          const outIdx = i * 4;
+          if (seedMask[i] === 1) {
+            // Sea seed: semi-transparent blue
+            sImgData.data[outIdx] = 59;
+            sImgData.data[outIdx + 1] = 130;
+            sImgData.data[outIdx + 2] = 246;
+            sImgData.data[outIdx + 3] = 180;
+          } else if (seedMask[i] === 2) {
+            // Land seed: semi-transparent red
+            sImgData.data[outIdx] = 239;
+            sImgData.data[outIdx + 1] = 68;
+            sImgData.data[outIdx + 2] = 68;
+            sImgData.data[outIdx + 3] = 180;
+          } else {
+            sImgData.data[outIdx + 3] = 0;
+          }
+        }
+        sCtx.putImageData(sImgData, 0, 0);
+        seedCanvasCache.current = sCanvas;
+      }
+    }
+  }, [croppedResult, segmentationMask, boundaryMask, seedMask]);
 
   // Render Step 3 Canvas (Interactive pan/zoom with cached render layers)
   useEffect(() => {
@@ -1007,8 +1196,13 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
       ctx.drawImage(activeCanvas, 0, 0);
     }
 
+    // Draw seed overlay if enabled
+    if (showSeeds && seedCanvasCache.current) {
+      ctx.drawImage(seedCanvasCache.current, 0, 0);
+    }
+
     ctx.restore();
-  }, [currentStep, croppedResult, previewMode, step3Viewport, segmentationMask, boundaryMask]);
+  }, [currentStep, croppedResult, previewMode, step3Viewport, segmentationMask, boundaryMask, showSeeds, seedMask]);
 
   // Eyedropper 5x5 color sampling function
   const sampleColorAt = useCallback(
@@ -1055,6 +1249,17 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
     const rect = step3ContainerRef.current.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
+
+    // Prioritize space key or middle click for panning
+    if (isSpacePressed || e.button === 1) {
+      step3DragRef.current = {
+        isDragging: true,
+        startX: mx,
+        startY: my,
+        startVp: { x: step3Viewport.x, y: step3Viewport.y },
+      };
+      return;
+    }
 
     // Convert mouse position to image coordinates
     const imgX = (mx - step3Viewport.x) / step3Viewport.zoom;
@@ -1166,25 +1371,529 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
     setStep3Viewport({ x: newX, y: newY, zoom: nextZoom });
   };
 
-  // Complete and pass segmentation result to parent
-  const handleFinalizeSegmentation = () => {
+  // Update Step 4 mask canvas cache and coastline outline cache
+  const updateStep4MaskCanvas = useCallback(
+    (mask: Uint8Array, width: number, height: number, updateOutline: boolean = true) => {
+      if (!step4MaskCanvasCache.current) {
+        step4MaskCanvasCache.current = document.createElement('canvas');
+      }
+      const mc = step4MaskCanvasCache.current;
+      if (mc.width !== width || mc.height !== height) {
+        mc.width = width;
+        mc.height = height;
+      }
+      const mctx = mc.getContext('2d');
+      if (mctx) {
+        const imgData = mctx.createImageData(width, height);
+        const data = imgData.data;
+        const total = width * height;
+        for (let i = 0; i < total; i++) {
+          const idx = i * 4;
+          if (mask[i] === 1) {
+            // Land: vibrant green
+            data[idx] = 34;
+            data[idx + 1] = 197;
+            data[idx + 2] = 94;
+            data[idx + 3] = 255;
+          } else {
+            // Sea: deep blue
+            data[idx] = 37;
+            data[idx + 1] = 99;
+            data[idx + 2] = 235;
+            data[idx + 3] = 255;
+          }
+        }
+        mctx.putImageData(imgData, 0, 0);
+      }
+
+      if (updateOutline) {
+        if (!step4OutlineCanvasCache.current) {
+          step4OutlineCanvasCache.current = document.createElement('canvas');
+        }
+        const oc = step4OutlineCanvasCache.current;
+        if (oc.width !== width || oc.height !== height) {
+          oc.width = width;
+          oc.height = height;
+        }
+        const octx = oc.getContext('2d');
+        if (octx) {
+          const oImgData = octx.createImageData(width, height);
+          const oData = oImgData.data;
+          const outline = computeCoastlineOutline(mask, width, height);
+          const total = width * height;
+          for (let i = 0; i < total; i++) {
+            if (outline[i] === 1) {
+              const idx = i * 4;
+              oData[idx] = 239; // Red highlight
+              oData[idx + 1] = 68;
+              oData[idx + 2] = 68;
+              oData[idx + 3] = 255;
+            }
+          }
+          octx.putImageData(oImgData, 0, 0);
+        }
+      }
+    },
+    []
+  );
+
+  // Transition from Step 3 (Segmentation) to Step 4 (Manual Correction)
+  const handleProceedToStep4 = () => {
     if (!croppedResult) return;
-    const completeResult: CroppedTerrainResult = {
-      ...croppedResult,
-      mask: segmentationMask || undefined,
-      boundaryMask: boundaryMask || undefined,
-      stats: segmentationStats || undefined,
-    };
-    onCropped?.(completeResult);
-    onClose();
+    const baseMask =
+      segmentationMask || new Uint8Array(croppedResult.width * croppedResult.height);
+    const initialClone = new Uint8Array(baseMask);
+    const manualClone = new Uint8Array(baseMask);
+
+    setInitialStep3Mask(initialClone);
+    setManualMask(manualClone);
+    setMaskUndoStack([]);
+    setMaskRedoStack([]);
+    setHasEditedStep4(false);
+    setStep4LassoPoints([]);
+
+    // Initialize viewport to center within container
+    const cw = step4ContainerRef.current?.clientWidth || 800;
+    const ch = step4ContainerRef.current?.clientHeight || 500;
+    const scaleX = (cw - 40) / croppedResult.width;
+    const scaleY = (ch - 40) / croppedResult.height;
+    const fitZoom = Math.min(scaleX, scaleY, 1.0);
+    const vx = (cw - croppedResult.width * fitZoom) / 2;
+    const vy = (ch - croppedResult.height * fitZoom) / 2;
+    setStep4Viewport({ x: vx, y: vy, zoom: fitZoom });
+
+    updateStep4MaskCanvas(manualClone, croppedResult.width, croppedResult.height, true);
+    setCurrentStep(4);
   };
+
+  // Fit Step 4 Viewport
+  const handleFitStep4View = useCallback(() => {
+    if (!step4ContainerRef.current || !croppedResult) return;
+    const cw = step4ContainerRef.current.clientWidth || 800;
+    const ch = step4ContainerRef.current.clientHeight || 500;
+    const scaleX = (cw - 40) / croppedResult.width;
+    const scaleY = (ch - 40) / croppedResult.height;
+    const fitZoom = Math.min(scaleX, scaleY, 1.0);
+    const vx = (cw - croppedResult.width * fitZoom) / 2;
+    const vy = (ch - croppedResult.height * fitZoom) / 2;
+    setStep4Viewport({ x: vx, y: vy, zoom: fitZoom });
+  }, [croppedResult]);
+
+  // Step 4 Land ratio
+  const step4LandRatio = useMemo(() => {
+    if (!manualMask) return 0;
+    let land = 0;
+    for (let i = 0; i < manualMask.length; i++) {
+      if (manualMask[i] === 1) land++;
+    }
+    return Number(((land / manualMask.length) * 100).toFixed(1));
+  }, [manualMask, step4RedrawTrigger]);
+
+  // Step 4 Canvas rendering
+  const drawStep4Canvas = useCallback(() => {
+    const canvas = step4CanvasRef.current;
+    if (!canvas || !croppedResult || !manualMask) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+
+    ctx.fillStyle = '#0c0a09';
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.save();
+    ctx.translate(step4Viewport.x, step4Viewport.y);
+    ctx.scale(step4Viewport.zoom, step4Viewport.zoom);
+
+    // 1. Draw base original cropped image
+    if (originalCanvasCache.current) {
+      ctx.drawImage(originalCanvasCache.current, 0, 0);
+    } else {
+      ctx.putImageData(croppedResult.imageData, 0, 0);
+    }
+
+    // 2. Draw mask overlay with opacity
+    if (step4MaskCanvasCache.current && step4OverlayOpacity > 0) {
+      ctx.globalAlpha = step4OverlayOpacity;
+      ctx.drawImage(step4MaskCanvasCache.current, 0, 0);
+      ctx.globalAlpha = 1.0;
+    }
+
+    // 3. Draw red coastline outline
+    if (step4OutlineCanvasCache.current) {
+      ctx.drawImage(step4OutlineCanvasCache.current, 0, 0);
+    }
+
+    // 4. Draw polygon lasso if points exist
+    if (step4LassoPoints.length > 0) {
+      ctx.beginPath();
+      ctx.moveTo(step4LassoPoints[0][0], step4LassoPoints[0][1]);
+      for (let i = 1; i < step4LassoPoints.length; i++) {
+        ctx.lineTo(step4LassoPoints[i][0], step4LassoPoints[i][1]);
+      }
+      if (step4MousePos && step4Tool === 'lasso') {
+        const mxImg = (step4MousePos.x - step4Viewport.x) / step4Viewport.zoom;
+        const myImg = (step4MousePos.y - step4Viewport.y) / step4Viewport.zoom;
+        ctx.lineTo(mxImg, myImg);
+      }
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = Math.max(1, 2 / step4Viewport.zoom);
+      ctx.fillStyle = 'rgba(251, 191, 36, 0.2)';
+      ctx.fill();
+      ctx.stroke();
+
+      for (let i = 0; i < step4LassoPoints.length; i++) {
+        ctx.beginPath();
+        const pt = step4LassoPoints[i];
+        ctx.arc(pt[0], pt[1], Math.max(3, 4 / step4Viewport.zoom), 0, Math.PI * 2);
+        ctx.fillStyle = i === 0 ? '#ef4444' : '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = Math.max(1, 1.5 / step4Viewport.zoom);
+        ctx.stroke();
+      }
+    }
+
+    // 5. Draw brush circle cursor
+    if (step4MousePos && (step4Tool === 'brush_land' || step4Tool === 'brush_sea')) {
+      const mxImg = (step4MousePos.x - step4Viewport.x) / step4Viewport.zoom;
+      const myImg = (step4MousePos.y - step4Viewport.y) / step4Viewport.zoom;
+
+      ctx.beginPath();
+      ctx.arc(mxImg, myImg, step4BrushRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = step4Tool === 'brush_land' ? '#22c55e' : '#3b82f6';
+      ctx.lineWidth = Math.max(1, 2 / step4Viewport.zoom);
+      ctx.stroke();
+      ctx.fillStyle =
+        step4Tool === 'brush_land' ? 'rgba(34, 197, 94, 0.25)' : 'rgba(59, 130, 246, 0.25)';
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }, [
+    croppedResult,
+    manualMask,
+    step4Viewport,
+    step4OverlayOpacity,
+    step4LassoPoints,
+    step4MousePos,
+    step4Tool,
+    step4BrushRadius,
+  ]);
+
+  // Step 4 Canvas resize & redraw
+  useEffect(() => {
+    if (currentStep !== 4 || !step4ContainerRef.current || !step4CanvasRef.current) return;
+    const updateSize = () => {
+      if (!step4ContainerRef.current || !step4CanvasRef.current) return;
+      const w = step4ContainerRef.current.clientWidth;
+      const h = step4ContainerRef.current.clientHeight;
+      if (w > 0 && h > 0) {
+        step4CanvasRef.current.width = w;
+        step4CanvasRef.current.height = h;
+        drawStep4Canvas();
+      }
+    };
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, [currentStep, drawStep4Canvas]);
+
+  useEffect(() => {
+    if (currentStep === 4) {
+      drawStep4Canvas();
+    }
+  }, [currentStep, drawStep4Canvas, step4RedrawTrigger]);
+
+  // Step 4 Undo / Redo handlers
+  const handleMaskUndo = useCallback(() => {
+    if (maskUndoStack.length === 0 || !manualMask || !croppedResult) return;
+    const patch = maskUndoStack[maskUndoStack.length - 1];
+    applyPatchToMask(manualMask, croppedResult.width, patch, 'before');
+    setMaskUndoStack((prev) => prev.slice(0, prev.length - 1));
+    setMaskRedoStack((prev) => [...prev, patch]);
+    setHasEditedStep4(true);
+    updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, true);
+    setStep4RedrawTrigger((t) => t + 1);
+  }, [maskUndoStack, manualMask, croppedResult, updateStep4MaskCanvas]);
+
+  const handleMaskRedo = useCallback(() => {
+    if (maskRedoStack.length === 0 || !manualMask || !croppedResult) return;
+    const patch = maskRedoStack[maskRedoStack.length - 1];
+    applyPatchToMask(manualMask, croppedResult.width, patch, 'after');
+    setMaskRedoStack((prev) => prev.slice(0, prev.length - 1));
+    setMaskUndoStack((prev) => [...prev, patch]);
+    setHasEditedStep4(true);
+    updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, true);
+    setStep4RedrawTrigger((t) => t + 1);
+  }, [maskRedoStack, manualMask, croppedResult, updateStep4MaskCanvas]);
+
+  // Apply Polygon Lasso
+  const handleApplyLasso = useCallback(
+    (fillValue: 0 | 1) => {
+      if (step4LassoPoints.length < 3 || !manualMask || !croppedResult) return;
+      const patch = applyPolygonToMask(
+        manualMask,
+        croppedResult.width,
+        croppedResult.height,
+        step4LassoPoints,
+        fillValue
+      );
+      if (patch) {
+        setMaskUndoStack((prev) => [...prev.slice(-29), patch]);
+        setMaskRedoStack([]);
+        setHasEditedStep4(true);
+      }
+      setStep4LassoPoints([]);
+      updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, true);
+      setStep4RedrawTrigger((t) => t + 1);
+    },
+    [step4LassoPoints, manualMask, croppedResult, updateStep4MaskCanvas]
+  );
+
+  // Reset to initial Step 3 segmentation mask
+  const handleResetToInitialStep3 = useCallback(() => {
+    if (!initialStep3Mask || !manualMask || !croppedResult) return;
+    manualMask.set(initialStep3Mask);
+    setMaskUndoStack([]);
+    setMaskRedoStack([]);
+    setHasEditedStep4(false);
+    setStep4LassoPoints([]);
+    setShowConfirmReset(false);
+    updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, true);
+    setStep4RedrawTrigger((t) => t + 1);
+  }, [initialStep3Mask, manualMask, croppedResult, updateStep4MaskCanvas]);
+
+  // Confirm Apply to World Map
+  const handleConfirmApplyWorld = useCallback(() => {
+    if (!manualMask || !croppedResult) return;
+    const newMap = createMapDataFromMask(
+      manualMask,
+      croppedResult.width,
+      croppedResult.height,
+      { gridResolution: croppedResult.resolution }
+    );
+    setShowConfirmApply(false);
+    onApplyToWorldMap?.(newMap);
+    onCropped?.({
+      ...croppedResult,
+      mask: manualMask,
+      boundaryMask: computeCoastlineOutline(manualMask, croppedResult.width, croppedResult.height),
+    });
+    onClose();
+  }, [manualMask, croppedResult, onApplyToWorldMap, onCropped, onClose]);
+
+  // Step 4 Mouse interactions
+  const handleStep4MouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!step4ContainerRef.current || !croppedResult || !manualMask) return;
+    const rect = step4ContainerRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    // Pan with space or middle click or pan tool
+    if (isSpacePressed || e.button === 1 || step4Tool === 'pan') {
+      step4DragRef.current = {
+        isDragging: true,
+        startX: mx,
+        startY: my,
+        startVp: { x: step4Viewport.x, y: step4Viewport.y },
+      };
+      return;
+    }
+
+    const imgX = (mx - step4Viewport.x) / step4Viewport.zoom;
+    const imgY = (my - step4Viewport.y) / step4Viewport.zoom;
+    const isInside =
+      imgX >= 0 && imgX < croppedResult.width && imgY >= 0 && imgY < croppedResult.height;
+
+    if (!isInside || e.button !== 0) return;
+
+    if (step4Tool === 'brush_land' || step4Tool === 'brush_sea') {
+      strokeStartMaskSnapshot.current = new Uint8Array(manualMask);
+      isStep4DrawingRef.current = true;
+      lastBrushPosRef.current = { x: imgX, y: imgY };
+      const val: 0 | 1 = step4Tool === 'brush_land' ? 1 : 0;
+      applyBrushToMask(
+        manualMask,
+        croppedResult.width,
+        croppedResult.height,
+        Math.round(imgX),
+        Math.round(imgY),
+        step4BrushRadius,
+        val
+      );
+      updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, false);
+      setStep4RedrawTrigger((t) => t + 1);
+    } else if (step4Tool === 'bucket') {
+      const fillRes = floodFillMask(
+        manualMask,
+        croppedResult.width,
+        croppedResult.height,
+        Math.floor(imgX),
+        Math.floor(imgY)
+      );
+      if (fillRes) {
+        setMaskUndoStack((prev) => [...prev.slice(-29), fillRes.patch]);
+        setMaskRedoStack([]);
+        setHasEditedStep4(true);
+        updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, true);
+        setStep4RedrawTrigger((t) => t + 1);
+      }
+    } else if (step4Tool === 'lasso') {
+      setStep4LassoPoints((prev) => [...prev, [Math.round(imgX), Math.round(imgY)]]);
+      setStep4RedrawTrigger((t) => t + 1);
+    }
+  };
+
+  const handleStep4MouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!step4ContainerRef.current || !croppedResult || !manualMask) return;
+    const rect = step4ContainerRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    setStep4MousePos({ x: mx, y: my });
+
+    if (step4DragRef.current.isDragging) {
+      const dx = mx - step4DragRef.current.startX;
+      const dy = my - step4DragRef.current.startY;
+      setStep4Viewport({
+        x: step4DragRef.current.startVp.x + dx,
+        y: step4DragRef.current.startVp.y + dy,
+        zoom: step4Viewport.zoom,
+      });
+      return;
+    }
+
+    const imgX = (mx - step4Viewport.x) / step4Viewport.zoom;
+    const imgY = (my - step4Viewport.y) / step4Viewport.zoom;
+
+    if (
+      isStep4DrawingRef.current &&
+      (step4Tool === 'brush_land' || step4Tool === 'brush_sea') &&
+      lastBrushPosRef.current
+    ) {
+      const val: 0 | 1 = step4Tool === 'brush_land' ? 1 : 0;
+      applyBrushStrokeToMask(
+        manualMask,
+        croppedResult.width,
+        croppedResult.height,
+        [
+          [lastBrushPosRef.current.x, lastBrushPosRef.current.y],
+          [imgX, imgY],
+        ],
+        step4BrushRadius,
+        val
+      );
+      lastBrushPosRef.current = { x: imgX, y: imgY };
+      updateStep4MaskCanvas(manualMask, croppedResult.width, croppedResult.height, false);
+      setStep4RedrawTrigger((t) => t + 1);
+    }
+  };
+
+  const handleStep4MouseUp = () => {
+    step4DragRef.current.isDragging = false;
+
+    if (isStep4DrawingRef.current && strokeStartMaskSnapshot.current && manualMask && croppedResult) {
+      isStep4DrawingRef.current = false;
+      lastBrushPosRef.current = null;
+
+      const start = strokeStartMaskSnapshot.current;
+      const current = manualMask;
+      const w = croppedResult.width;
+      const h = croppedResult.height;
+
+      let minX = w;
+      let minY = h;
+      let maxX = -1;
+      let maxY = -1;
+
+      for (let y = 0; y < h; y++) {
+        const row = y * w;
+        for (let x = 0; x < w; x++) {
+          const idx = row + x;
+          if (start[idx] !== current[idx]) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      if (maxX >= minX && maxY >= minY) {
+        const pw = maxX - minX + 1;
+        const ph = maxY - minY + 1;
+        const before = new Uint8Array(pw * ph);
+        const after = new Uint8Array(pw * ph);
+        for (let py = 0; py < ph; py++) {
+          const srcY = minY + py;
+          for (let px = 0; px < pw; px++) {
+            const srcX = minX + px;
+            const srcIdx = srcY * w + srcX;
+            const pIdx = py * pw + px;
+            before[pIdx] = start[srcIdx];
+            after[pIdx] = current[srcIdx];
+          }
+        }
+        const patch: MaskPatch = { minX, minY, width: pw, height: ph, before, after };
+        setMaskUndoStack((prev) => [...prev.slice(-29), patch]);
+        setMaskRedoStack([]);
+        setHasEditedStep4(true);
+      }
+      strokeStartMaskSnapshot.current = null;
+      updateStep4MaskCanvas(manualMask, w, h, true);
+      setStep4RedrawTrigger((t) => t + 1);
+    }
+  };
+
+  const handleStep4Wheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!step4ContainerRef.current) return;
+    const rect = step4ContainerRef.current.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87;
+    const nextZoom = Math.max(0.05, Math.min(12, step4Viewport.zoom * zoomFactor));
+
+    const newX = mx - (mx - step4Viewport.x) * (nextZoom / step4Viewport.zoom);
+    const newY = my - (my - step4Viewport.y) * (nextZoom / step4Viewport.zoom);
+
+    setStep4Viewport({ x: newX, y: newY, zoom: nextZoom });
+  };
+
+  // Step 4 Keyboard shortcuts (Undo/Redo/Escape)
+  useEffect(() => {
+    if (currentStep !== 4) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.code === 'KeyZ') {
+        e.preventDefault();
+        handleMaskUndo();
+      } else if (
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyZ') ||
+        ((e.ctrlKey || e.metaKey) && e.code === 'KeyY')
+      ) {
+        e.preventDefault();
+        handleMaskRedo();
+      } else if (e.code === 'Escape') {
+        if (step4LassoPoints.length > 0) {
+          setStep4LassoPoints([]);
+          setStep4RedrawTrigger((t) => t + 1);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentStep, handleMaskUndo, handleMaskRedo, step4LassoPoints]);
 
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 md:p-6 bg-black/85 backdrop-blur-md">
       <div className="relative w-full max-w-6xl h-[92vh] bg-stone-900 border border-stone-700/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-stone-200">
-        {/* Header with 3-Step Indicator */}
+        {/* Header with 4-Step Indicator */}
         <header className="px-5 py-3.5 border-b border-stone-800 bg-stone-950 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-600 via-orange-500 to-amber-300 flex items-center justify-center shadow-lg shadow-amber-950/60">
@@ -1198,11 +1907,15 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                     ? '第1段階: 読込'
                     : currentStep === 2
                     ? '第1段階: 2:1切抜'
-                    : '第2段階: 陸海自動判定'}
+                    : currentStep === 3
+                    ? '第2段階: 陸海自動判定'
+                    : '第3段階: 陸海手動補正'}
                 </span>
               </h2>
               <p className="text-[11px] text-stone-400">
-                {currentStep === 3
+                {currentStep === 4
+                  ? 'ブラシや塗りつぶしで陸海マスクを手動補正し、確定後に世界マップへ反映します'
+                  : currentStep === 3
                   ? '切り抜いた画像から陸と海を高精度に自動判定します。スポイトやパラメータで境界を微調整できます'
                   : '地図画像やイラストを読み込み、世界マップ（2:1）の規定画角にトリミングします'}
               </p>
@@ -1234,18 +1947,31 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
               }`}
             >
               <span className="w-4 h-4 rounded-full bg-stone-950/20 flex items-center justify-center text-[10px]">2</span>
-              <span>2:1切り抜き</span>
+              <span>2:1切抜</span>
             </div>
             <ChevronRight className="w-3.5 h-3.5 text-stone-600" />
             <div
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md ${
                 currentStep === 3
                   ? 'bg-amber-500 text-stone-950 font-bold shadow'
+                  : currentStep > 3
+                  ? 'text-amber-400'
                   : 'text-stone-500'
               }`}
             >
               <span className="w-4 h-4 rounded-full bg-stone-950/20 flex items-center justify-center text-[10px]">3</span>
               <span>陸海の判定</span>
+            </div>
+            <ChevronRight className="w-3.5 h-3.5 text-stone-600" />
+            <div
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md ${
+                currentStep === 4
+                  ? 'bg-amber-500 text-stone-950 font-bold shadow'
+                  : 'text-stone-500'
+              }`}
+            >
+              <span className="w-4 h-4 rounded-full bg-stone-950/20 flex items-center justify-center text-[10px]">4</span>
+              <span>陸海の手動補正</span>
             </div>
           </div>
 
@@ -1533,12 +2259,13 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                 ref={step3ContainerRef}
                 className="relative flex-1 bg-stone-950 overflow-hidden select-none"
                 style={{
-                  cursor:
-                    activeStep3Tool === 'dropper_sea' || activeStep3Tool === 'dropper_land'
-                      ? 'crosshair'
-                      : step3DragRef.current.isDragging
-                      ? 'grabbing'
-                      : 'grab',
+                  cursor: isSpacePressed
+                    ? 'grab'
+                    : activeStep3Tool === 'dropper_sea' || activeStep3Tool === 'dropper_land'
+                    ? 'crosshair'
+                    : step3DragRef.current.isDragging
+                    ? 'grabbing'
+                    : 'grab',
                 }}
                 onMouseDown={handleStep3MouseDown}
                 onMouseMove={handleStep3MouseMove}
@@ -1549,44 +2276,92 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                 <canvas ref={step3CanvasRef} className="absolute inset-0 block w-full h-full" />
 
                 {/* View Mode Switcher Pills (Top Center) */}
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center bg-stone-900/90 backdrop-blur-md p-1 rounded-xl border border-stone-700/80 shadow-2xl text-xs z-10">
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('original')}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                      previewMode === 'original'
-                        ? 'bg-stone-700 text-stone-100 shadow'
-                        : 'text-stone-400 hover:text-stone-200'
-                    }`}
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>元画像</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('mask')}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                      previewMode === 'mask'
-                        ? 'bg-blue-600 text-white shadow'
-                        : 'text-stone-400 hover:text-stone-200'
-                    }`}
-                  >
-                    <Layers className="w-3.5 h-3.5" />
-                    <span>判定マスク（黄陸/青海）</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('overlay')}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
-                      previewMode === 'overlay'
-                        ? 'bg-amber-600 text-stone-950 font-bold shadow'
-                        : 'text-stone-400 hover:text-stone-200'
-                    }`}
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>重ね合わせ（赤輪郭線）</span>
-                  </button>
+                <div className="absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2 z-10">
+                  <div className="flex items-center bg-stone-900/90 backdrop-blur-md p-1 rounded-xl border border-stone-700/80 shadow-2xl text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('original')}
+                      className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                        previewMode === 'original'
+                          ? 'bg-stone-700 text-stone-100 shadow'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>元画像</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('mask')}
+                      className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                        previewMode === 'mask'
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>判定マスク（黄陸/青海）</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewMode('overlay')}
+                      className={`px-3 py-1.5 rounded-lg font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                        previewMode === 'overlay'
+                          ? 'bg-amber-600 text-stone-950 font-bold shadow'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>重ね合わせ（赤輪郭線）</span>
+                    </button>
+                  </div>
+
+                  {/* Seed Visualization Toggle */}
+                  <label className="flex items-center gap-2 px-3 py-2 rounded-xl bg-stone-900/90 backdrop-blur-md border border-stone-700/80 shadow-2xl text-xs text-stone-200 hover:text-white cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={showSeeds}
+                      onChange={(e) => setShowSeeds(e.target.checked)}
+                      className="accent-amber-500 rounded cursor-pointer w-3.5 h-3.5"
+                    />
+                    <span className="font-medium text-[11px]">
+                      シードを表示 (<span className="text-blue-400 font-bold">青:海</span> / <span className="text-red-400 font-bold">赤:陸</span>)
+                    </span>
+                  </label>
                 </div>
+
+                {/* Insufficient Seeds Alert Banner */}
+                {seedError && (
+                  <div className="absolute top-16 left-1/2 -translate-x-1/2 max-w-xl w-[92%] bg-amber-950/95 border border-amber-500/90 shadow-2xl rounded-xl p-3 backdrop-blur-md z-20 text-amber-200 text-xs flex items-start gap-2.5">
+                    <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 space-y-1">
+                      <div className="font-bold text-amber-300">シードが不足しています</div>
+                      <div className="text-[11px] leading-relaxed text-amber-100">{seedError}</div>
+                      {seedCounts && (
+                        <div className="text-[10px] font-mono text-amber-300/80 pt-0.5">
+                          海シード: {seedCounts.seaSeedCount.toLocaleString()} px ({seedCounts.seaSeedPercent}%) /
+                          陸シード: {seedCounts.landSeedCount.toLocaleString()} px ({seedCounts.landSeedPercent}%)
+                          （各0.5%以上必要）
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Extreme Land Ratio Warning Banner */}
+                {!seedError && segmentationStats && (segmentationStats.landRatio >= 90 || segmentationStats.landRatio <= 3) && (
+                  <div className="absolute top-16 left-1/2 -translate-x-1/2 max-w-xl w-[92%] bg-red-950/95 border border-red-500/90 shadow-2xl rounded-xl p-3 backdrop-blur-md z-20 text-red-200 text-xs flex items-start gap-2.5">
+                    <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                    <div className="flex-1 space-y-1">
+                      <div className="font-bold text-red-300">
+                        判定結果が偏っています（陸地比率 {segmentationStats.landRatio}%）
+                      </div>
+                      <div className="text-[11px] leading-relaxed text-red-100">
+                        判定結果が偏っています。海と陸の色をそれぞれ3箇所以上スポイトで指定するか、外周の海幅を広げてください。
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Floating View Zoom Controls (Top Left) */}
                 <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-stone-900/90 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-stone-700 text-xs shadow-lg z-10">
@@ -1645,7 +2420,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                     title="海の確実な色をサンプリング"
                   >
                     <Pipette className="w-3.5 h-3.5" />
-                    <span>海スポイト</span>
+                    <span>海の色を選ぶ</span>
                   </button>
                   <button
                     type="button"
@@ -1658,7 +2433,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                     title="陸の確実な色をサンプリング"
                   >
                     <Pipette className="w-3.5 h-3.5" />
-                    <span>陸スポイト</span>
+                    <span>陸の色を選ぶ</span>
                   </button>
                 </div>
 
@@ -1701,7 +2476,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                           として指定したい場所をクリックして色をサンプリングします（周辺5×5平均）
                         </span>
                       ) : (
-                        <span>ドラッグでパン移動、ホイールでズーム。スポイトで確実な色をサンプリングできます</span>
+                        <span>ホイールでズーム、スペース+ドラッグでパン。スポイトまたは代表色提案で色を指定できます</span>
                       )}
                     </div>
                   )}
@@ -1734,11 +2509,11 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
               {/* Right Sidebar: Sampling & Parameter Controls */}
               <div className="w-full md:w-84 border-t md:border-t-0 md:border-l border-stone-800 bg-stone-950/90 p-4 flex flex-col gap-3.5 overflow-y-auto shrink-0 text-xs">
                 {/* Sampling Section */}
-                <div className="space-y-2 p-3 rounded-xl bg-stone-900/80 border border-stone-800">
+                <div className="space-y-2.5 p-3 rounded-xl bg-stone-900/80 border border-stone-800">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-stone-200 flex items-center gap-1.5">
                       <Pipette className="w-3.5 h-3.5 text-amber-400" />
-                      <span>色サンプリング（シード）</span>
+                      <span>シード指定（色のスポイト）</span>
                     </span>
                     {(seaSamples.length > 0 || landSamples.length > 0) && (
                       <button
@@ -1746,6 +2521,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                         onClick={() => {
                           setSeaSamples([]);
                           setLandSamples([]);
+                          setClusterAssignments({});
                           triggerSegmentation(croppedResult, { seaSamples: [], landSamples: [] });
                         }}
                         className="text-[10px] text-red-400 hover:text-red-300 flex items-center gap-1 cursor-pointer"
@@ -1756,9 +2532,104 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                     )}
                   </div>
 
-                  <p className="text-[10px] text-stone-400 leading-relaxed">
-                    未指定時は羊皮紙地図の自動配色で判定します。境界が曖昧な場合はスポイトで色を追加してください。
-                  </p>
+                  {/* Seed Pixel Counts Banner */}
+                  <div className="p-2 rounded-lg bg-stone-950/70 border border-stone-800 text-[11px] space-y-1">
+                    <div className="flex justify-between items-center text-stone-300">
+                      <span className="text-[10px] text-stone-400">検出シード画素数:</span>
+                      <span className="text-[9px] text-stone-500">（基準: 各0.5%以上）</span>
+                    </div>
+                    <div className="font-mono text-[10px] flex flex-col gap-0.5">
+                      <div className={`flex items-center justify-between ${seedCounts && seedCounts.seaSeedPercent >= 0.5 ? 'text-blue-300' : 'text-amber-400 font-bold'}`}>
+                        <span>🌊 海シード:</span>
+                        <span>{seedCounts ? seedCounts.seaSeedCount.toLocaleString() : 0} px ({seedCounts?.seaSeedPercent ?? 0}%)</span>
+                      </div>
+                      <div className={`flex items-center justify-between ${seedCounts && seedCounts.landSeedPercent >= 0.5 ? 'text-emerald-300' : 'text-amber-400 font-bold'}`}>
+                        <span>⛰️ 陸シード:</span>
+                        <span>{seedCounts ? seedCounts.landSeedCount.toLocaleString() : 0} px ({seedCounts?.landSeedPercent ?? 0}%)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Propose Color Palette Button (k-means) */}
+                  <div className="pt-0.5">
+                    <button
+                      type="button"
+                      onClick={handleProposeColors}
+                      disabled={isGeneratingClusters}
+                      className="w-full py-1.5 px-3 rounded-lg bg-stone-800 hover:bg-stone-700 border border-stone-700 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Palette className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{suggestedClusters.length > 0 ? '色の候補を再提案' : '色の候補を提案（k-means）'}</span>
+                    </button>
+                  </div>
+
+                  {/* Display suggested color clusters if available */}
+                  {suggestedClusters.length > 0 && (
+                    <div className="space-y-1.5 p-2 rounded-lg bg-stone-950/80 border border-stone-800">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-stone-300">
+                        <span>色の候補（Lab k=6）</span>
+                        <span className="text-[9px] text-stone-500 font-normal">面積割合順</span>
+                      </div>
+                      <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
+                        {suggestedClusters.map((cluster) => {
+                          const currentRole = clusterAssignments[cluster.id] || 'ignore';
+                          return (
+                            <div
+                              key={cluster.id}
+                              className="flex items-center justify-between gap-1 p-1.5 rounded-lg bg-stone-900 border border-stone-800 text-[10px]"
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span
+                                  className="w-4 h-4 rounded border border-stone-600 shadow-sm shrink-0"
+                                  style={{ backgroundColor: cluster.hex }}
+                                />
+                                <div className="truncate">
+                                  <span className="font-mono text-stone-200 font-bold">{cluster.ratioPercent}%</span>
+                                  <span className="text-[9px] text-stone-500 font-mono ml-1">{cluster.hex}</span>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignClusterColor(cluster, 'sea')}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                                    currentRole === 'sea'
+                                      ? 'bg-blue-600 text-white font-bold ring-1 ring-blue-400'
+                                      : 'bg-stone-800 text-blue-300 hover:bg-blue-950'
+                                  }`}
+                                >
+                                  海
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignClusterColor(cluster, 'land')}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                                    currentRole === 'land'
+                                      ? 'bg-amber-600 text-stone-950 font-bold ring-1 ring-amber-300'
+                                      : 'bg-stone-800 text-amber-300 hover:bg-amber-950'
+                                  }`}
+                                >
+                                  陸
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignClusterColor(cluster, 'ignore')}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] transition cursor-pointer ${
+                                    currentRole === 'ignore'
+                                      ? 'bg-stone-700 text-stone-300 font-medium'
+                                      : 'bg-stone-800 text-stone-500 hover:text-stone-300'
+                                  }`}
+                                >
+                                  無視
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Sea Samples */}
                   <div className="space-y-1 pt-1">
@@ -1892,31 +2763,31 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                   {/* Median Filter Radius */}
                   <div className="space-y-1">
                     <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-stone-300">文字・グリッド線ぼかし</span>
+                      <span className="text-stone-300">ぼかし強度 (メディアン半径 0〜6)</span>
                       <span className="font-mono text-amber-400 font-bold">
-                        {medianRadius === 0 ? '無効' : `${medianRadius * 2 + 1}×${medianRadius * 2 + 1}`}
+                        {medianRadius === 0 ? '無効 (0)' : `${medianRadius * 2 + 1}×${medianRadius * 2 + 1} (半径${medianRadius})`}
                       </span>
                     </div>
                     <input
                       type="range"
                       min={0}
-                      max={4}
+                      max={6}
                       step={1}
                       value={medianRadius}
                       onChange={(e) => setMedianRadius(Number(e.target.value))}
                       className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
                     />
                     <div className="flex justify-between text-[9px] text-stone-500">
-                      <span>なし</span>
-                      <span>標準 (5×5)</span>
-                      <span>強力 (9×9)</span>
+                      <span>なし (0)</span>
+                      <span>標準 (3: 7×7)</span>
+                      <span>最大 (6: 13×13)</span>
                     </div>
                   </div>
 
                   {/* Island Removal Area Threshold */}
                   <div className="space-y-1">
                     <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-stone-300">最小島サイズ（孤立ゴミ除去）</span>
+                      <span className="text-stone-300">小さな島を除去する最小面積</span>
                       <span className="font-mono text-amber-400 font-bold">
                         {(minIslandAreaRatio * 100).toFixed(2)}%
                       </span>
@@ -1931,17 +2802,18 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                       className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
                     />
                     <div className="flex justify-between text-[9px] text-stone-500">
-                      <span>微小島も残す</span>
-                      <span>大島のみ</span>
+                      <span>微小島も残す (0.05%)</span>
+                      <span>初期値 (0.20%)</span>
+                      <span>大島のみ (2.0%)</span>
                     </div>
                   </div>
 
                   {/* Smoothing Iterations */}
                   <div className="space-y-1">
                     <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-stone-300">海岸線スムージング</span>
+                      <span className="text-stone-300">海岸線の滑らかさ (0〜4回)</span>
                       <span className="font-mono text-amber-400 font-bold">
-                        {smoothingIterations === 0 ? 'なし' : `${smoothingIterations}回`}
+                        {smoothingIterations === 0 ? 'なし (0回)' : `${smoothingIterations}回`}
                       </span>
                     </div>
                     <input
@@ -1953,29 +2825,51 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                       onChange={(e) => setSmoothingIterations(Number(e.target.value))}
                       className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
                     />
+                    <div className="flex justify-between text-[9px] text-stone-500">
+                      <span>なし</span>
+                      <span>標準 (1回)</span>
+                      <span>滑らか (4回)</span>
+                    </div>
                   </div>
 
-                  {/* Outer margin */}
+                  {/* Outer margin in percent */}
                   <div className="space-y-1">
                     <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-stone-300">外枠海マージン</span>
-                      <span className="font-mono text-amber-400 font-bold">{marginPx} px</span>
+                      <span className="text-stone-300">画像外周を海とみなす幅</span>
+                      <span className="font-mono text-amber-400 font-bold">
+                        {marginPercent === 0
+                          ? '無効 (0%)'
+                          : `${marginPercent}% (約${Math.round(
+                              (croppedResult?.width || 1024) * (marginPercent / 100)
+                            )}px)`}
+                      </span>
                     </div>
                     <input
                       type="range"
                       min={0}
-                      max={20}
-                      step={1}
-                      value={marginPx}
-                      onChange={(e) => setMarginPx(Number(e.target.value))}
+                      max={8}
+                      step={0.5}
+                      value={marginPercent}
+                      onChange={(e) => setMarginPercent(Number(e.target.value))}
                       className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
                     />
+                    <div className="flex justify-between text-[9px] text-stone-500">
+                      <span>無効 (0%)</span>
+                      <span>初期値 (3%)</span>
+                      <span>広め (8%)</span>
+                    </div>
                   </div>
 
                   {/* Re-calculate Button */}
                   <button
                     type="button"
-                    onClick={() => triggerSegmentation()}
+                    onClick={() => {
+                      if (hasEditedStep4) {
+                        setShowConfirmReSegment(true);
+                      } else {
+                        triggerSegmentation();
+                      }
+                    }}
                     disabled={isSegmenting}
                     className="w-full mt-1 py-2 px-3 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-300 border border-stone-700 font-medium flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50"
                   >
@@ -2024,11 +2918,12 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                 <div className="mt-auto space-y-2 pt-2">
                   <button
                     type="button"
-                    onClick={handleFinalizeSegmentation}
-                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 hover:from-amber-500 hover:to-amber-500 text-stone-950 flex items-center justify-center gap-1.5 transition shadow shadow-amber-950/40 cursor-pointer active:scale-98"
+                    onClick={handleProceedToStep4}
+                    disabled={!segmentationMask || isSegmenting || !!seedError}
+                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 hover:from-amber-500 hover:to-amber-500 text-stone-950 flex items-center justify-center gap-1.5 transition shadow shadow-amber-950/40 cursor-pointer active:scale-98 disabled:opacity-50"
                   >
-                    <Check className="w-4 h-4 font-bold" />
-                    <span>判定結果を確定して完了</span>
+                    <span>次へ（手動補正へ進む）</span>
+                    <ChevronRight className="w-4 h-4 font-bold" />
                   </button>
 
                   <button
@@ -2043,7 +2938,526 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* STEP 4: 陸海マスクの手動補正 */}
+          {currentStep === 4 && croppedResult && manualMask && (
+            <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+              {/* Main Interactive Canvas Area */}
+              <div
+                ref={step4ContainerRef}
+                className="flex-1 bg-stone-950 relative overflow-hidden flex items-center justify-center select-none"
+              >
+                <canvas
+                  ref={step4CanvasRef}
+                  onMouseDown={handleStep4MouseDown}
+                  onMouseMove={handleStep4MouseMove}
+                  onMouseUp={handleStep4MouseUp}
+                  onMouseLeave={handleStep4MouseUp}
+                  onWheel={handleStep4Wheel}
+                  className="w-full h-full block cursor-crosshair"
+                />
+
+                {/* Floating Top-Left Tool Bar */}
+                <div className="absolute top-3 left-3 flex flex-wrap items-center gap-1.5 p-1.5 rounded-xl bg-stone-900/90 border border-stone-700/80 shadow-2xl backdrop-blur-md z-10 text-xs">
+                  {/* Land Brush */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep4Tool('brush_land');
+                      setStep4LassoPoints([]);
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                      step4Tool === 'brush_land'
+                        ? 'bg-emerald-600 text-white shadow shadow-emerald-950 font-bold'
+                        : 'text-stone-300 hover:bg-stone-800'
+                    }`}
+                    title="陸ブラシ (円形で陸地を塗る)"
+                  >
+                    <Mountain className="w-3.5 h-3.5 text-emerald-300" />
+                    <span>陸ブラシ</span>
+                  </button>
+
+                  {/* Sea Brush */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep4Tool('brush_sea');
+                      setStep4LassoPoints([]);
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                      step4Tool === 'brush_sea'
+                        ? 'bg-blue-600 text-white shadow shadow-blue-950 font-bold'
+                        : 'text-stone-300 hover:bg-stone-800'
+                    }`}
+                    title="海ブラシ (円形で海を塗る)"
+                  >
+                    <Waves className="w-3.5 h-3.5 text-blue-300" />
+                    <span>海ブラシ</span>
+                  </button>
+
+                  {/* Bucket Fill */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep4Tool('bucket');
+                      setStep4LassoPoints([]);
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                      step4Tool === 'bucket'
+                        ? 'bg-amber-600 text-stone-950 font-bold shadow shadow-amber-950'
+                        : 'text-stone-300 hover:bg-stone-800'
+                    }`}
+                    title="塗りつぶし (同じ値の領域を反転)"
+                  >
+                    <PaintBucket className="w-3.5 h-3.5" />
+                    <span>塗りつぶし</span>
+                  </button>
+
+                  {/* Polygon Lasso */}
+                  <button
+                    type="button"
+                    onClick={() => setStep4Tool('lasso')}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                      step4Tool === 'lasso'
+                        ? 'bg-purple-600 text-white shadow shadow-purple-950 font-bold'
+                        : 'text-stone-300 hover:bg-stone-800'
+                    }`}
+                    title="線で囲む (多角形を描いて内側を一括塗り)"
+                  >
+                    <Spline className="w-3.5 h-3.5" />
+                    <span>線で囲む</span>
+                  </button>
+
+                  {/* Pan Tool */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep4Tool('pan');
+                      setStep4LassoPoints([]);
+                    }}
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-medium transition cursor-pointer ${
+                      step4Tool === 'pan'
+                        ? 'bg-stone-700 text-white font-bold'
+                        : 'text-stone-300 hover:bg-stone-800'
+                    }`}
+                    title="移動 (Spaceキー長押しでも移動可能)"
+                  >
+                    <Move className="w-3.5 h-3.5" />
+                    <span>移動</span>
+                  </button>
+
+                  <div className="w-[1px] h-5 bg-stone-700 mx-1" />
+
+                  {/* Undo Button */}
+                  <button
+                    type="button"
+                    onClick={handleMaskUndo}
+                    disabled={maskUndoStack.length === 0}
+                    className="p-1.5 rounded-lg text-stone-300 hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    title="元に戻す (Ctrl+Z)"
+                  >
+                    <Undo2 className="w-4 h-4" />
+                  </button>
+
+                  {/* Redo Button */}
+                  <button
+                    type="button"
+                    onClick={handleMaskRedo}
+                    disabled={maskRedoStack.length === 0}
+                    className="p-1.5 rounded-lg text-stone-300 hover:bg-stone-800 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    title="やり直し (Ctrl+Shift+Z)"
+                  >
+                    <Redo2 className="w-4 h-4" />
+                  </button>
+
+                  <div className="w-[1px] h-5 bg-stone-700 mx-1" />
+
+                  {/* Zoom controls */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setStep4Viewport((v) => ({ ...v, zoom: Math.max(0.05, v.zoom * 0.85) }))
+                    }
+                    className="p-1.5 rounded-lg text-stone-300 hover:bg-stone-800 transition"
+                    title="縮小"
+                  >
+                    <ZoomOut className="w-4 h-4" />
+                  </button>
+                  <span className="font-mono text-[11px] text-stone-400 px-1">
+                    {Math.round(step4Viewport.zoom * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setStep4Viewport((v) => ({ ...v, zoom: Math.min(12, v.zoom * 1.15) }))
+                    }
+                    className="p-1.5 rounded-lg text-stone-300 hover:bg-stone-800 transition"
+                    title="拡大"
+                  >
+                    <ZoomIn className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleFitStep4View}
+                    className="p-1.5 rounded-lg text-stone-300 hover:bg-stone-800 transition"
+                    title="全体表示"
+                  >
+                    <Maximize2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Floating Lasso Actions Panel (Visible when points placed) */}
+                {step4Tool === 'lasso' && step4LassoPoints.length > 0 && (
+                  <div className="absolute top-16 left-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-purple-950/95 border border-purple-500/60 shadow-2xl backdrop-blur-md z-10 text-xs text-purple-200">
+                    <span className="font-semibold">
+                      多角形: {step4LassoPoints.length} 点
+                    </span>
+                    {step4LassoPoints.length >= 3 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleApplyLasso(1)}
+                          className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Mountain className="w-3.5 h-3.5" />
+                          <span>陸にする</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApplyLasso(0)}
+                          className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Waves className="w-3.5 h-3.5" />
+                          <span>海にする</span>
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStep4LassoPoints([]);
+                        setStep4RedrawTrigger((t) => t + 1);
+                      }}
+                      className="px-2 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[11px] transition cursor-pointer"
+                    >
+                      クリア (Esc)
+                    </button>
+                  </div>
+                )}
+
+                {/* Bottom Canvas Hints */}
+                <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between text-[11px] text-stone-400 bg-stone-900/80 px-3 py-1.5 rounded-lg border border-stone-800 pointer-events-none backdrop-blur-sm">
+                  <span>
+                    左ドラッグ: 描画 | ホイール: 拡大縮小 | Space+ドラッグ: パン | Ctrl+Z: 元に戻す
+                  </span>
+                  <span className="font-mono text-stone-300">
+                    {croppedResult.width} × {croppedResult.height}
+                  </span>
+                </div>
+              </div>
+
+              {/* Step 4 Right Sidebar */}
+              <div className="w-full md:w-80 lg:w-96 bg-stone-950/95 border-l border-stone-800 p-4 flex flex-col gap-3.5 overflow-y-auto shrink-0 text-xs text-stone-300">
+                {/* Tool Settings Card */}
+                <div className="p-3.5 rounded-xl bg-stone-900/90 border border-stone-800 space-y-3">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-200">
+                    <span className="flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-amber-400" />
+                      <span>ツールの設定</span>
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-stone-800 text-stone-400 font-normal">
+                      {step4Tool === 'brush_land'
+                        ? '陸ブラシ'
+                        : step4Tool === 'brush_sea'
+                        ? '海ブラシ'
+                        : step4Tool === 'bucket'
+                        ? '塗りつぶし'
+                        : step4Tool === 'lasso'
+                        ? '線で囲む'
+                        : 'パン移動'}
+                    </span>
+                  </div>
+
+                  {(step4Tool === 'brush_land' || step4Tool === 'brush_sea') && (
+                    <div className="space-y-2">
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-stone-400">ブラシ半径</span>
+                        <span className="font-bold text-amber-400 font-mono">
+                          {step4BrushRadius} px
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        step={1}
+                        value={step4BrushRadius}
+                        onChange={(e) => setStep4BrushRadius(Number(e.target.value))}
+                        className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
+                      />
+                      <div className="flex gap-1.5 pt-1">
+                        {[5, 15, 30, 60, 100].map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            onClick={() => setStep4BrushRadius(r)}
+                            className={`flex-1 py-1 rounded text-[10px] font-mono transition cursor-pointer ${
+                              step4BrushRadius === r
+                                ? 'bg-amber-500 text-stone-950 font-bold'
+                                : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+                            }`}
+                          >
+                            {r}px
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {step4Tool === 'bucket' && (
+                    <div className="text-[11px] text-stone-400 leading-relaxed bg-stone-950/60 p-2.5 rounded-lg border border-stone-800/80">
+                      <p className="text-stone-300 font-semibold mb-1">塗りつぶし（バケツ）の使い方:</p>
+                      クリックした位置とつながっている同じ値（陸または海）の領域を反転して一括塗りつぶします。小さな湖や離島の除去に便利です。
+                    </div>
+                  )}
+
+                  {step4Tool === 'lasso' && (
+                    <div className="text-[11px] text-stone-400 leading-relaxed bg-stone-950/60 p-2.5 rounded-lg border border-stone-800/80">
+                      <p className="text-stone-300 font-semibold mb-1">線で囲むツールの使い方:</p>
+                      プレビュー上をクリックして多角形の頂点を配置します（3点以上）。上部の「陸にする」または「海にする」ボタンを押すと、囲まれた領域が一括塗り替えされます。
+                    </div>
+                  )}
+
+                  {step4Tool === 'pan' && (
+                    <div className="text-[11px] text-stone-400 leading-relaxed bg-stone-950/60 p-2.5 rounded-lg border border-stone-800/80">
+                      ドラッグで表示範囲を自由に移動できます。どのツール選択中でもスペースキーを押しながらドラッグすることでいつでもパン移動できます。
+                    </div>
+                  )}
+                </div>
+
+                {/* Mask Overlay Opacity Card */}
+                <div className="p-3.5 rounded-xl bg-stone-900/90 border border-stone-800 space-y-2.5">
+                  <div className="flex justify-between items-center text-xs font-bold text-amber-200">
+                    <span className="flex items-center gap-1.5">
+                      <Eye className="w-3.5 h-3.5 text-amber-400" />
+                      <span>マスク重ね合わせ不透明度</span>
+                    </span>
+                    <span className="font-mono text-amber-400">
+                      {Math.round(step4OverlayOpacity * 100)}%
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={step4OverlayOpacity}
+                    onChange={(e) => setStep4OverlayOpacity(Number(e.target.value))}
+                    className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-800 rounded-lg"
+                  />
+                  {/* Color Legend */}
+                  <div className="flex items-center justify-between text-[10px] text-stone-400 pt-1">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded bg-emerald-500 inline-block" />
+                      <span>陸 (標高47)</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded bg-blue-500 inline-block" />
+                      <span>海 (標高23)</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded bg-rose-500 inline-block" />
+                      <span>海岸線境界</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Correction Status & Stats */}
+                <div className="p-3.5 rounded-xl bg-stone-900/90 border border-stone-800 space-y-2">
+                  <div className="text-xs font-bold text-amber-200">補正状態と統計</div>
+                  <div className="space-y-1.5 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">操作履歴:</span>
+                      <span className="font-mono text-stone-200 font-semibold">
+                        {maskUndoStack.length} / 30 手
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">手動補正状態:</span>
+                      <span
+                        className={`font-semibold ${
+                          hasEditedStep4 ? 'text-amber-400' : 'text-stone-400'
+                        }`}
+                      >
+                        {hasEditedStep4 ? '手動補正あり' : '自動判定のまま'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">陸地比率:</span>
+                      <span className="font-mono text-emerald-400 font-bold">
+                        {step4LandRatio}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">解像度:</span>
+                      <span className="font-mono text-stone-300">
+                        {croppedResult.width} × {croppedResult.height}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Reset to Step 3 segmentation button */}
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmReset(true)}
+                  disabled={!hasEditedStep4}
+                  className="w-full py-2 px-3 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-400 hover:text-stone-200 border border-stone-800 text-[11px] font-medium flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <RotateCcw className="w-3.5 h-3.5 text-amber-500" />
+                  <span>元の判定結果に戻す</span>
+                </button>
+
+                {/* Bottom Actions */}
+                <div className="mt-auto space-y-2 pt-2">
+                  {/* Primary Apply Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmApply(true)}
+                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 hover:from-amber-500 hover:to-amber-500 text-stone-950 flex items-center justify-center gap-2 transition shadow-lg shadow-amber-950/60 cursor-pointer active:scale-98"
+                  >
+                    <Globe className="w-4 h-4 font-bold" />
+                    <span>世界マップに反映</span>
+                  </button>
+
+                  {/* Back to Step 3 */}
+                  <button
+                    type="button"
+                    onClick={() => setCurrentStep(3)}
+                    className="w-full py-2 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold border border-stone-700 flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    <span>判定ステップに戻る</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Modal: Confirm Apply to World Map */}
+        {showConfirmApply && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <div className="w-full max-w-md bg-stone-900 border border-amber-600/50 rounded-2xl p-6 shadow-2xl space-y-4 text-stone-200">
+              <div className="flex items-center gap-3 text-amber-400">
+                <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/30">
+                  <AlertTriangle className="w-6 h-6 text-amber-400" />
+                </div>
+                <h3 className="text-base font-bold text-amber-200">世界マップへの反映確認</h3>
+              </div>
+              <div className="space-y-2.5 text-xs text-stone-300 leading-relaxed bg-stone-950/60 p-3.5 rounded-xl border border-stone-800">
+                <p className="font-bold text-rose-400">
+                  ⚠️ 現在の世界マップ、地域マップ、シンボルは破棄されます。
+                </p>
+                <p className="text-stone-400">
+                  補正された陸海マスクを滑らかにぼかし（ガウス平滑化）、陸地は標高約 47、海洋は標高約 23 の平らな初期地形として世界マップを生成します。
+                </p>
+                <p className="text-stone-400">
+                  生成後は既存の標高ブラシやシンボル配置ツールで山脈や詳細な起伏を自由に作成できます。
+                </p>
+              </div>
+              <div className="flex justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmApply(false)}
+                  className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold border border-stone-700 transition cursor-pointer"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmApplyWorld}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-stone-950 text-xs font-bold shadow-lg shadow-amber-950/50 transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Globe className="w-4 h-4 font-bold" />
+                  <span>確定して反映する</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Confirm Reset to Initial Segmentation */}
+        {showConfirmReset && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <div className="w-full max-w-md bg-stone-900 border border-stone-700 rounded-2xl p-6 shadow-2xl space-y-4 text-stone-200">
+              <div className="flex items-center gap-3 text-stone-200">
+                <div className="p-2.5 rounded-xl bg-stone-800 border border-stone-700">
+                  <RotateCcw className="w-6 h-6 text-amber-400" />
+                </div>
+                <h3 className="text-base font-bold text-stone-100">元の判定結果に戻しますか？</h3>
+              </div>
+              <p className="text-xs text-stone-400 leading-relaxed bg-stone-950/60 p-3.5 rounded-xl border border-stone-800">
+                手動で補正した内容はすべて破棄され、自動判定ステップ完了直後の陸海マスクに戻ります。この操作は取り消せません。
+              </p>
+              <div className="flex justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmReset(false)}
+                  className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold border border-stone-700 transition cursor-pointer"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetToInitialStep3}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>元に戻す</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Confirm Re-segmentation Overwrite */}
+        {showConfirmReSegment && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <div className="w-full max-w-md bg-stone-900 border border-amber-600/50 rounded-2xl p-6 shadow-2xl space-y-4 text-stone-200">
+              <div className="flex items-center gap-3 text-amber-400">
+                <div className="p-2.5 rounded-xl bg-amber-500/20 border border-amber-500/30">
+                  <AlertTriangle className="w-6 h-6 text-amber-400" />
+                </div>
+                <h3 className="text-base font-bold text-amber-200">手動補正内容の上書き確認</h3>
+              </div>
+              <p className="text-xs text-stone-300 leading-relaxed bg-stone-950/60 p-3.5 rounded-xl border border-stone-800">
+                すでにステップ4で手動補正した内容があります。再判定を実行すると手動補正した内容は上書きされます。再判定を実行しますか？
+              </p>
+              <div className="flex justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmReSegment(false)}
+                  className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold border border-stone-700 transition cursor-pointer"
+                >
+                  キャンセル
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowConfirmReSegment(false);
+                    setHasEditedStep4(false);
+                    triggerSegmentation();
+                  }}
+                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-stone-950 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-4 h-4 font-bold" />
+                  <span>上書きして再判定を実行</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

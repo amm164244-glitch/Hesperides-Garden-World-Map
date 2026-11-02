@@ -2,6 +2,8 @@ import {
   segmentLandSea,
   SegmentationOptions,
   SegmentationResult,
+  SeedCounts,
+  InsufficientSeedsError,
 } from '../utils/imageTerrain/segmentLandSea';
 
 export interface SegmentationWorkerRequest {
@@ -17,7 +19,7 @@ export interface SegmentationWorkerRequest {
 export type SegmentationWorkerResponse =
   | { type: 'progress'; step: string; percent: number }
   | { type: 'complete'; result: SegmentationResult }
-  | { type: 'error'; error: string };
+  | { type: 'error'; error: string; seedCounts?: SeedCounts; seedMask?: Uint8Array };
 
 self.onmessage = (e: MessageEvent<SegmentationWorkerRequest>) => {
   const { type, imageData, options } = e.data;
@@ -32,20 +34,33 @@ self.onmessage = (e: MessageEvent<SegmentationWorkerRequest>) => {
         }
       );
 
+      const transferables: Transferable[] = [result.mask.buffer, result.boundaryMask.buffer];
+      if (result.seedMask) {
+        transferables.push(result.seedMask.buffer);
+      }
+
       // Return result to main thread
       (self.postMessage as (message: any, transfer: Transferable[]) => void)(
         {
           type: 'complete',
           result,
         },
-        // Transfer ArrayBuffers for high performance
-        [result.mask.buffer, result.boundaryMask.buffer]
+        transferables
       );
     } catch (err: any) {
-      self.postMessage({
-        type: 'error',
-        error: err?.message || '陸海判定処理中にエラーが発生しました',
-      });
+      if (err instanceof InsufficientSeedsError) {
+        self.postMessage({
+          type: 'error',
+          error: err.message,
+          seedCounts: err.seedCounts,
+          seedMask: err.seedMask,
+        });
+      } else {
+        self.postMessage({
+          type: 'error',
+          error: err?.message || '陸海判定処理中にエラーが発生しました',
+        });
+      }
     }
   }
 };
