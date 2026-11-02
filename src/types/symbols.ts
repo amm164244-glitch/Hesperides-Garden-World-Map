@@ -1,0 +1,180 @@
+/**
+ * Fantasy Cartography Symbol Types (Tolkien & Inkarnate Style)
+ */
+
+export type MapSymbolCategory =
+  | 'mountain'
+  | 'tree'
+  | 'village'     // 村 (Villages - 4 patterns)
+  | 'town'        // 街・都市 (Towns & Cities - 4 patterns)
+  | 'port'        // 港 (Ports & Harbors - 2 patterns)
+  | 'tower'       // 塔 (Towers & Spires - 3 patterns)
+  | 'dungeon'     // ダンジョン (Dungeons & Catacombs - 4 patterns)
+  | 'maritime'    // 海洋・船 (Maritime)
+  | 'settlement'  // Legacy compatibility
+  | 'landmark'
+  | 'custom';
+
+export type MapSymbolType =
+  // Mountains & Ridges
+  | 'mountain_snow'      // 峻厳な雪冠主峰
+  | 'mountain_rock'      // 鋭利な岩峰
+  | 'mountain_ridge'     // 連続する岩稜
+  | 'hill_mound'         // なだらかな丘陵群
+  | 'volcano'            // 火山・孤高の噴火口
+  // Trees & Forests
+  | 'tree_pine'          // 針葉樹（エゾマツ・スプルース）
+  | 'tree_pine_cluster'  // 密集した針葉樹林
+  | 'tree_oak'           // 広葉樹・樫
+  | 'tree_oak_cluster'   // 広葉樹樹海
+  | 'tree_dead'          // 荒野の枯木
+  // Villages (村 - 4 patterns)
+  | 'village_hamlet'     // 茅葺きの集落
+  | 'village_palisade'   // 丸太防塞の村
+  | 'village_farm'       // 風車と農村
+  | 'village_coastal'    // 水辺の漁村
+  // Towns & Cities (街 - 4 patterns)
+  | 'city_spires'        // 尖塔大聖堂都市 (Tolkien Capital)
+  | 'town_walled'        // 城郭市街・中世都市
+  | 'town_canal'         // 運河商業街
+  | 'city_hilltop'       // 丘上城塞都市
+  // Ports & Harbors (港 - 2 patterns)
+  | 'port_harbor'        // 交易港・波止場
+  | 'port_lighthouse'    // 灯台港・岬の灯台
+  // Towers & Spires (塔 - 3 patterns)
+  | 'tower_wizard'       // 孤高の魔術師の尖塔
+  | 'tower_beacon'       // 沿岸狼煙台・烽火塔
+  | 'tower_bastion'      // 防衛監視砦塔
+  // Dungeons & Catacombs (ダンジョン - 4 patterns)
+  | 'dungeon_cave'       // 龍の洞窟・魔窟
+  | 'dungeon_ruins'      // 古代巨石の崩落神殿
+  | 'dungeon_crypt'      // 地下迷宮・古代霊廟
+  | 'dungeon_portal'     // 異界の門・ストーンポータル
+  // Maritime & Mythological
+  | 'sea_serpent'        // 海竜・リヴァイアサン
+  | 'sailing_ship'       // 3本マスト帆船
+  // Legacy aliases
+  | 'castle_keep'
+  | 'walled_city'
+  | 'town'
+  | 'watchtower'
+  | 'village'
+  | 'ruins'
+  // Custom user-created asset
+  | 'custom';
+
+export interface CustomSymbolCategory {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  createdAt: number;
+}
+
+export const DEFAULT_CUSTOM_CATEGORIES: CustomSymbolCategory[] = [
+  { id: 'cat_village', name: '村・集落', icon: '🛖', color: '#10b981', createdAt: 1 },
+  { id: 'cat_town', name: '街・城塞', icon: '🏰', color: '#3b82f6', createdAt: 2 },
+  { id: 'cat_dungeon', name: 'ダンジョン・遺跡', icon: '💀', color: '#8b5cf6', createdAt: 3 },
+  { id: 'cat_nature', name: '自然・地形', icon: '🌲', color: '#84cc16', createdAt: 4 },
+  { id: 'cat_quest', name: 'クエスト・拠点', icon: '⚔️', color: '#f59e0b', createdAt: 5 },
+];
+
+export interface CustomMapAsset {
+  id: string;
+  name: string;
+  category: string;
+  dataUrl: string;       // Base64 transparent PNG
+  width: number;
+  height: number;
+  originX: number;       // Center horizontal (e.g. 0.5)
+  originY: number;       // Base vertical anchor (e.g. 0.85 - 0.95)
+  createdAt: number;
+  isPixelArt?: boolean;
+  gridSize?: number;     // 16, 24, 32, 48
+  gridData?: string[][]; // Raw 2D array of color strings ('' for transparent)
+}
+
+export interface SymbolColorTheme {
+  name: string;
+  ink: string;           // Outlines and shadow hatch lines (e.g. #1f1913)
+  fill: string;          // Base parchment / stone fill (e.g. #faf6ed)
+  roof: string;          // Building roofs, banners, flags (e.g. #8f382a)
+  foliage: string;       // Tree canopies (e.g. #2a4c38)
+  accent: string;        // Gold/magic accents & lanterns (e.g. #c99e38)
+}
+
+export const DEFAULT_SYMBOL_COLOR_THEME: SymbolColorTheme = {
+  name: '古典セピア調',
+  ink: '#1f1913',
+  fill: '#faf6ed',
+  roof: '#8f382a',
+  foliage: '#2a4c38',
+  accent: '#c99e38',
+};
+
+export const SYMBOL_COLOR_PRESETS: Record<string, SymbolColorTheme> = {
+  classic: {
+    name: '古典セピア調',
+    ink: '#1f1913',
+    fill: '#faf6ed',
+    roof: '#8f382a',
+    foliage: '#2a4c38',
+    accent: '#c99e38',
+  },
+  tolkien: {
+    name: 'トールキン原画（純黒ペン画）',
+    ink: '#11100f',
+    fill: '#ffffff',
+    roof: '#222222',
+    foliage: '#1c2820',
+    accent: '#666666',
+  },
+  royal: {
+    name: '王都ロイヤル（紺碧＆深紅）',
+    ink: '#181e28',
+    fill: '#f8f9fa',
+    roof: '#284664',
+    foliage: '#1b3d2f',
+    accent: '#d4af37',
+  },
+  autumn: {
+    name: '黄昏・秋枯れ（琥珀＆煉瓦）',
+    ink: '#2a1a12',
+    fill: '#fcf6e8',
+    roof: '#a04828',
+    foliage: '#965b26',
+    accent: '#d97706',
+  },
+  mystic: {
+    name: '魔導・幽玄（薄紫＆蒼光）',
+    ink: '#1a1824',
+    fill: '#f5f3ff',
+    roof: '#582c5f',
+    foliage: '#1e3a34',
+    accent: '#38bdf8',
+  },
+};
+
+export interface MapSymbolInstance {
+  id: string;
+  type: MapSymbolType;
+  customAssetId?: string; // If type === 'custom'
+  x: number;              // World coordinates (0 .. MAP_WIDTH)
+  y: number;              // World coordinates (0 .. MAP_HEIGHT)
+  scale: number;          // 0.6 .. 2.0 (default 1.0)
+  rotation?: number;      // Radians (-0.15 .. +0.15 for organic tilt)
+  flipX?: boolean;        // Mirror horizontally for visual variety
+  variant?: number;       // 0, 1, 2 for subtle ridge/branch variations
+  colorOverride?: Partial<SymbolColorTheme>; // Optional individual tint override
+}
+
+export interface SymbolToolSettings {
+  selectedType: MapSymbolType;
+  selectedCustomAssetId?: string | null;
+  category: string;       // Custom category ID or category name
+  scale: number;          // 0.6 .. 2.0
+  density: number;        // For scatter brush (1 .. 10)
+  scatterRadius: number;  // 20 .. 150
+  randomScaleVar: number; // 0.1 .. 0.4
+  colorTheme?: SymbolColorTheme; // Active color theme
+}

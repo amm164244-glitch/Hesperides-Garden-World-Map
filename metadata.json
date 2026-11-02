@@ -1,0 +1,6 @@
+{
+  "name": "Fantasy World Map Creator",
+  "description": "架空世界（中世ファンタジー風）の地形生成・編集マップエディタ。ボロノイ分割セルによる標高・大陸生成と各種ブラシ編集対応。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
