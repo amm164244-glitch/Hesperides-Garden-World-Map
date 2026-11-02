@@ -33,7 +33,7 @@ self.onmessage = (e: MessageEvent<SegmentationWorkerRequest>) => {
       );
 
       // Return result to main thread
-      self.postMessage(
+      (self.postMessage as (message: any, transfer: Transferable[]) => void)(
         {
           type: 'complete',
           result,
