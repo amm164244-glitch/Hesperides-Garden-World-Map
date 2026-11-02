@@ -1,4 +1,5 @@
 import { MapData, RegionalMapData } from '../types/map';
+import { biomeGridToBase64, base64ToBiomeGrid } from './biomePainter';
 
 /**
  * Base64 encoding/decoding for Float32Array to keep JSON exports compact (<10MB)
@@ -63,8 +64,10 @@ export function serializeMapData(mapData: MapData): any {
         symbols: reg.symbols || [],
         elevationGridBase64: float32ToBase64(reg.elevationGrid),
         temperatureGridBase64: float32ToBase64(reg.temperatureGrid),
+        biomeGridBase64: reg.biomeGrid ? biomeGridToBase64(reg.biomeGrid) : undefined,
         elevationGrid: undefined,
         temperatureGrid: undefined,
+        biomeGrid: undefined,
       };
     }
   }
@@ -74,8 +77,10 @@ export function serializeMapData(mapData: MapData): any {
     symbols: mapData.symbols || [],
     elevationGridBase64: float32ToBase64(mapData.elevationGrid),
     temperatureGridBase64: float32ToBase64(mapData.temperatureGrid),
+    biomeGridBase64: mapData.biomeGrid ? biomeGridToBase64(mapData.biomeGrid) : undefined,
     elevationGrid: undefined,
     temperatureGrid: undefined,
+    biomeGrid: undefined,
     regionalMaps: regionalMapsSerialized,
   };
 }
@@ -115,6 +120,10 @@ export function deserializeMapData(raw: any): MapData {
         ? base64ToFloat32(regRaw.temperatureGridBase64)
         : ensureFloat32Array(regRaw.temperatureGrid, regTotal);
 
+      const regBiome = regRaw.biomeGridBase64
+        ? base64ToBiomeGrid(regRaw.biomeGridBase64, regTotal)
+        : (regRaw.biomeGrid instanceof Uint8Array ? regRaw.biomeGrid : undefined);
+
       const parentId = regRaw.parentId !== undefined ? regRaw.parentId : null;
       const seed = regRaw.seed !== undefined
         ? regRaw.seed
@@ -143,9 +152,15 @@ export function deserializeMapData(raw: any): MapData {
         seed,
         widthKm,
         symbols: Array.isArray(regRaw.symbols) ? regRaw.symbols : [],
+        biomeGrid: regBiome,
+        outline: Array.isArray(regRaw.outline) ? regRaw.outline : undefined,
       };
     }
   }
+
+  const biomeGrid = raw.biomeGridBase64
+    ? base64ToBiomeGrid(raw.biomeGridBase64, expectedTotal)
+    : (raw.biomeGrid instanceof Uint8Array ? raw.biomeGrid : undefined);
 
   return {
     ...raw,
@@ -153,6 +168,7 @@ export function deserializeMapData(raw: any): MapData {
     gridRows,
     elevationGrid,
     temperatureGrid,
+    biomeGrid,
     symbols: Array.isArray(raw.symbols) ? raw.symbols : [],
     regionalMaps,
     cells: Array.isArray(raw.cells) ? raw.cells : [],

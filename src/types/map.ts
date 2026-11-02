@@ -57,6 +57,13 @@ export interface RegionalMapData {
   widthKm: number;         // このマップ全体の実距離。親のwidthKm × (bounds幅 ÷ 親のwidth)
   symbols?: import('./symbols').MapSymbolInstance[];
   biomeGrid?: Uint8Array;
+  outline?: [number, number][]; // 親マップ座標系での境界多角形頂点列
+}
+
+export interface ShapeMaskConfig {
+  polygon: [number, number][];
+  outsideSea: boolean;
+  featherRatio: number;
 }
 
 export interface ParentMapSource {

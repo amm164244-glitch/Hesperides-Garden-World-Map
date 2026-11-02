@@ -20,6 +20,9 @@ import {
   Square,
   Sparkles,
   MapPin,
+  Paintbrush,
+  PaintBucket,
+  Eraser,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
 
@@ -121,6 +124,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     { id: 'mountain', label: '山脈描画', icon: <Mountain className="w-4 h-4" />, desc: 'ドラッグした軌跡に沿って鋭い連峰を作る' },
     { id: 'makeLand', label: '陸地化', icon: <Trees className="w-4 h-4" />, desc: '海面上の陸地へ一気に持ち上げる' },
     { id: 'makeSea', label: '海洋化', icon: <Waves className="w-4 h-4" />, desc: '海面下の海・水域へ沈める' },
+    { id: 'biomePaint', label: '地形タイプ塗り', icon: <Paintbrush className="w-4 h-4" />, desc: '地形タイプ（森林・草原・砂漠など）をブラシで塗る' },
+    { id: 'biomeFill', label: '地形タイプ塗りつぶし', icon: <PaintBucket className="w-4 h-4" />, desc: '同種の地形タイプ領域を一括塗りつぶし' },
+    { id: 'biomeErase', label: '地形タイプ消去', icon: <Eraser className="w-4 h-4" />, desc: '地形タイプの塗りを消去して透明に戻す' },
     { id: 'selectRegion', label: '地域範囲選択', icon: <Layers className="w-4 h-4" />, desc: '範囲をドラッグ選択して4倍/16倍の地域マップを生成' },
   ];
 
@@ -424,7 +430,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       {/* Brush tools grid */}
       <div>
         <div className="text-[11px] font-semibold text-stone-400 mb-1 px-1">地形編集ブラシ</div>
-        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
+        <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-12 gap-1.5">
           {tools.map((t) => {
             const isActive = brushSettings.mode === t.id;
             return (

@@ -9,6 +9,7 @@ import {
   MapData,
   RegionalBounds,
   RegionalMapData,
+  ShapeMaskConfig,
   ViewMode,
   Viewport,
 } from './types/map';
@@ -30,6 +31,7 @@ import { InspectorBar } from './components/InspectorBar';
 import { SupabaseModal } from './components/SupabaseModal';
 import { RegionSelector } from './components/RegionSelector';
 import { SymbolPalette } from './components/SymbolPalette';
+import { BiomePalette } from './components/BiomePalette';
 import { PixelArtStudioModal } from './components/PixelArtStudioModal';
 import { ImageToPixelModal } from './components/ImageToPixelModal';
 import { ImageToTerrainModal, CroppedTerrainResult } from './components/ImageToTerrainModal';
@@ -158,7 +160,11 @@ export default function App() {
   );
 
   // Pending Region Selection Bounds for modal prompt
-  const [pendingRegionBounds, setPendingRegionBounds] = useState<RegionalBounds | null>(null);
+  const [pendingRegionInfo, setPendingRegionInfo] = useState<{
+    bounds: RegionalBounds;
+    adjusted: boolean;
+    shapePolygon?: [number, number][];
+  } | null>(null);
 
   // Spatial index for fast queries
   const spatialIndex = useMemo(() => new SpatialIndex(mapData.cells), [mapData.cells]);
@@ -193,6 +199,15 @@ export default function App() {
   const [showSymbols, setShowSymbols] = useState<boolean>(true);
   const [isSymbolPaletteOpen, setIsSymbolPaletteOpen] = useState<boolean>(false);
   const [selectedSymbolId, setSelectedSymbolId] = useState<string | null>(null);
+
+  // Biome settings (terrain types: forest, grassland, desert, etc.)
+  const [biomeSettings, setBiomeSettings] = useState({
+    selectedBiomeId: 1, // 針葉樹林
+    softness: 40,
+    landOnly: true,
+    showBiome: true,
+    opacity: 55,
+  });
 
   // Custom Categories (Persisted in localStorage)
   const [categories, setCategories] = useState<CustomSymbolCategory[]>(() => {
@@ -473,7 +488,7 @@ export default function App() {
         if (data.type === 'progress') {
           setGenerationProgress({ progress: data.progress, message: data.message });
         } else if (data.type === 'success') {
-          setMapData({ ...data.mapData, symbols: [] });
+          setMapData({ ...data.mapData, symbols: [], biomeGrid: undefined });
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -488,6 +503,7 @@ export default function App() {
               [newRegion.id]: {
                 ...newRegion,
                 symbols: newRegion.symbols || [],
+                biomeGrid: undefined,
               },
             },
           }));
@@ -534,7 +550,7 @@ export default function App() {
       setTimeout(() => {
         try {
           const nextMap = generateTectonicWorld(width, height, config);
-          setMapData({ ...nextMap, symbols: [] });
+          setMapData({ ...nextMap, symbols: [], biomeGrid: undefined });
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -566,7 +582,7 @@ export default function App() {
       setTimeout(() => {
         try {
           const blankMap = generateBlankOceanWorld(width, height, config);
-          setMapData({ ...blankMap, symbols: [] });
+          setMapData({ ...blankMap, symbols: [], biomeGrid: undefined });
           setSelectedSymbolId(null);
           setActiveRegionId(null);
           setUndoStack([]);
@@ -582,7 +598,7 @@ export default function App() {
 
   // Apply world map directly from ImageToTerrainModal manual mask correction
   const handleApplyWorldMapFromImage = useCallback((newMapData: MapData) => {
-    setMapData(newMapData);
+    setMapData({ ...newMapData, biomeGrid: undefined });
     setConfig(newMapData.config);
     setActiveRegionId(null);
     setSelectedSymbolId(null);
@@ -598,8 +614,8 @@ export default function App() {
 
   // Create Regional Map from selection
   const handleCreateRegionalMap = useCallback(
-    (bounds: RegionalBounds, zoomScale: 4 | 16, name: string) => {
-      setPendingRegionBounds(null);
+    (bounds: RegionalBounds, zoomScale: 4 | 16, name: string, shapeMask?: ShapeMaskConfig) => {
+      setPendingRegionInfo(null);
       setIsGenerating(true);
       setGenerationProgress({ progress: 10, message: '地域マップを4x/16x解像度で合成中...' });
 
@@ -616,11 +632,12 @@ export default function App() {
           bounds,
           zoomScale,
           name,
+          shapeMask,
         });
       } else {
         setTimeout(() => {
           try {
-            const newRegion = generateRegionalMap(parentMapInput, bounds, zoomScale, name);
+            const newRegion = generateRegionalMap(parentMapInput, bounds, zoomScale, name, shapeMask);
             setMapData((prev) => ({
               ...prev,
               regionalMaps: {
@@ -675,6 +692,17 @@ export default function App() {
       }
     }
 
+    if (lastRecord.biomeChanges) {
+      const currentBiome = activeRegionalMap
+        ? activeRegionalMap.biomeGrid
+        : mapData.biomeGrid;
+      if (currentBiome) {
+        for (const ch of lastRecord.biomeChanges) {
+          currentBiome[ch.gridIndex] = ch.prev;
+        }
+      }
+    }
+
     if (lastRecord.symbolChanges) {
       handleUpdateSymbols(lastRecord.symbolChanges.prevSymbols);
       setSelectedSymbolId(null);
@@ -702,6 +730,17 @@ export default function App() {
       }
     }
 
+    if (nextRecord.biomeChanges) {
+      const currentBiome = activeRegionalMap
+        ? activeRegionalMap.biomeGrid
+        : mapData.biomeGrid;
+      if (currentBiome) {
+        for (const ch of nextRecord.biomeChanges) {
+          currentBiome[ch.gridIndex] = ch.next;
+        }
+      }
+    }
+
     if (nextRecord.symbolChanges) {
       handleUpdateSymbols(nextRecord.symbolChanges.newSymbols);
       setSelectedSymbolId(null);
@@ -711,6 +750,31 @@ export default function App() {
     setUndoStack((prev) => [...prev, nextRecord]);
     setMapData((prev) => ({ ...prev }));
   }, [redoStack, activeRegionalMap, mapData, handleUpdateSymbols]);
+
+  // Clear all biome grid data
+  const handleClearBiomeGrid = useCallback(() => {
+    const targetBiome = activeRegionalMap
+      ? activeRegionalMap.biomeGrid
+      : mapData.biomeGrid;
+    if (!targetBiome) return;
+
+    const changes: { gridIndex: number; prev: number; next: number }[] = [];
+    for (let i = 0; i < targetBiome.length; i++) {
+      if (targetBiome[i] !== 0) {
+        changes.push({ gridIndex: i, prev: targetBiome[i], next: 0 });
+        targetBiome[i] = 0;
+      }
+    }
+
+    if (changes.length > 0) {
+      handleCommitHistory({
+        description: '地形タイプの全消去',
+        timestamp: Date.now(),
+        biomeChanges: changes,
+      });
+      setMapData((prev) => ({ ...prev }));
+    }
+  }, [activeRegionalMap, mapData, handleCommitHistory]);
 
   // Clear all symbols
   const handleClearSymbols = useCallback(() => {
@@ -895,9 +959,12 @@ export default function App() {
           onUpdateSymbols={handleUpdateSymbols}
           selectedSymbolId={selectedSymbolId}
           onSelectSymbolId={setSelectedSymbolId}
+          biomeSettings={biomeSettings}
           onCommitHistory={handleCommitHistory}
           onHoverCell={setHoveredCell}
-          onSelectRegionBounds={(bounds) => setPendingRegionBounds(bounds)}
+          onSelectRegionBounds={(bounds, adjusted = false, shapePolygon) =>
+            setPendingRegionInfo({ bounds, adjusted, shapePolygon })
+          }
           mapBackgroundUrl={mapBackgroundUrl}
           onClearMapBackground={() => setMapBackgroundUrl(null)}
           maxZoom={maxZoom}
@@ -958,6 +1025,52 @@ export default function App() {
             onToggleAutoRegionSwitch={() => setAutoRegionSwitch((v) => !v)}
           />
         </div>
+
+        {/* Biome Palette Panel (Top Right - shown when biome tool is active) */}
+        {(brushSettings.mode === 'biomePaint' ||
+          brushSettings.mode === 'biomeFill' ||
+          brushSettings.mode === 'biomeErase') && (
+          <div
+            className={`absolute top-4 ${
+              isGeneratorOpen && !activeRegionalMap ? 'right-96' : 'right-4'
+            } z-30`}
+          >
+            <BiomePalette
+              brushMode={brushSettings.mode}
+              onChangeBrushMode={(mode) =>
+                setBrushSettings((prev) => ({ ...prev, mode }))
+              }
+              selectedBiomeId={biomeSettings.selectedBiomeId}
+              onSelectBiomeId={(id) =>
+                setBiomeSettings((prev) => ({ ...prev, selectedBiomeId: id }))
+              }
+              softness={biomeSettings.softness}
+              onChangeSoftness={(softness) =>
+                setBiomeSettings((prev) => ({ ...prev, softness }))
+              }
+              brushRadius={brushSettings.radius}
+              onChangeRadius={(radius) =>
+                setBrushSettings((prev) => ({ ...prev, radius }))
+              }
+              landOnly={biomeSettings.landOnly}
+              onToggleLandOnly={(landOnly) =>
+                setBiomeSettings((prev) => ({ ...prev, landOnly }))
+              }
+              showBiome={biomeSettings.showBiome}
+              onToggleShowBiome={(show) =>
+                setBiomeSettings((prev) => ({ ...prev, showBiome: show }))
+              }
+              opacity={biomeSettings.opacity}
+              onChangeOpacity={(opacity) =>
+                setBiomeSettings((prev) => ({ ...prev, opacity }))
+              }
+              onClearBiomeGrid={handleClearBiomeGrid}
+              onClose={() =>
+                setBrushSettings((prev) => ({ ...prev, mode: 'pan' }))
+              }
+            />
+          </div>
+        )}
 
         {/* Symbol Palette Panel (Top Right) */}
         {isSymbolPaletteOpen && (
@@ -1043,13 +1156,15 @@ export default function App() {
         />
 
         {/* Region Selector Modal */}
-        {pendingRegionBounds && (
+        {pendingRegionInfo && (
           <RegionSelector
-            bounds={pendingRegionBounds}
+            bounds={pendingRegionInfo.bounds}
+            wasAdjusted={pendingRegionInfo.adjusted}
+            shapePolygon={pendingRegionInfo.shapePolygon}
             worldWidthKm={activeRegionalMap ? activeRegionalMap.widthKm : (mapData.worldWidthKm || 40000)}
             mapWidth={activeRegionalMap ? activeRegionalMap.width : mapData.width}
             onGenerate={handleCreateRegionalMap}
-            onCancel={() => setPendingRegionBounds(null)}
+            onCancel={() => setPendingRegionInfo(null)}
           />
         )}
       </div>

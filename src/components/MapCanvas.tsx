@@ -20,7 +20,17 @@ import {
 import { drawSortedSymbols } from '../utils/symbolRenderer';
 import { scatterSymbolsUnderBrush } from '../utils/symbolGenerator';
 import { MapSymbolInstance, SymbolToolSettings, CustomMapAsset } from '../types/symbols';
+import { BIOME_BY_ID } from '../types/biome';
+import { paintBiomeCircle, floodFillBiome, BiomeBoundingBox } from '../utils/biomePainter';
+import { fitBoundsToLimits } from '../utils/regionLayout';
 import { ScaleBar } from './ScaleBar';
+import { RegionShapeTools, RegionSelectMethod } from './RegionShapeTools';
+import {
+  polygonBounds,
+  pointInPolygon,
+  simplifyPolyline,
+  smoothPolygon,
+} from '../utils/regionShape';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -44,9 +54,21 @@ interface MapCanvasProps {
   onUpdateSymbols?: (symbols: MapSymbolInstance[]) => void;
   selectedSymbolId?: string | null;
   onSelectSymbolId?: (id: string | null) => void;
+  biomeSettings?: {
+    selectedBiomeId: number;
+    softness: number;
+    landOnly: boolean;
+    showBiome: boolean;
+    opacity: number;
+  };
   onCommitHistory: (record: HistoryRecord) => void;
   onHoverCell: (cell: MapCell | null) => void;
-  onSelectRegionBounds?: (bounds: RegionalBounds) => void;
+  onSelectRegionBounds?: (
+    bounds: RegionalBounds,
+    adjusted?: boolean,
+    shapePolygon?: [number, number][]
+  ) => void;
+  onSelectRegionMap?: (regionId: string) => void;
   mapBackgroundUrl?: string | null;
   onClearMapBackground?: () => void;
   maxZoom?: number;
@@ -75,9 +97,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onUpdateSymbols,
   selectedSymbolId = null,
   onSelectSymbolId,
+  biomeSettings,
   onCommitHistory,
   onHoverCell,
   onSelectRegionBounds,
+  onSelectRegionMap,
   mapBackgroundUrl,
   onClearMapBackground,
   maxZoom,
@@ -90,6 +114,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const rendererRef = useRef<WebGLMapRenderer | null>(null);
   const bgImageRef = useRef<HTMLImageElement | null>(null);
 
+  // Biome offscreen canvas and active stroke refs
+  const biomeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const biomeCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+  const biomeImageDataRef = useRef<ImageData | null>(null);
+  const lastBiomeColsRowsRef = useRef<{ cols: number; rows: number }>({ cols: 0, rows: 0 });
+  const activeBiomeStrokeRef = useRef<Map<number, { prev: number; next: number }>>(new Map());
+
   // High performance RAF coalescing refs
   const panRafRef = useRef<number | null>(null);
   const pendingPanDeltaRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
@@ -100,13 +131,27 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
   const cursorPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Region selection rectangle drag
+  // Region selection rectangle drag & aspect ratio setting
   const [selectionBox, setSelectionBox] = useState<{
     startX: number;
     startY: number;
     currentX: number;
     currentY: number;
   } | null>(null);
+  const [regionAspect, setRegionAspect] = useState<'free' | '2:1' | '1:1' | 'current'>('free');
+
+  // Region shape selection tools & state
+  const [selectMethod, setSelectMethod] = useState<RegionSelectMethod>('rect');
+  const [smoothShape, setSmoothShape] = useState<boolean>(true);
+  const [marginPercent, setMarginPercent] = useState<number>(8);
+  const [polygonPoints, setPolygonPoints] = useState<[number, number][]>([]);
+  const [rect2Start, setRect2Start] = useState<{ x: number; y: number } | null>(null);
+  const [confirmedShape, setConfirmedShape] = useState<{
+    polygon: [number, number][];
+    bounds: RegionalBounds;
+  } | null>(null);
+  const freehandPointsRef = useRef<[number, number][]>([]);
+  const [freehandPoints, setFreehandPoints] = useState<[number, number][]>([]);
 
   // Active map properties (Regional vs World)
   const isRegion = activeRegionalMap !== null;
@@ -117,6 +162,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const currentElevation = isRegion ? activeRegionalMap.elevationGrid : mapData.elevationGrid;
   const currentTemperature = isRegion ? activeRegionalMap.temperatureGrid : mapData.temperatureGrid;
   const currentSeaLevel = isRegion ? activeRegionalMap.seaLevel : mapData.seaLevel;
+  const currentBiomeGrid = isRegion ? activeRegionalMap?.biomeGrid : mapData.biomeGrid;
 
   // Real-world map width in km (handles World map, and recursive Regional/Town maps)
   const effectiveWidthKm = useMemo(() => {
@@ -160,6 +206,53 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastWorldPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const activeStrokeChangesRef = useRef<Map<number, { prev: number; curr: number }>>(new Map());
+
+  // Reset in-progress region selection when mode switches away from selectRegion
+  useEffect(() => {
+    if (brushSettings.mode !== 'selectRegion') {
+      setConfirmedShape(null);
+      setPolygonPoints([]);
+      setFreehandPoints([]);
+      freehandPointsRef.current = [];
+      setRect2Start(null);
+      setSelectionBox(null);
+    }
+  }, [brushSettings.mode]);
+
+  // Commits a shape (polygon / freehand) selection, calculates bounds with margin, and fits to limits
+  const commitShapeSelection = useCallback(
+    (rawPolygon: [number, number][]) => {
+      if (rawPolygon.length < 3) return;
+      const poly = smoothShape ? smoothPolygon(rawPolygon, 4) : [...rawPolygon];
+      const rawB = polygonBounds(poly);
+      const w = rawB.maxX - rawB.minX;
+      const h = rawB.maxY - rawB.minY;
+      const marginRatio = marginPercent / 100;
+      const mw = w * marginRatio;
+      const mh = h * marginRatio;
+
+      const expandedBounds: RegionalBounds = {
+        minX: rawB.minX - mw,
+        minY: rawB.minY - mh,
+        maxX: rawB.maxX + mw,
+        maxY: rawB.maxY + mh,
+      };
+
+      const fitResult = fitBoundsToLimits(expandedBounds, currentWidth, currentHeight);
+      setConfirmedShape({
+        polygon: poly,
+        bounds: fitResult.bounds,
+      });
+      setPolygonPoints([]);
+      setFreehandPoints([]);
+      freehandPointsRef.current = [];
+      setSelectionBox(null);
+      setRect2Start(null);
+
+      onSelectRegionBounds?.(fitResult.bounds, fitResult.adjusted, poly);
+    },
+    [smoothShape, marginPercent, currentWidth, currentHeight, onSelectRegionBounds]
+  );
 
   // Initialize WebGL Renderer
   useEffect(() => {
@@ -250,6 +343,104 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     showRipples,
   ]);
 
+  // Rebuild offscreen canvas for biome data
+  const rebuildBiomeCanvas = useCallback(
+    (grid: Uint8Array | undefined, cols: number, rows: number) => {
+      let canvas = biomeCanvasRef.current;
+      if (
+        !canvas ||
+        lastBiomeColsRowsRef.current.cols !== cols ||
+        lastBiomeColsRowsRef.current.rows !== rows
+      ) {
+        canvas = document.createElement('canvas');
+        canvas.width = cols;
+        canvas.height = rows;
+        biomeCanvasRef.current = canvas;
+        biomeCtxRef.current = canvas.getContext('2d');
+        lastBiomeColsRowsRef.current = { cols, rows };
+      }
+      const ctx = biomeCtxRef.current;
+      if (!ctx) return;
+      const imgData = ctx.createImageData(cols, rows);
+      const data = imgData.data;
+
+      if (grid && grid.length === cols * rows) {
+        for (let i = 0; i < grid.length; i++) {
+          const bId = grid[i];
+          if (bId !== 0) {
+            const b = BIOME_BY_ID[bId];
+            if (b) {
+              const px = i * 4;
+              data[px] = b.rgba[0];
+              data[px + 1] = b.rgba[1];
+              data[px + 2] = b.rgba[2];
+              data[px + 3] = b.rgba[3];
+            }
+          }
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+      biomeImageDataRef.current = imgData;
+    },
+    []
+  );
+
+  // Update dirty subregion of offscreen biome canvas for zero-latency brush strokes
+  const updateBiomeSubRegion = useCallback(
+    (
+      changes: { gridIndex: number; next: number }[],
+      bounds: BiomeBoundingBox | null
+    ) => {
+      const ctx = biomeCtxRef.current;
+      const imgData = biomeImageDataRef.current;
+      if (!ctx || !imgData) return;
+
+      const data = imgData.data;
+      for (const ch of changes) {
+        const px = ch.gridIndex * 4;
+        const bId = ch.next;
+        if (bId !== 0) {
+          const b = BIOME_BY_ID[bId];
+          if (b) {
+            data[px] = b.rgba[0];
+            data[px + 1] = b.rgba[1];
+            data[px + 2] = b.rgba[2];
+            data[px + 3] = b.rgba[3];
+          }
+        } else {
+          data[px] = 0;
+          data[px + 1] = 0;
+          data[px + 2] = 0;
+          data[px + 3] = 0;
+        }
+      }
+
+      if (bounds) {
+        const w = bounds.maxC - bounds.minC + 1;
+        const h = bounds.maxR - bounds.minR + 1;
+        ctx.putImageData(imgData, 0, 0, bounds.minC, bounds.minR, w, h);
+      } else {
+        ctx.putImageData(imgData, 0, 0);
+      }
+    },
+    []
+  );
+
+  // Get or lazily initialize the biome grid on first paint
+  const getOrCreateBiomeGrid = useCallback((): Uint8Array => {
+    let grid = isRegion ? activeRegionalMap?.biomeGrid : mapData.biomeGrid;
+    if (!grid) {
+      grid = new Uint8Array(currentCols * currentRows);
+      if (isRegion && activeRegionalMap) {
+        activeRegionalMap.biomeGrid = grid;
+      } else {
+        mapData.biomeGrid = grid;
+      }
+      rebuildBiomeCanvas(grid, currentCols, currentRows);
+    }
+    return grid;
+  }, [isRegion, activeRegionalMap, mapData, currentCols, currentRows, rebuildBiomeCanvas]);
+
   // 2. Render 2D Vector Overlay (cartography ornaments, compass, border, brush cursor)
   const renderOverlay = useCallback(() => {
     const overlayCanvas = overlayCanvasRef.current;
@@ -275,6 +466,22 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.restore();
     }
 
+    // 0.5. Semi-transparent Biome Grid Overlay
+    const isBiomeToolActive =
+      brushSettings.mode === 'biomePaint' ||
+      brushSettings.mode === 'biomeFill' ||
+      brushSettings.mode === 'biomeErase';
+    const showBiomeOverlay =
+      ((biomeSettings?.showBiome ?? true) || isBiomeToolActive) && !!currentBiomeGrid;
+
+    if (showBiomeOverlay && biomeCanvasRef.current) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.globalAlpha = (biomeSettings?.opacity ?? 55) / 100;
+      ctx.drawImage(biomeCanvasRef.current, 0, 0, currentWidth, currentHeight);
+      ctx.restore();
+    }
+
     // 1. Nautical Navigation Rhumb Lines (Loxodromes)
     if (showCompass) {
       drawRhumbLines(
@@ -287,7 +494,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       );
     }
 
-    // 2. Region Selection Box (if selecting)
+    // 2. Region Selection Visuals: Selection Box / Polygon / Freehand / Confirmed Shape
     if (selectionBox) {
       const minX = Math.min(selectionBox.startX, selectionBox.currentX);
       const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
@@ -304,6 +511,107 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.restore();
     }
 
+    // In-progress Polygon vertices and rubber-band line
+    if (polygonPoints.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2.0 / viewport.zoom;
+      ctx.beginPath();
+      ctx.moveTo(polygonPoints[0][0], polygonPoints[0][1]);
+      for (let i = 1; i < polygonPoints.length; i++) {
+        ctx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
+      }
+      const curPos = cursorPosRef.current;
+      if (curPos) {
+        ctx.lineTo(curPos.x, curPos.y);
+      }
+      ctx.stroke();
+
+      // Vertex handles
+      for (let i = 0; i < polygonPoints.length; i++) {
+        const [vx, vy] = polygonPoints[i];
+        ctx.beginPath();
+        ctx.arc(vx, vy, (i === 0 ? 5.5 : 3.5) / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = i === 0 ? '#fbbf24' : '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#1c1917';
+        ctx.lineWidth = 1.0 / viewport.zoom;
+        ctx.stroke();
+      }
+
+      // Snapping circle when hovering near start vertex to close
+      if (curPos && polygonPoints.length >= 3) {
+        const distToP0 = Math.hypot(curPos.x - polygonPoints[0][0], curPos.y - polygonPoints[0][1]);
+        if (distToP0 <= 18 / viewport.zoom) {
+          ctx.beginPath();
+          ctx.arc(polygonPoints[0][0], polygonPoints[0][1], 10 / viewport.zoom, 0, Math.PI * 2);
+          ctx.strokeStyle = '#34d399';
+          ctx.lineWidth = 2.0 / viewport.zoom;
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    // In-progress Freehand line
+    if (freehandPoints.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2.2 / viewport.zoom;
+      ctx.beginPath();
+      ctx.moveTo(freehandPoints[0][0], freehandPoints[0][1]);
+      for (let i = 1; i < freehandPoints.length; i++) {
+        ctx.lineTo(freehandPoints[i][0], freehandPoints[i][1]);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Confirmed Shape: Dim area outside the shape, draw dashed bounding box & solid outline
+    if (confirmedShape) {
+      ctx.save();
+      const b = confirmedShape.bounds;
+      const poly = confirmedShape.polygon;
+
+      // Dim region outside shape (even-odd clipping on outer box)
+      ctx.fillStyle = 'rgba(10, 15, 25, 0.55)';
+      ctx.beginPath();
+      ctx.rect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+      if (poly.length >= 3) {
+        ctx.moveTo(poly[0][0], poly[0][1]);
+        for (let i = 1; i < poly.length; i++) {
+          ctx.lineTo(poly[i][0], poly[i][1]);
+        }
+        ctx.closePath();
+      }
+      ctx.fill('evenodd');
+
+      // Dashed bounding box
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.6 / viewport.zoom;
+      ctx.setLineDash([6 / viewport.zoom, 5 / viewport.zoom]);
+      ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+
+      // Solid outline
+      if (poly.length >= 3) {
+        ctx.beginPath();
+        ctx.moveTo(poly[0][0], poly[0][1]);
+        for (let i = 1; i < poly.length; i++) {
+          ctx.lineTo(poly[i][0], poly[i][1]);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2.4 / viewport.zoom;
+        ctx.setLineDash([]);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#fef3c7';
+      ctx.font = `bold ${Math.max(10, 12 / viewport.zoom)}px sans-serif`;
+      ctx.fillText('選択確定 (外接枠 + 余白)', b.minX + 4 / viewport.zoom, Math.max(14, b.minY - 4 / viewport.zoom));
+      ctx.restore();
+    }
+
     // 3. Child Regional Map outlines on the currently viewed map (World or Parent Region)
     if (mapData.regionalMaps) {
       const currentMapId = activeRegionalMap ? activeRegionalMap.id : null;
@@ -314,18 +622,39 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (childRegions.length > 0) {
         ctx.save();
         for (const reg of childRegions) {
-          const b = reg.bounds;
-          ctx.strokeStyle = 'rgba(70, 180, 240, 0.8)';
-          ctx.lineWidth = 1.8 / viewport.zoom;
-          ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
-          ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+          if (reg.outline && reg.outline.length >= 3) {
+            ctx.beginPath();
+            ctx.moveTo(reg.outline[0][0], reg.outline[0][1]);
+            for (let i = 1; i < reg.outline.length; i++) {
+              ctx.lineTo(reg.outline[i][0], reg.outline[i][1]);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = 'rgba(70, 180, 240, 0.9)';
+            ctx.lineWidth = 1.8 / viewport.zoom;
+            ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+            ctx.stroke();
 
-          ctx.fillStyle = 'rgba(70, 180, 240, 0.1)';
-          ctx.fillRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+            ctx.fillStyle = 'rgba(70, 180, 240, 0.12)';
+            ctx.fill();
 
-          ctx.fillStyle = '#93c5fd';
-          ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
-          ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+            const b = reg.bounds;
+            ctx.fillStyle = '#93c5fd';
+            ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
+            ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+          } else {
+            const b = reg.bounds;
+            ctx.strokeStyle = 'rgba(70, 180, 240, 0.8)';
+            ctx.lineWidth = 1.8 / viewport.zoom;
+            ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+            ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+
+            ctx.fillStyle = 'rgba(70, 180, 240, 0.1)';
+            ctx.fillRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+
+            ctx.fillStyle = '#93c5fd';
+            ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
+            ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+          }
         }
         ctx.restore();
       }
@@ -378,6 +707,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   }, [
     viewport,
     selectionBox,
+    polygonPoints,
+    freehandPoints,
+    confirmedShape,
     isRegion,
     activeRegionalMap,
     mapData.regionalMaps,
@@ -391,7 +723,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     showSymbols,
     selectedSymbolId,
     customAssets,
+    brushSettings.mode,
+    biomeSettings?.showBiome,
+    biomeSettings?.opacity,
+    currentBiomeGrid,
   ]);
+
+  // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
+  useEffect(() => {
+    rebuildBiomeCanvas(currentBiomeGrid, currentCols, currentRows);
+    renderOverlay();
+  }, [currentBiomeGrid, currentCols, currentRows, rebuildBiomeCanvas, renderOverlay]);
 
   // 3. Render 2D Cursor Overlay (brush circle, stamp ghost - ultra-fast, only on mouse position update)
   const renderCursorOverlay = useCallback(() => {
@@ -501,6 +843,29 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat) setIsSpacePressed(true);
 
+      if (brushSettings.mode === 'selectRegion') {
+        if (e.key === 'Backspace' && selectMethod === 'polygon' && polygonPoints.length > 0) {
+          e.preventDefault();
+          setPolygonPoints((prev) => prev.slice(0, prev.length - 1));
+          return;
+        }
+        if (e.key === 'Enter' && selectMethod === 'polygon' && polygonPoints.length >= 3) {
+          e.preventDefault();
+          commitShapeSelection(polygonPoints);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setPolygonPoints([]);
+          setFreehandPoints([]);
+          freehandPointsRef.current = [];
+          setRect2Start(null);
+          setSelectionBox(null);
+          setConfirmedShape(null);
+          return;
+        }
+      }
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedSymbolId) {
         const symList = symbols || [];
         const nextSymbols = symList.filter((s) => s.id !== selectedSymbolId);
@@ -525,7 +890,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [selectedSymbolId, symbols, onCommitHistory, onUpdateSymbols, onSelectSymbolId]);
+  }, [
+    selectedSymbolId,
+    symbols,
+    onCommitHistory,
+    onUpdateSymbols,
+    onSelectSymbolId,
+    brushSettings.mode,
+    selectMethod,
+    polygonPoints,
+    commitShapeSelection,
+  ]);
 
   // Mouse wheel zoom
   useEffect(() => {
@@ -648,7 +1023,30 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     onInteractingChange?.(true);
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     const worldPos = screenToWorld(e.clientX, e.clientY);
-    lastWorldPosRef.current = worldPos;
+    // 0. Click to navigate into a child region on Parent Map (Pan mode)
+    if (brushSettings.mode === 'pan' && !isSpacePressed && onSelectRegionMap && mapData.regionalMaps) {
+      const currentMapId = activeRegionalMap ? activeRegionalMap.id : null;
+      const childRegions = Object.values(mapData.regionalMaps).filter(
+        (reg) => (reg.parentId ?? null) === currentMapId
+      );
+      for (let i = childRegions.length - 1; i >= 0; i--) {
+        const child = childRegions[i];
+        let hit = false;
+        if (child.outline && child.outline.length >= 3) {
+          hit = pointInPolygon([worldPos.x, worldPos.y], child.outline);
+        } else {
+          hit =
+            worldPos.x >= child.bounds.minX &&
+            worldPos.x <= child.bounds.maxX &&
+            worldPos.y >= child.bounds.minY &&
+            worldPos.y <= child.bounds.maxY;
+        }
+        if (hit) {
+          onSelectRegionMap(child.id);
+          return;
+        }
+      }
+    }
 
     // 1. Check if clicking on the Compass Rose to drag it (Pan mode or with Left-Click)
     const cPos = compassPos || { x: currentWidth * 0.12, y: currentHeight * 0.28 };
@@ -739,6 +1137,83 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       return;
     }
 
+    // Biome Fill Mode
+    if (brushSettings.mode === 'biomeFill') {
+      const grid = getOrCreateBiomeGrid();
+      const cellW = currentWidth / (currentCols - 1);
+      const cellH = currentHeight / (currentRows - 1);
+      const startC = Math.max(0, Math.min(currentCols - 1, Math.round(worldPos.x / cellW)));
+      const startR = Math.max(0, Math.min(currentRows - 1, Math.round(worldPos.y / cellH)));
+      const startIndex = startR * currentCols + startC;
+
+      const biomeId = biomeSettings?.selectedBiomeId ?? 1;
+      const options = {
+        softness: 0,
+        landOnly: biomeSettings?.landOnly ?? true,
+        elevationGrid: currentElevation,
+        seaLevel: currentSeaLevel,
+      };
+
+      const result = floodFillBiome(
+        grid,
+        currentCols,
+        currentRows,
+        startIndex,
+        biomeId,
+        options
+      );
+
+      if (result.changes.length > 0) {
+        updateBiomeSubRegion(result.changes, result.bounds);
+        renderOverlay();
+        onCommitHistory({
+          description: `地形タイプ塗りつぶし (${BIOME_BY_ID[biomeId]?.name || ''})`,
+          timestamp: Date.now(),
+          biomeChanges: result.changes,
+        });
+      }
+      return;
+    }
+
+    // Biome Paint & Erase Mode
+    if (brushSettings.mode === 'biomePaint' || brushSettings.mode === 'biomeErase') {
+      const grid = getOrCreateBiomeGrid();
+      activeBiomeStrokeRef.current.clear();
+      const isErase = brushSettings.mode === 'biomeErase';
+      const biomeId = isErase ? 0 : (biomeSettings?.selectedBiomeId ?? 1);
+      const softness = isErase ? 0 : (biomeSettings?.softness ?? 40);
+      const options = {
+        softness,
+        landOnly: isErase ? false : (biomeSettings?.landOnly ?? true),
+        elevationGrid: currentElevation,
+        seaLevel: currentSeaLevel,
+      };
+
+      const result = paintBiomeCircle(
+        grid,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        worldPos.x,
+        worldPos.y,
+        brushSettings.radius,
+        biomeId,
+        softness,
+        options
+      );
+
+      for (const ch of result.changes) {
+        activeBiomeStrokeRef.current.set(ch.gridIndex, { prev: ch.prev, next: ch.next });
+      }
+
+      if (result.changes.length > 0) {
+        updateBiomeSubRegion(result.changes, result.bounds);
+        renderOverlay();
+      }
+      return;
+    }
+
     const isPanAction =
       brushSettings.mode === 'pan' ||
       isSpacePressed ||
@@ -748,13 +1223,70 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (isPanAction) {
       isPanningRef.current = true;
     } else if (brushSettings.mode === 'selectRegion') {
-      isSelectingRef.current = true;
-      setSelectionBox({
-        startX: worldPos.x,
-        startY: worldPos.y,
-        currentX: worldPos.x,
-        currentY: worldPos.y,
-      });
+      if (selectMethod === 'rect') {
+        setConfirmedShape(null);
+        isSelectingRef.current = true;
+        setSelectionBox({
+          startX: worldPos.x,
+          startY: worldPos.y,
+          currentX: worldPos.x,
+          currentY: worldPos.y,
+        });
+      } else if (selectMethod === 'rect2') {
+        setConfirmedShape(null);
+        if (!rect2Start) {
+          setRect2Start({ x: worldPos.x, y: worldPos.y });
+          setSelectionBox({
+            startX: worldPos.x,
+            startY: worldPos.y,
+            currentX: worldPos.x,
+            currentY: worldPos.y,
+          });
+        } else {
+          // 2nd click: commit 2-point rectangle
+          const sx = rect2Start.x;
+          const sy = rect2Start.y;
+          const cx = selectionBox ? selectionBox.currentX : worldPos.x;
+          const cy = selectionBox ? selectionBox.currentY : worldPos.y;
+
+          const minX = Math.max(0, Math.min(sx, cx));
+          const maxX = Math.min(currentWidth, Math.max(sx, cx));
+          const minY = Math.max(0, Math.min(sy, cy));
+          const maxY = Math.min(currentHeight, Math.max(sy, cy));
+
+          const rawW = maxX - minX;
+          const rawH = maxY - minY;
+          const minThreshold = Math.max(10, currentWidth * 0.02);
+
+          if (rawW >= minThreshold && rawH >= 5) {
+            const fitResult = fitBoundsToLimits(
+              { minX, minY, maxX, maxY },
+              currentWidth,
+              currentHeight
+            );
+            onSelectRegionBounds?.(fitResult.bounds, fitResult.adjusted);
+          }
+          setRect2Start(null);
+          setSelectionBox(null);
+        }
+      } else if (selectMethod === 'polygon') {
+        setConfirmedShape(null);
+        // If clicking near first vertex and length >= 3, close and commit
+        if (polygonPoints.length >= 3) {
+          const p0 = polygonPoints[0];
+          const distToFirst = Math.hypot(worldPos.x - p0[0], worldPos.y - p0[1]);
+          if (distToFirst <= 18 / viewport.zoom) {
+            commitShapeSelection(polygonPoints);
+            return;
+          }
+        }
+        setPolygonPoints((prev) => [...prev, [worldPos.x, worldPos.y]]);
+      } else if (selectMethod === 'freehand') {
+        setConfirmedShape(null);
+        isSelectingRef.current = true;
+        freehandPointsRef.current = [[worldPos.x, worldPos.y]];
+        setFreehandPoints([[worldPos.x, worldPos.y]]);
+      }
     } else if (e.button === 0) {
       isPanningRef.current = false;
       activeStrokeChangesRef.current.clear();
@@ -790,6 +1322,42 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
 
     if (!isMouseDownRef.current) {
+      if (brushSettings.mode === 'selectRegion') {
+        if (selectMethod === 'rect2' && rect2Start && selectionBox) {
+          const sx = selectionBox.startX;
+          const sy = selectionBox.startY;
+          const dx = worldPos.x - sx;
+          const dy = worldPos.y - sy;
+          const signX = dx >= 0 ? 1 : -1;
+          const signY = dy >= 0 ? 1 : -1;
+
+          let currentX = Math.max(0, Math.min(currentWidth, worldPos.x));
+          let currentY = Math.max(0, Math.min(currentHeight, worldPos.y));
+
+          if (regionAspect !== 'free') {
+            let targetAspect = 2.0;
+            if (regionAspect === '2:1') targetAspect = 2.0;
+            else if (regionAspect === '1:1') targetAspect = 1.0;
+            else if (regionAspect === 'current') targetAspect = currentWidth / currentHeight;
+
+            const maxW = signX > 0 ? Math.max(0, currentWidth - sx) : Math.max(0, sx);
+            const maxH = signY > 0 ? Math.max(0, currentHeight - sy) : Math.max(0, sy);
+            const maxWFromH = maxH * targetAspect;
+
+            const allowedW = Math.min(maxW, maxWFromH);
+            const w = Math.min(Math.abs(dx), allowedW);
+            const h = w / targetAspect;
+
+            currentX = sx + signX * w;
+            currentY = sy + signY * h;
+          }
+
+          setSelectionBox((prev) => (prev ? { ...prev, currentX, currentY } : null));
+          renderOverlay();
+        } else if (selectMethod === 'polygon' && polygonPoints.length > 0) {
+          renderOverlay();
+        }
+      }
       renderCursorOverlay();
       return;
     }
@@ -815,30 +1383,42 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           });
         });
       }
-    } else if (isSelectingRef.current && selectionBox) {
+    } else if (brushSettings.mode === 'selectRegion' && selectMethod === 'freehand' && isSelectingRef.current) {
+      const last = freehandPointsRef.current[freehandPointsRef.current.length - 1];
+      if (!last || Math.hypot(worldPos.x - last[0], worldPos.y - last[1]) >= 4 / viewport.zoom) {
+        freehandPointsRef.current.push([worldPos.x, worldPos.y]);
+        setFreehandPoints([...freehandPointsRef.current]);
+        renderOverlay();
+      }
+    } else if (isSelectingRef.current && selectionBox && selectMethod === 'rect') {
       const sx = selectionBox.startX;
       const sy = selectionBox.startY;
-      const aspect = currentWidth / currentHeight; // Maintain exact map aspect ratio (usually 2:1)
       const dx = worldPos.x - sx;
       const dy = worldPos.y - sy;
       const signX = dx >= 0 ? 1 : -1;
       const signY = dy >= 0 ? 1 : -1;
 
-      // Base width on horizontal drag distance
-      let w = Math.abs(dx);
+      let currentX = Math.max(0, Math.min(currentWidth, worldPos.x));
+      let currentY = Math.max(0, Math.min(currentHeight, worldPos.y));
 
-      // Boundary limits in the direction of drag
-      const maxW = signX > 0 ? Math.max(0, currentWidth - sx) : Math.max(0, sx);
-      const maxH = signY > 0 ? Math.max(0, currentHeight - sy) : Math.max(0, sy);
-      const maxWFromH = maxH * aspect;
+      if (regionAspect !== 'free') {
+        let targetAspect = 2.0;
+        if (regionAspect === '2:1') targetAspect = 2.0;
+        else if (regionAspect === '1:1') targetAspect = 1.0;
+        else if (regionAspect === 'current') targetAspect = currentWidth / currentHeight;
 
-      // Clamp width while preserving exact aspect ratio
-      const allowedW = Math.min(maxW, maxWFromH);
-      w = Math.min(w, allowedW);
-      const h = w / aspect;
+        // Base width on horizontal drag distance, clamped to borders
+        const maxW = signX > 0 ? Math.max(0, currentWidth - sx) : Math.max(0, sx);
+        const maxH = signY > 0 ? Math.max(0, currentHeight - sy) : Math.max(0, sy);
+        const maxWFromH = maxH * targetAspect;
 
-      const currentX = sx + signX * w;
-      const currentY = sy + signY * h;
+        const allowedW = Math.min(maxW, maxWFromH);
+        const w = Math.min(Math.abs(dx), allowedW);
+        const h = w / targetAspect;
+
+        currentX = sx + signX * w;
+        currentY = sy + signY * h;
+      }
 
       setSelectionBox({
         ...selectionBox,
@@ -875,6 +1455,49 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         onUpdateSymbols?.(remaining);
       }
       renderOverlay();
+    } else if (brushSettings.mode === 'biomePaint' || brushSettings.mode === 'biomeErase') {
+      const grid = getOrCreateBiomeGrid();
+      const isErase = brushSettings.mode === 'biomeErase';
+      const biomeId = isErase ? 0 : (biomeSettings?.selectedBiomeId ?? 1);
+      const softness = isErase ? 0 : (biomeSettings?.softness ?? 40);
+      const options = {
+        softness,
+        landOnly: isErase ? false : (biomeSettings?.landOnly ?? true),
+        elevationGrid: currentElevation,
+        seaLevel: currentSeaLevel,
+      };
+
+      const result = paintBiomeCircle(
+        grid,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        worldPos.x,
+        worldPos.y,
+        brushSettings.radius,
+        biomeId,
+        softness,
+        options,
+        { prevX: lastWorldPosRef.current.x, prevY: lastWorldPosRef.current.y }
+      );
+
+      for (const ch of result.changes) {
+        const existing = activeBiomeStrokeRef.current.get(ch.gridIndex);
+        if (!existing) {
+          activeBiomeStrokeRef.current.set(ch.gridIndex, { prev: ch.prev, next: ch.next });
+        } else {
+          existing.next = ch.next;
+        }
+      }
+
+      if (result.changes.length > 0) {
+        updateBiomeSubRegion(result.changes, result.bounds);
+        renderOverlay();
+      }
+      lastWorldPosRef.current = worldPos;
+    } else if (brushSettings.mode === 'biomeFill') {
+      // Flood fill is triggered on click (mouseDown)
     } else {
       executeBrushStroke(worldPos.x, worldPos.y, {
         prevX: lastWorldPosRef.current.x,
@@ -920,22 +1543,64 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       symbolStrokeSnapshotRef.current = [];
     }
 
+    // Commit active biome stroke
+    if (activeBiomeStrokeRef.current.size > 0) {
+      const biomeChanges: { gridIndex: number; prev: number; next: number }[] = [];
+      for (const [gridIndex, { prev, next }] of activeBiomeStrokeRef.current.entries()) {
+        if (prev !== next) {
+          biomeChanges.push({ gridIndex, prev, next });
+        }
+      }
+      if (biomeChanges.length > 0) {
+        const isErase = brushSettings.mode === 'biomeErase';
+        const biomeName = BIOME_BY_ID[biomeSettings?.selectedBiomeId ?? 1]?.name || '';
+        onCommitHistory({
+          description: isErase ? '地形タイプ消去' : `地形タイプ塗り (${biomeName})`,
+          timestamp: Date.now(),
+          biomeChanges,
+        });
+      }
+      activeBiomeStrokeRef.current.clear();
+    }
+
     if (!isMouseDownRef.current) return;
     isMouseDownRef.current = false;
     onInteractingChange?.(false);
 
-    if (isSelectingRef.current && selectionBox) {
+    if (isSelectingRef.current && brushSettings.mode === 'selectRegion') {
       isSelectingRef.current = false;
-      const minX = Math.max(0, Math.min(selectionBox.startX, selectionBox.currentX));
-      const maxX = Math.min(currentWidth, Math.max(selectionBox.startX, selectionBox.currentX));
-      const minY = Math.max(0, Math.min(selectionBox.startY, selectionBox.currentY));
-      const maxY = Math.min(currentHeight, Math.max(selectionBox.startY, selectionBox.currentY));
+      if (selectMethod === 'rect' && selectionBox) {
+        const minX = Math.max(0, Math.min(selectionBox.startX, selectionBox.currentX));
+        const maxX = Math.min(currentWidth, Math.max(selectionBox.startX, selectionBox.currentX));
+        const minY = Math.max(0, Math.min(selectionBox.startY, selectionBox.currentY));
+        const maxY = Math.min(currentHeight, Math.max(selectionBox.startY, selectionBox.currentY));
 
-      // Minimum selection threshold 40px
-      if (maxX - minX > 40 && maxY - minY > 20) {
-        onSelectRegionBounds?.({ minX, minY, maxX, maxY });
+        const rawW = maxX - minX;
+        const rawH = maxY - minY;
+        const minThreshold = Math.max(10, currentWidth * 0.02);
+
+        // Minimum selection threshold aligned with fitBoundsToLimits
+        if (rawW >= minThreshold && rawH >= 5) {
+          const fitResult = fitBoundsToLimits(
+            { minX, minY, maxX, maxY },
+            currentWidth,
+            currentHeight
+          );
+          onSelectRegionBounds?.(fitResult.bounds, fitResult.adjusted);
+        }
+        setSelectionBox(null);
+      } else if (selectMethod === 'freehand') {
+        const pts = freehandPointsRef.current;
+        if (pts.length >= 3) {
+          const simplified = simplifyPolyline(pts, 3.0);
+          if (simplified.length >= 3) {
+            commitShapeSelection(simplified);
+          }
+        }
+        setFreehandPoints([]);
+        freehandPointsRef.current = [];
       }
-      setSelectionBox(null);
+    }
     } else if (!isPanningRef.current && activeStrokeChangesRef.current.size > 0) {
       const changesList: { gridIndex: number; prevElevation: number; newElevation: number }[] = [];
       for (const [gIdx, record] of activeStrokeChangesRef.current.entries()) {
@@ -993,6 +1658,36 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       <canvas ref={glCanvasRef} className="absolute inset-0 block w-full h-full" />
       <canvas ref={overlayCanvasRef} className="absolute inset-0 block w-full h-full pointer-events-none" />
       <canvas ref={cursorCanvasRef} className="absolute inset-0 block w-full h-full pointer-events-none" />
+
+      {/* Aspect Ratio Lock bar for Region Selection */}
+      {brushSettings.mode === 'selectRegion' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-stone-900/95 backdrop-blur-md border border-amber-600/70 rounded-xl px-3 py-1.5 shadow-2xl flex items-center gap-2 text-xs text-stone-200 pointer-events-auto animate-in fade-in slide-in-from-top-2">
+          <span className="font-semibold text-amber-300">縦横比を固定:</span>
+          <div className="flex items-center gap-1 bg-stone-950/80 p-0.5 rounded-lg border border-stone-800">
+            {(
+              [
+                { id: 'free', label: 'なし' },
+                { id: '2:1', label: '2:1' },
+                { id: '1:1', label: '1:1' },
+                { id: 'current', label: '表示中マップと同じ' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setRegionAspect(opt.id)}
+                className={`px-2.5 py-1 rounded text-[11px] font-medium transition ${
+                  regionAspect === opt.id
+                    ? 'bg-amber-600 text-stone-950 font-bold shadow'
+                    : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Cartographic Scale Bar (Bottom-Left) if outer border is turned off */}
       {!showBorder && (

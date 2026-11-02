@@ -79,12 +79,14 @@ test('generateRegionalMap inherits macro terrain and adds micro detail at 4x and
   };
 
   const worldMap = generateTectonicWorld(2000, 1000, config);
-  const bounds = { minX: 400, minY: 200, maxX: 800, maxY: 500 };
+  const bounds = { minX: 400, minY: 200, maxX: 800, maxY: 400 };
 
   const region4x = generateRegionalMap(worldMap, bounds, 4, 'テスト地域4x');
   assert.equal(region4x.zoomScale, 4);
   assert.equal(region4x.gridCols, 1024);
   assert.equal(region4x.gridRows, 512);
+  assert.equal(region4x.width, 2000);
+  assert.equal(region4x.height, 1000);
   assert.equal(region4x.parentId, null);
   assert.equal(region4x.widthKm, Math.round(worldMap.worldWidthKm * (400 / 2000)));
   assert(region4x.elevationGrid instanceof Float32Array);
@@ -97,8 +99,16 @@ test('generateRegionalMap inherits macro terrain and adds micro detail at 4x and
   // Test recursive child regional map generation (Region -> Subregion)
   const subRegion = generateRegionalMap(region4x, { minX: 100, minY: 100, maxX: 300, maxY: 300 }, 4, 'テスト小地域');
   assert.equal(subRegion.parentId, region4x.id);
-  assert.equal(subRegion.widthKm, Math.round(region4x.widthKm * (200 / 2000)));
+  assert.equal(subRegion.widthKm, Math.round(region4x.widthKm * (200 / region4x.width)));
   assert(typeof subRegion.seed === 'number');
+
+  // Test arbitrary aspect ratio regional map generation (e.g. 1:1 square)
+  const squareBounds = { minX: 200, minY: 200, maxX: 500, maxY: 500 };
+  const squareRegion = generateRegionalMap(worldMap, squareBounds, 4, '正方形地域');
+  const aspect = squareRegion.width / squareRegion.height;
+  assert.ok(Math.abs(aspect - 1.0) < 1e-4, 'Region aspect ratio must match bounds aspect ratio (1.0)');
+  assert.equal(squareRegion.gridCols, squareRegion.gridRows, 'Grid resolution must be square');
+  assert(squareRegion.elevationGrid.length === squareRegion.gridCols * squareRegion.gridRows);
 });
 
 test('applyBrushToElevationGrid smoothly modifies elevation with Gaussian falloff', () => {

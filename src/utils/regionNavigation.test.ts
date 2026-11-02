@@ -39,18 +39,22 @@ const createDummyRegion = (
   widthKm: 10000,
 });
 
-test('isUniformChild correctly checks aspect ratio matching within 2% tolerance', () => {
-  const parent = { width: 2000, height: 1000 }; // 2:1 aspect ratio
-  // Exactly 2:1 (500x250)
-  const childExact = createDummyRegion('r1', 100, 100, 600, 350);
+test('isUniformChild correctly checks aspect ratio matching within 1% tolerance', () => {
+  const parent = { width: 2000, height: 1000 };
+  // Exactly 2:1 child (500x250) matching 2000x1000 child dimensions
+  const childExact = createDummyRegion('r1', 100, 100, 600, 350, 2000, 1000);
   assert.equal(isUniformChild(childExact, parent), true);
 
-  // 1% difference (500x252.5 => ratio ~1.980, within 2%)
-  const childClose = createDummyRegion('r2', 100, 100, 600, 352.5);
+  // Non-2:1 child (e.g. 1:1 square: 300x300 bounds matching 1414x1414 child dimensions)
+  const childSquare = createDummyRegion('rSquare', 100, 100, 400, 400, 1414, 1414);
+  assert.equal(isUniformChild(childSquare, parent), true);
+
+  // 0.8% difference (within 1% tolerance)
+  const childClose = createDummyRegion('r2', 100, 100, 600, 352, 2000, 1000);
   assert.equal(isUniformChild(childClose, parent), true);
 
-  // Distorted child (500x400 => ratio 1.25, not 2:1)
-  const childDistorted = createDummyRegion('r3', 100, 100, 600, 500);
+  // Distorted child (bounds 500x400 => ratio 1.25, but child width/height is 2000/1000 = 2.0)
+  const childDistorted = createDummyRegion('r3', 100, 100, 600, 500, 2000, 1000);
   assert.equal(isUniformChild(childDistorted, parent), false);
 });
 

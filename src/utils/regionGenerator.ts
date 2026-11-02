@@ -1,5 +1,11 @@
-import { MapData, ParentMapSource, RegionalBounds, RegionalMapData } from '../types/map';
+import { MapData, ParentMapSource, RegionalBounds, RegionalMapData, ShapeMaskConfig } from '../types/map';
 import { Noise2D } from './prng';
+import { computeRegionLayout } from './regionLayout';
+import {
+  rasterizePolygonMask,
+  blurMask,
+  applyShapeMaskElevation,
+} from './regionShape';
 
 /**
  * Converts MapData or RegionalMapData into a uniform ParentMapSource interface.
@@ -43,19 +49,20 @@ export function generateRegionalMap(
   parentSource: ParentMapSource | MapData | RegionalMapData,
   bounds: RegionalBounds,
   zoomScale: 4 | 16 = 4,
-  name?: string
+  name?: string,
+  shapeMask?: ShapeMaskConfig
 ): RegionalMapData {
   const parent = toParentMapSource(parentSource);
   const seed = parent.seed + Math.round(bounds.minX * 31 + bounds.minY * 97);
   const microNoise = new Noise2D(seed + 773);
   const detailNoise = new Noise2D(seed + 991);
 
-  const regionW = 2000;
-  const regionH = 1000;
-
-  // Regional grid resolution
-  const gridCols = zoomScale === 16 ? 2048 : 1024;
-  const gridRows = zoomScale === 16 ? 1024 : 512;
+  // Compute dynamic dimensions and grid resolution matching bounds aspect ratio
+  const layout = computeRegionLayout(bounds, zoomScale);
+  const regionW = layout.width;
+  const regionH = layout.height;
+  const gridCols = layout.gridCols;
+  const gridRows = layout.gridRows;
 
   const elevationGrid = new Float32Array(gridCols * gridRows);
   const temperatureGrid = new Float32Array(gridCols * gridRows);
@@ -152,6 +159,15 @@ export function generateRegionalMap(
     }
   }
 
+  // 4. If shapeMask with outsideSea is specified, carve sea outside the polygon
+  if (shapeMask?.outsideSea && shapeMask.polygon && shapeMask.polygon.length >= 3) {
+    const rawMask = rasterizePolygonMask(shapeMask.polygon, bounds, gridCols, gridRows);
+    const featherRatio = typeof shapeMask.featherRatio === 'number' ? shapeMask.featherRatio : 0.03;
+    const blurRadius = Math.max(1, Math.round(Math.min(gridCols, gridRows) * featherRatio));
+    const finalMask = featherRatio > 0 ? blurMask(rawMask, gridCols, gridRows, blurRadius) : rawMask;
+    applyShapeMaskElevation(elevationGrid, finalMask, parent.seaLevel);
+  }
+
   const regionId = `region_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
   const defaultName = name || `地域マップ (${zoomScale}x: ${Math.round(boundsW)}x${Math.round(boundsH)}km)`;
   const widthKm = Math.round(parent.widthKm * (boundsW / parent.width));
@@ -173,6 +189,7 @@ export function generateRegionalMap(
     seed,
     widthKm,
     symbols: [],
+    outline: shapeMask?.polygon ? [...shapeMask.polygon] : undefined,
   };
 }
 

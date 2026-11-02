@@ -1,4 +1,4 @@
-import { GeneratorConfig, MapData, ParentMapSource, RegionalBounds } from '../types/map';
+import { GeneratorConfig, MapData, ParentMapSource, RegionalBounds, ShapeMaskConfig } from '../types/map';
 import { generateTectonicWorld, generateBlankOceanWorld } from '../utils/tectonicGenerator';
 import { generateRegionalMap } from '../utils/regionGenerator';
 
@@ -12,8 +12,9 @@ self.onmessage = (e: MessageEvent<{
   bounds?: RegionalBounds;
   zoomScale?: 4 | 16;
   name?: string;
+  shapeMask?: ShapeMaskConfig;
 }>) => {
-  const { action = 'generateWorld', width, height, config, worldMap, parentMap, bounds, zoomScale, name } = e.data;
+  const { action = 'generateWorld', width, height, config, worldMap, parentMap, bounds, zoomScale, name, shapeMask } = e.data;
 
   try {
     if (action === 'generateBlankOcean' && config) {
@@ -24,7 +25,7 @@ self.onmessage = (e: MessageEvent<{
     } else if (action === 'generateRegion' && (parentMap || worldMap) && bounds) {
       self.postMessage({ type: 'progress', progress: 20, message: '親マップから地域データをサンプリング中...' });
       const source = (parentMap || worldMap)!;
-      const regionData = generateRegionalMap(source, bounds, zoomScale || 4, name);
+      const regionData = generateRegionalMap(source, bounds, zoomScale || 4, name, shapeMask);
       self.postMessage({ type: 'progress', progress: 100, message: '地域マップ生成完了！' });
       self.postMessage({ type: 'successRegion', regionData });
     } else if (config) {

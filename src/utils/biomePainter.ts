@@ -31,6 +31,10 @@ export function coordHash(c: number, r: number): number {
 /**
  * Paints a biome circle onto the Uint8Array grid with optional softness jitter,
  * land-only elevation restriction, and dragLine interpolation between mouse events.
+ *
+ * Supports both:
+ * 1. paintBiomeCircle(grid, cols, rows, mapWidth, mapHeight, wx, wy, radius, biomeId, softness, options, dragLine)
+ * 2. paintBiomeCircle(grid, cols, rows, mapWidth, mapHeight, wx, wy, radius, biomeId, options, dragLine)
  */
 export function paintBiomeCircle(
   grid: Uint8Array,
@@ -38,25 +42,55 @@ export function paintBiomeCircle(
   rows: number,
   mapWidth: number,
   mapHeight: number,
-  targetX: number,
-  targetY: number,
+  wx: number,
+  wy: number,
   radius: number,
   biomeId: number,
-  options: BiomePaintOptions,
-  dragLine?: { prevX: number; prevY: number }
+  softnessOrOptions?: number | BiomePaintOptions,
+  optionsOrDragLine?: BiomePaintOptions | { prevX: number; prevY: number },
+  dragLineArg?: { prevX: number; prevY: number }
 ): BiomePaintResult {
   if (cols <= 0 || rows <= 0 || mapWidth <= 0 || mapHeight <= 0) {
     return { changes: [], bounds: null };
   }
 
+  let softnessVal = 0;
+  let options: BiomePaintOptions = { softness: 40, landOnly: true };
+  let dragLine: { prevX: number; prevY: number } | undefined = undefined;
+
+  if (typeof softnessOrOptions === 'number') {
+    softnessVal = softnessOrOptions;
+    if (optionsOrDragLine && typeof optionsOrDragLine === 'object' && !('prevX' in optionsOrDragLine)) {
+      options = optionsOrDragLine as BiomePaintOptions;
+      dragLine = dragLineArg;
+    } else if (optionsOrDragLine && 'prevX' in optionsOrDragLine) {
+      dragLine = optionsOrDragLine as { prevX: number; prevY: number };
+    }
+  } else if (softnessOrOptions && typeof softnessOrOptions === 'object') {
+    options = softnessOrOptions;
+    softnessVal = options.softness ?? 40;
+    if (optionsOrDragLine && 'prevX' in optionsOrDragLine) {
+      dragLine = optionsOrDragLine as { prevX: number; prevY: number };
+    }
+  }
+
+  // Normalize softness to [0, 1]
+  const softnessNormalized = softnessVal > 1 ? softnessVal / 100 : Math.max(0, softnessVal);
+  const solidCoreRadius = radius * (1.0 - softnessNormalized);
+  const transitionRange = Math.max(1e-4, radius - solidCoreRadius);
+
+  const landOnly = !!options.landOnly;
+  const elevationGrid = options.elevationGrid;
+  const seaLevel = options.seaLevel ?? 35.0;
+
   const cellW = mapWidth / (cols - 1);
   const cellH = mapHeight / (rows - 1);
 
   // Determine outer bounding box in map coords, expanding if dragLine exists
-  const minX = dragLine ? Math.min(targetX, dragLine.prevX) : targetX;
-  const maxX = dragLine ? Math.max(targetX, dragLine.prevX) : targetX;
-  const minY = dragLine ? Math.min(targetY, dragLine.prevY) : targetY;
-  const maxY = dragLine ? Math.max(targetY, dragLine.prevY) : targetY;
+  const minX = dragLine ? Math.min(wx, dragLine.prevX) : wx;
+  const maxX = dragLine ? Math.max(wx, dragLine.prevX) : wx;
+  const minY = dragLine ? Math.min(wy, dragLine.prevY) : wy;
+  const maxY = dragLine ? Math.max(wy, dragLine.prevY) : wy;
 
   const minC = Math.max(0, Math.floor((minX - radius) / cellW));
   const maxC = Math.min(cols - 1, Math.ceil((maxX + radius) / cellW));
@@ -69,21 +103,12 @@ export function paintBiomeCircle(
   let dirtyMinR = rows;
   let dirtyMaxR = -1;
 
-  const softness = Math.max(0, Math.min(100, options.softness ?? 40));
-  const softRatio = softness / 100;
-  const solidCoreRadius = radius * (1.0 - softRatio);
-  const transitionRange = Math.max(1e-4, radius - solidCoreRadius);
-
-  const landOnly = !!options.landOnly;
-  const elevationGrid = options.elevationGrid;
-  const seaLevel = options.seaLevel ?? 35.0;
-
-  // Pre-calculate line segment parameters for dragLine
+  // Pre-calculate line segment parameters for dragLine capsule
   const hasLine = !!dragLine;
-  const lx1 = dragLine?.prevX ?? targetX;
-  const ly1 = dragLine?.prevY ?? targetY;
-  const ldx = targetX - lx1;
-  const ldy = targetY - ly1;
+  const lx1 = dragLine?.prevX ?? wx;
+  const ly1 = dragLine?.prevY ?? wy;
+  const ldx = wx - lx1;
+  const ldy = wy - ly1;
   const lenSq = ldx * ldx + ldy * ldy;
 
   for (let r = minR; r <= maxR; r++) {
@@ -92,7 +117,7 @@ export function paintBiomeCircle(
       const gx = c * cellW;
 
       // Distance from grid sample point to brush circle (or capsule segment)
-      let dist = Math.hypot(gx - targetX, gy - targetY);
+      let dist = Math.hypot(gx - wx, gy - wy);
       if (hasLine && lenSq > 0) {
         const t = Math.max(0, Math.min(1, ((gx - lx1) * ldx + (gy - ly1) * ldy) / lenSq));
         const projX = lx1 + t * ldx;
@@ -110,7 +135,7 @@ export function paintBiomeCircle(
       }
 
       // Softness falloff test:
-      if (softness > 0 && dist > solidCoreRadius) {
+      if (softnessNormalized > 0 && dist > solidCoreRadius) {
         const t = (dist - solidCoreRadius) / transitionRange; // 0 at solid boundary, 1 at edge
         // Smooth probability curve: 1.0 -> 0.0
         const prob = Math.max(0, Math.min(1, 1.0 - (3 * t * t - 2 * t * t * t)));
@@ -143,41 +168,33 @@ export function paintBiomeCircle(
 
 /**
  * 4-way BFS flood-fill algorithm for biome areas.
- * Avoids call stack overflow on large resolutions (e.g. 2048x1024).
+ * startIndex と上下左右でつながり、かつ同じ現在値のセルを、biomeId に置き換える。
+ * options.landOnly が true なら海のセルは対象外(陸だけでつながる領域)。
+ * 2048x1024 でもスタックオーバーフローせず高速に動作。
  */
 export function floodFillBiome(
   grid: Uint8Array,
   cols: number,
   rows: number,
-  mapWidth: number,
-  mapHeight: number,
-  targetX: number,
-  targetY: number,
-  newBiomeId: number,
-  options: BiomePaintOptions
+  startIndex: number,
+  biomeId: number,
+  options?: Partial<BiomePaintOptions>
 ): BiomePaintResult {
-  if (cols <= 0 || rows <= 0 || mapWidth <= 0 || mapHeight <= 0) {
+  if (cols <= 0 || rows <= 0 || startIndex < 0 || startIndex >= cols * rows) {
     return { changes: [], bounds: null };
   }
 
-  const cellW = mapWidth / (cols - 1);
-  const cellH = mapHeight / (rows - 1);
-
-  const startC = Math.max(0, Math.min(cols - 1, Math.round(targetX / cellW)));
-  const startR = Math.max(0, Math.min(rows - 1, Math.round(targetY / cellH)));
-  const startIdx = startR * cols + startC;
-
-  const targetBiomeId = grid[startIdx];
-  if (targetBiomeId === newBiomeId) {
+  const targetBiomeId = grid[startIndex];
+  if (targetBiomeId === biomeId) {
     return { changes: [], bounds: null };
   }
 
-  const landOnly = !!options.landOnly;
-  const elevationGrid = options.elevationGrid;
-  const seaLevel = options.seaLevel ?? 35.0;
+  const landOnly = !!options?.landOnly;
+  const elevationGrid = options?.elevationGrid;
+  const seaLevel = options?.seaLevel ?? 35.0;
 
-  // If landOnly is active and click is in ocean, don't fill
-  if (landOnly && elevationGrid && elevationGrid[startIdx] < seaLevel) {
+  // If landOnly is active and click is in ocean, do not fill
+  if (landOnly && elevationGrid && elevationGrid[startIndex] < seaLevel) {
     return { changes: [], bounds: null };
   }
 
@@ -189,8 +206,8 @@ export function floodFillBiome(
   let head = 0;
   let tail = 0;
 
-  queue[tail++] = startIdx;
-  visited[startIdx] = 1;
+  queue[tail++] = startIndex;
+  visited[startIndex] = 1;
 
   const changes: BiomeCellChange[] = [];
   let dirtyMinC = cols;
@@ -204,8 +221,8 @@ export function floodFillBiome(
     const r = Math.floor(idx / cols);
 
     const prev = grid[idx];
-    grid[idx] = newBiomeId;
-    changes.push({ gridIndex: idx, prev, next: newBiomeId });
+    grid[idx] = biomeId;
+    changes.push({ gridIndex: idx, prev, next: biomeId });
 
     if (c < dirtyMinC) dirtyMinC = c;
     if (c > dirtyMaxC) dirtyMaxC = c;
