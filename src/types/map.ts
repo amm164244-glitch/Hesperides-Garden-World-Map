@@ -132,6 +132,10 @@ export interface MapData {
 
   // Project-wide custom biome types (defaults to DEFAULT_BIOME_TYPES)
   biomeTypes?: import('./biome').BiomeType[];
+
+  // Registered custom pixel art symbols and categories saved with the map
+  customAssets?: import('./symbols').CustomMapAsset[];
+  customCategories?: import('./symbols').CustomSymbolCategory[];
 }
 
 export interface SupabaseMapRecord {

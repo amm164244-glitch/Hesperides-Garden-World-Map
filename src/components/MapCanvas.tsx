@@ -1357,9 +1357,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       const symList = symbols || [];
       const newX = Math.round(worldPos.x - draggedSymbolOffsetRef.current.x);
       const newY = Math.round(worldPos.y - draggedSymbolOffsetRef.current.y);
-      const nextSymbols = symList.map((s) =>
-        s.id === selectedSymbolId ? { ...s, x: newX, y: newY } : s
-      );
+      const nextSymbols = symList.map((s) => {
+        if (s.id === selectedSymbolId) {
+          const { autoBiomeSlot, ...rest } = s;
+          return { ...rest, x: newX, y: newY };
+        }
+        return s;
+      });
       onUpdateSymbols?.(nextSymbols);
       renderOverlay();
       return;

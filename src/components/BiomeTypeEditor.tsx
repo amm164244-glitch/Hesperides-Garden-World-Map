@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { BiomeType, BiomeSymbolRule, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { MapData } from '../types/map';
-import { CustomMapAsset, BUILTIN_SYMBOL_OPTIONS } from '../types/symbols';
+import { CustomMapAsset } from '../types/symbols';
 import {
   addBiomeType,
   countBiomeUsage,
@@ -33,6 +33,7 @@ interface BiomeTypeEditorProps {
   onSave: (updatedBiomeTypes: BiomeType[], removedSlots: number[]) => void;
   mapData: MapData;
   customAssets?: CustomMapAsset[];
+  seaLevel?: number;
 }
 
 export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
@@ -42,6 +43,7 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
   onSave,
   mapData,
   customAssets = [],
+  seaLevel,
 }) => {
   const [draftTypes, setDraftTypes] = useState<BiomeType[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<number | null>(null);
@@ -56,7 +58,11 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
   useEffect(() => {
     if (isOpen) {
       const initial = biomeTypes && biomeTypes.length > 0 ? biomeTypes : DEFAULT_BIOME_TYPES;
-      const cloned: BiomeType[] = JSON.parse(JSON.stringify(initial));
+      const cloned: BiomeType[] = JSON.parse(JSON.stringify(initial)).map((b: BiomeType) => ({
+        ...b,
+        // Purge all built-in symbol presets; retain only custom pixel art symbols
+        symbols: (b.symbols || []).filter((s) => s && s.kind === 'custom'),
+      }));
       setDraftTypes(cloned);
       setInitialSlots(new Set(cloned.map((b) => b.slot)));
       setSelectedSlot(cloned[0]?.slot ?? null);
@@ -92,13 +98,27 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
     : false;
   const hasNameError = isNameEmpty || isNameTooLong || isNameDuplicate;
 
+  const effectiveSeaLevel = Math.round(seaLevel ?? mapData?.seaLevel ?? 35);
+
+  const hasElevationError = draftTypes.some((b) =>
+    (b.symbols || []).some(
+      (s) =>
+        s.elevationMin !== undefined &&
+        s.elevationMax !== undefined &&
+        s.elevationMin > s.elevationMax
+    )
+  );
+
   // Overall validity before saving
-  const canSave = draftTypes.length > 0 && draftTypes.every((b) => {
-    const t = b.name.trim();
-    if (t.length === 0 || t.length > 20) return false;
-    const dup = draftTypes.filter((o) => o.name.trim() === t);
-    return dup.length === 1;
-  });
+  const canSave =
+    !hasElevationError &&
+    draftTypes.length > 0 &&
+    draftTypes.every((b) => {
+      const t = b.name.trim();
+      if (t.length === 0 || t.length > 20) return false;
+      const dup = draftTypes.filter((o) => o.name.trim() === t);
+      return dup.length === 1;
+    });
 
   // Handlers
   const handleAddType = () => {
@@ -559,6 +579,80 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
                                 </div>
                               </div>
                             </div>
+
+                            {/* Elevation Range (Optional) & Sea Level Indicator */}
+                            <div className="pt-2 border-t border-stone-800/80 space-y-1">
+                              <div className="flex items-center justify-between text-[11px] text-stone-400">
+                                <span className="flex items-center gap-1.5">
+                                  <span>標高の範囲 (0〜100、任意):</span>
+                                  <span className="text-[10px] text-cyan-400/80 font-mono">
+                                    海面: {effectiveSeaLevel}
+                                  </span>
+                                </span>
+                                {rule.elevationMin !== undefined &&
+                                rule.elevationMax !== undefined &&
+                                rule.elevationMin > rule.elevationMax ? (
+                                  <span className="text-rose-400 font-bold text-[10px]">
+                                    最小標高が最大標高を超えています
+                                  </span>
+                                ) : (
+                                  <span className="text-stone-500 text-[10px]">
+                                    {rule.elevationMin === undefined && rule.elevationMax === undefined
+                                      ? '全標高に配置'
+                                      : `${rule.elevationMin ?? 0} 〜 ${rule.elevationMax ?? 100}`}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 flex items-center gap-1">
+                                  <span className="text-[10px] text-stone-500">最小:</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={100}
+                                    placeholder="制限なし"
+                                    value={rule.elevationMin ?? ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value.trim();
+                                      handleUpdateSymbolRule(idx, {
+                                        elevationMin: val === '' ? undefined : Math.max(0, Math.min(100, Number(val))),
+                                      });
+                                    }}
+                                    className={`w-full bg-stone-900 border ${
+                                      rule.elevationMin !== undefined &&
+                                      rule.elevationMax !== undefined &&
+                                      rule.elevationMin > rule.elevationMax
+                                        ? 'border-rose-500 text-rose-300'
+                                        : 'border-stone-700 text-stone-200'
+                                    } rounded px-2 py-1 text-xs focus:outline-none focus:border-amber-500`}
+                                  />
+                                </div>
+                                <span className="text-stone-500 text-xs">〜</span>
+                                <div className="flex-1 flex items-center gap-1">
+                                  <span className="text-[10px] text-stone-500">最大:</span>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    max={100}
+                                    placeholder="制限なし"
+                                    value={rule.elevationMax ?? ''}
+                                    onChange={(e) => {
+                                      const val = e.target.value.trim();
+                                      handleUpdateSymbolRule(idx, {
+                                        elevationMax: val === '' ? undefined : Math.max(0, Math.min(100, Number(val))),
+                                      });
+                                    }}
+                                    className={`w-full bg-stone-900 border ${
+                                      rule.elevationMin !== undefined &&
+                                      rule.elevationMax !== undefined &&
+                                      rule.elevationMin > rule.elevationMax
+                                        ? 'border-rose-500 text-rose-300'
+                                        : 'border-stone-700 text-stone-200'
+                                    } rounded px-2 py-1 text-xs focus:outline-none focus:border-amber-500`}
+                                  />
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         );
                       })}
@@ -777,13 +871,27 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
-              {/* Custom Assets Section (Priority) */}
-              {customAssets.length > 0 && (
+              {/* Custom Registered Pixel Art Symbols Only */}
+              {customAssets.length === 0 ? (
+                <div className="py-8 px-4 text-center space-y-3 bg-stone-950/50 rounded-xl border border-dashed border-stone-800">
+                  <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-stone-200">
+                      登録済みのドット絵シンボルがありません
+                    </p>
+                    <p className="text-[11px] text-stone-400 max-w-sm mx-auto leading-relaxed">
+                      この地形タイプに配置するシンボルを追加するには、先にツールバーの「シンボルパレット」から手描きまたは画像変換でドット絵シンボルを作成・登録してください。
+                    </p>
+                  </div>
+                </div>
+              ) : (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-xs font-bold text-emerald-300 border-b border-stone-800 pb-1">
                     <span className="flex items-center gap-1.5">
                       <ImageIcon className="w-3.5 h-3.5" />
-                      自作ドット絵シンボル ({customAssets.length})
+                      登録ドット絵シンボル ({customAssets.length})
                     </span>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -800,7 +908,7 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
                             scaleMax: 1.2,
                           })
                         }
-                        className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group"
+                        className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group cursor-pointer"
                       >
                         <img
                           src={asset.dataUrl}
@@ -815,46 +923,6 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
                   </div>
                 </div>
               )}
-
-              {/* Builtin Symbols Section */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs font-bold text-amber-300 border-b border-stone-800 pb-1">
-                  <span className="flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    組み込みシンボル ({BUILTIN_SYMBOL_OPTIONS.length})
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {BUILTIN_SYMBOL_OPTIONS.map((item) => (
-                    <button
-                      key={item.type}
-                      type="button"
-                      onClick={() =>
-                        handleAddSymbolRule({
-                          kind: 'builtin',
-                          symbolType: item.type,
-                          weight: 5,
-                          scaleMin: 0.8,
-                          scaleMax: 1.2,
-                        })
-                      }
-                      className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group"
-                    >
-                      <div className="w-8 h-8 rounded bg-stone-900 border border-stone-700 flex items-center justify-center text-amber-400 shrink-0">
-                        <Sparkles className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="flex flex-col min-w-0">
-                        <span className="text-xs text-stone-300 group-hover:text-amber-200 truncate">
-                          {item.name}
-                        </span>
-                        <span className="text-[10px] text-stone-500 truncate">
-                          {item.category}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           </div>
         </div>

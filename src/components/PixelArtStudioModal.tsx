@@ -32,6 +32,7 @@ interface PixelArtStudioModalProps {
   categories: CustomSymbolCategory[];
   onAddCategory: (category: CustomSymbolCategory) => void;
   onSaveCustomAsset: (asset: CustomMapAsset) => void;
+  onDeleteCustomAsset?: (assetId: string) => void;
   initialAsset?: CustomMapAsset | null;
 }
 
@@ -72,239 +73,13 @@ const PALETTES = {
   },
 };
 
-// Starter Pixel Art Templates (16x16 and 24x24)
-interface PixelTemplate {
-  name: string;
-  icon: string;
-  category: string;
-  size: number;
-  generate: () => string[][];
-}
-
-const TEMPLATES: PixelTemplate[] = [
-  {
-    name: '村の家 (Hamlet)',
-    icon: '🛖',
-    category: '',
-    size: 16,
-    generate: () => {
-      const g = Array.from({ length: 16 }, () => Array(16).fill(''));
-      const R = '#942929'; // Roof
-      const RD = '#661a1a'; // Roof dark
-      const W = '#faf3e3'; // Wall
-      const WS = '#d9ba8f'; // Wall shade
-      const D = '#3d2e24'; // Door
-      const I = '#1a1714'; // Outline
-      // Roof triangle
-      for (let x = 7; x <= 8; x++) g[2][x] = R;
-      for (let x = 6; x <= 9; x++) g[3][x] = R;
-      for (let x = 5; x <= 10; x++) g[4][x] = R;
-      for (let x = 4; x <= 11; x++) g[5][x] = R;
-      for (let x = 3; x <= 12; x++) g[6][x] = R;
-      for (let x = 2; x <= 13; x++) g[7][x] = RD;
-      // Walls
-      for (let y = 8; y <= 13; y++) {
-        for (let x = 3; x <= 12; x++) {
-          g[y][x] = x > 8 ? WS : W;
-        }
-      }
-      // Door
-      for (let y = 10; y <= 13; y++) {
-        g[y][7] = D;
-        g[y][8] = D;
-      }
-      // Outline trim
-      for (let x = 2; x <= 13; x++) g[7][x] = I;
-      for (let y = 8; y <= 13; y++) {
-        g[y][3] = I;
-        g[y][12] = I;
-      }
-      for (let x = 3; x <= 12; x++) g[14][x] = I;
-      return g;
-    },
-  },
-  {
-    name: '城砦・尖塔 (Castle)',
-    icon: '🏰',
-    category: '',
-    size: 24,
-    generate: () => {
-      const g = Array.from({ length: 24 }, () => Array(24).fill(''));
-      const S = '#faf3e3'; // Stone light
-      const SD = '#9e7955'; // Stone dark
-      const R = '#1b3f6b'; // Roof blue
-      const RD = '#11253d'; // Roof dark
-      const I = '#1a1714'; // Ink outline
-      const G = '#f7d048'; // Gold flag
-      // Flag
-      g[1][12] = G; g[1][13] = G; g[2][12] = G;
-      g[1][11] = I; g[2][11] = I; g[3][11] = I;
-      // Roof spire
-      for (let y = 4; y <= 8; y++) {
-        const spread = y - 4;
-        for (let x = 11 - spread; x <= 12 + spread; x++) {
-          g[y][x] = x > 11 ? RD : R;
-        }
-      }
-      // Central Keep
-      for (let y = 9; y <= 21; y++) {
-        for (let x = 7; x <= 16; x++) {
-          g[y][x] = x > 11 ? SD : S;
-        }
-      }
-      // Left Bastion
-      for (let y = 13; y <= 21; y++) {
-        for (let x = 4; x <= 6; x++) g[y][x] = S;
-      }
-      // Right Bastion
-      for (let y = 13; y <= 21; y++) {
-        for (let x = 17; x <= 19; x++) g[y][x] = SD;
-      }
-      // Battlements
-      g[12][4] = S; g[12][6] = S;
-      g[12][17] = SD; g[12][19] = SD;
-      // Gate
-      for (let y = 17; y <= 21; y++) {
-        g[y][11] = I; g[y][12] = I;
-      }
-      g[16][11] = I; g[16][12] = I;
-      // Base line
-      for (let x = 3; x <= 20; x++) g[22][x] = I;
-      return g;
-    },
-  },
-  {
-    name: 'モミの木 (Pine Tree)',
-    icon: '🌲',
-    category: 'cat_nature',
-    size: 16,
-    generate: () => {
-      const g = Array.from({ length: 16 }, () => Array(16).fill(''));
-      const L = '#74c25c'; // Foliage light
-      const D = '#1e4d2b'; // Foliage dark
-      const T = '#664c38'; // Trunk
-      const I = '#1a1714'; // Outline
-      // Top layer
-      g[2][7] = L; g[2][8] = D;
-      for (let x = 6; x <= 9; x++) g[3][x] = x > 7 ? D : L;
-      for (let x = 5; x <= 10; x++) g[4][x] = x > 7 ? D : L;
-      // Mid layer
-      for (let x = 6; x <= 9; x++) g[5][x] = x > 7 ? D : L;
-      for (let x = 4; x <= 11; x++) g[6][x] = x > 7 ? D : L;
-      for (let x = 3; x <= 12; x++) g[7][x] = x > 7 ? D : L;
-      // Bottom layer
-      for (let x = 5; x <= 10; x++) g[8][x] = x > 7 ? D : L;
-      for (let x = 3; x <= 12; x++) g[9][x] = x > 7 ? D : L;
-      for (let x = 2; x <= 13; x++) g[10][x] = x > 7 ? D : L;
-      for (let x = 1; x <= 14; x++) g[11][x] = x > 7 ? D : L;
-      // Trunk
-      for (let y = 12; y <= 14; y++) {
-        g[y][7] = T; g[y][8] = T;
-      }
-      g[15][6] = I; g[15][7] = I; g[15][8] = I; g[15][9] = I;
-      return g;
-    },
-  },
-  {
-    name: '魔導士の尖塔 (Tower)',
-    icon: '🔮',
-    category: 'cat_town',
-    size: 24,
-    generate: () => {
-      const g = Array.from({ length: 24 }, () => Array(24).fill(''));
-      const M = '#e04f36'; // Crystal orb
-      const T = '#9e7955'; // Tower light
-      const TD = '#4a3828'; // Tower dark
-      const R = '#942929'; // Spire roof
-      const B = '#7ac4e8'; // Magic aura
-      // Floating Magic Orb
-      g[2][11] = M; g[2][12] = M; g[1][11] = B; g[3][12] = B;
-      // Spire
-      g[5][11] = R; g[5][12] = R;
-      for (let y = 6; y <= 9; y++) {
-        const w = y - 5;
-        for (let x = 11 - w; x <= 12 + w; x++) g[y][x] = x > 11 ? TD : R;
-      }
-      // Tower Body
-      for (let y = 10; y <= 21; y++) {
-        for (let x = 8; x <= 15; x++) {
-          g[y][x] = x > 11 ? TD : T;
-        }
-      }
-      // Windows
-      g[13][11] = B; g[13][12] = B;
-      g[17][11] = B; g[17][12] = B;
-      // Base
-      for (let x = 6; x <= 17; x++) g[22][x] = TD;
-      return g;
-    },
-  },
-  {
-    name: '洞窟ダンジョン (Cave)',
-    icon: '💀',
-    category: 'cat_dungeon',
-    size: 24,
-    generate: () => {
-      const g = Array.from({ length: 24 }, () => Array(24).fill(''));
-      const M = '#9e7955'; // Rock light
-      const MD = '#4a3828'; // Rock dark
-      const I = '#14110d'; // Deep cave mouth
-      const R = '#e04f36'; // Red eye in the dark
-      // Mountain Mound
-      for (let y = 8; y <= 21; y++) {
-        const w = Math.floor((y - 7) * 0.9);
-        for (let x = 12 - w; x <= 12 + w; x++) {
-          if (x >= 2 && x <= 22) g[y][x] = x > 12 ? MD : M;
-        }
-      }
-      // Cave Entrance arch
-      for (let y = 14; y <= 21; y++) {
-        for (let x = 9; x <= 15; x++) g[y][x] = I;
-      }
-      g[13][10] = I; g[13][11] = I; g[13][12] = I; g[13][13] = I; g[13][14] = I;
-      // Glowing monster eyes inside
-      g[16][11] = R; g[16][13] = R;
-      return g;
-    },
-  },
-  {
-    name: '宝箱 (Chest)',
-    icon: '💎',
-    category: 'cat_quest',
-    size: 16,
-    generate: () => {
-      const g = Array.from({ length: 16 }, () => Array(16).fill(''));
-      const W = '#9e7955'; // Wood
-      const WD = '#664c38'; // Wood dark
-      const G = '#f7d048'; // Gold trim
-      const I = '#1a1714'; // Outline
-      // Top lid
-      for (let x = 3; x <= 12; x++) g[5][x] = G;
-      for (let y = 6; y <= 8; y++) {
-        for (let x = 3; x <= 12; x++) {
-          g[y][x] = x === 3 || x === 12 || x === 7 || x === 8 ? G : (x > 7 ? WD : W);
-        }
-      }
-      // Lock
-      g[8][7] = G; g[8][8] = G; g[9][7] = G; g[9][8] = G;
-      // Body
-      for (let y = 9; y <= 12; y++) {
-        for (let x = 3; x <= 12; x++) {
-          g[y][x] = x === 3 || x === 12 || x === 7 || x === 8 ? G : (x > 7 ? WD : W);
-        }
-      }
-      for (let x = 2; x <= 13; x++) g[13][x] = I;
-      return g;
-    },
-  },
-];
-
 export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
   isOpen,
   onClose,
   categories,
   onAddCategory,
   onSaveCustomAsset,
+  onDeleteCustomAsset,
   initialAsset,
 }) => {
   // Grid size
@@ -334,6 +109,9 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
     initialAsset?.category || (categories[0]?.id ?? '')
   );
 
+  // In-editor delete confirmation
+  const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
+
   // Quick category creation inside modal
   const [isAddingCategory, setIsAddingCategory] = useState<boolean>(false);
   const [newCatName, setNewCatName] = useState<string>('');
@@ -349,6 +127,7 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
   // Sync state if initialAsset changes or modal opens
   useEffect(() => {
     if (isOpen) {
+      setConfirmDelete(false);
       if (initialAsset) {
         setSymbolName(initialAsset.name);
         setSelectedCategory(initialAsset.category);
@@ -362,15 +141,14 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
       } else {
         setSymbolName('新規ドット絵シンボル');
         setSelectedCategory(categories[0]?.id ?? 'cat_village');
-        // Default to a cute village house template so the canvas isn't totally blank
-        const sample = TEMPLATES[0].generate();
-        setGridSize(16);
-        setGrid(sample);
+        // Clean blank canvas
+        setGridSize(24);
+        setGrid(Array.from({ length: 24 }, () => Array(24).fill('')));
       }
       setHistory([]);
       setRedoStack([]);
     }
-  }, [isOpen, initialAsset]);
+  }, [isOpen, initialAsset, categories]);
 
   // Push to history before making modifications
   const pushHistory = useCallback((currentGrid: string[][]) => {
@@ -506,17 +284,6 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
   const handleClear = () => {
     pushHistory(grid);
     setGrid(Array.from({ length: gridSize }, () => Array(gridSize).fill('')));
-  };
-
-  // Apply Template
-  const handleApplyTemplate = (tpl: PixelTemplate) => {
-    pushHistory(grid);
-    setGridSize(tpl.size);
-    setGrid(tpl.generate());
-    setSymbolName(tpl.name);
-    if (categories.some((c) => c.id === tpl.category)) {
-      setSelectedCategory(tpl.category);
-    }
   };
 
   // Canvas Mouse / Pointer Event Handling
@@ -1213,37 +980,55 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
               </div>
             </div>
 
-            {/* Starter Templates */}
-            <div className="bg-[#191612] p-3 rounded-xl border border-[#2d261e] space-y-2">
-              <span className="text-xs font-bold text-[#c4b59d] block">
-                ドット絵テンプレート（下絵読み込み）
-              </span>
-              <div className="grid grid-cols-2 gap-1.5">
-                {TEMPLATES.map((tpl) => (
-                  <button
-                    key={tpl.name}
-                    onClick={() => handleApplyTemplate(tpl)}
-                    className="flex items-center gap-1.5 p-1.5 rounded-lg bg-[#241f19] hover:bg-[#2f271f] text-left transition-colors text-xs text-[#d9ba8f]"
-                    title={`${tpl.name} を読み込む`}
-                  >
-                    <span>{tpl.icon}</span>
-                    <span className="truncate text-[11px]">{tpl.name.split(' ')[0]}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
 
         {/* Footer Actions */}
         <div className="px-6 py-3.5 border-t border-[#2d261e] bg-[#1a1713] flex items-center justify-between">
-          <button
-            onClick={handleDownload}
-            className="px-3 py-1.5 rounded-lg bg-[#241f19] hover:bg-[#2e2720] text-xs font-medium text-[#c4b59d] hover:text-[#f5ebd9] flex items-center gap-1.5 transition-colors border border-[#3d3326]"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>PNG画像書き出し</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDownload}
+              className="px-3 py-1.5 rounded-lg bg-[#241f19] hover:bg-[#2e2720] text-xs font-medium text-[#c4b59d] hover:text-[#f5ebd9] flex items-center gap-1.5 transition-colors border border-[#3d3326]"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>PNG画像書き出し</span>
+            </button>
+
+            {initialAsset && onDeleteCustomAsset && (
+              confirmDelete ? (
+                <div className="flex items-center gap-1.5 bg-red-950/80 border border-red-700/60 rounded-lg px-2.5 py-1">
+                  <span className="text-[11px] text-red-200 font-bold">本当に削除しますか？</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDeleteCustomAsset(initialAsset.id);
+                      onClose();
+                    }}
+                    className="px-2.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold cursor-pointer transition-colors"
+                  >
+                    削除
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="px-2.5 py-0.5 rounded bg-stone-700 hover:bg-stone-600 text-stone-200 text-[11px] cursor-pointer transition-colors"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  className="px-3 py-1.5 rounded-lg bg-red-950/30 hover:bg-red-900/50 text-xs font-medium text-red-400 hover:text-red-300 flex items-center gap-1.5 transition-colors border border-red-900/40 cursor-pointer"
+                  title="このシンボルを削除"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>このシンボルを削除</span>
+                </button>
+              )
+            )}
+          </div>
 
           <div className="flex items-center gap-2">
             <button

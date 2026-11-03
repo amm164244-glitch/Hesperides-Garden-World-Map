@@ -416,8 +416,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <button
           type="button"
           onClick={onOpenStorage}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 flex items-center gap-1.5 border border-emerald-600/50 transition-all shadow-sm"
-          title="JSON保存/読込、Supabase連携"
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 flex items-center gap-1.5 border border-emerald-600/50 transition-all shadow-sm cursor-pointer"
+          title="地図データの保存 / 読込 (JSON)"
         >
           <Layers className="w-3.5 h-3.5" />
           <span>保存 / 読込</span>

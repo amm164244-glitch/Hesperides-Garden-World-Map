@@ -50,9 +50,14 @@ export function ensureFloat32Array(input: any, expectedLength?: number): Float32
 }
 
 /**
- * Prepares MapData for JSON export or Supabase database storage with Base64 compressed typed arrays.
+ * Prepares MapData for JSON export with Base64 compressed typed arrays,
+ * including all custom pixel art assets and custom categories.
  */
-export function serializeMapData(mapData: MapData): any {
+export function serializeMapData(
+  mapData: MapData,
+  customAssets?: import('../types/symbols').CustomMapAsset[],
+  customCategories?: import('../types/symbols').CustomSymbolCategory[]
+): any {
   const regionalMapsSerialized: Record<string, any> = {};
 
   if (mapData.regionalMaps) {
@@ -73,10 +78,15 @@ export function serializeMapData(mapData: MapData): any {
     }
   }
 
+  const assetsToSave = customAssets ?? mapData.customAssets ?? [];
+  const categoriesToSave = customCategories ?? mapData.customCategories ?? [];
+
   return {
     ...mapData,
     biomeTypes: mapData.biomeTypes || DEFAULT_BIOME_TYPES,
     symbols: mapData.symbols || [],
+    customAssets: assetsToSave,
+    customCategories: categoriesToSave,
     elevationGridBase64: float32ToBase64(mapData.elevationGrid),
     temperatureGridBase64: float32ToBase64(mapData.temperatureGrid),
     biomeGridBase64: mapData.biomeGrid ? biomeGridToBase64(mapData.biomeGrid) : undefined,
@@ -194,6 +204,8 @@ export function deserializeMapData(raw: any): MapData {
     biomeGrid,
     biomeTypes,
     symbols: Array.isArray(raw.symbols) ? raw.symbols : [],
+    customAssets: Array.isArray(raw.customAssets) ? raw.customAssets : undefined,
+    customCategories: Array.isArray(raw.customCategories) ? raw.customCategories : undefined,
     regionalMaps,
     cells: Array.isArray(raw.cells) ? raw.cells : [],
     config: raw.config || {

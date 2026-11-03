@@ -160,6 +160,7 @@ export interface MapSymbolInstance {
   flipX?: boolean;        // Mirror horizontally for visual variety
   variant?: number;       // 0, 1, 2 for subtle ridge/branch variations
   colorOverride?: Partial<SymbolColorTheme>; // Optional individual tint override
+  autoBiomeSlot?: number; // Automatically placed by biome slot; stripped if manually modified
 }
 
 export interface SymbolToolSettings {

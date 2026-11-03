@@ -16,6 +16,8 @@ import {
   PackagePlus,
   Layers,
   ChevronDown,
+  Download,
+  Upload,
 } from 'lucide-react';
 import {
   SymbolToolSettings,
@@ -23,6 +25,7 @@ import {
   CustomSymbolCategory,
 } from '../types/symbols';
 import { BrushMode } from '../types/map';
+import { parseSymbolLibraryJson } from '../utils/assetStorage';
 
 interface SymbolPaletteProps {
   brushMode: BrushMode;
@@ -42,6 +45,8 @@ interface SymbolPaletteProps {
   showSymbols: boolean;
   onToggleShowSymbols: () => void;
   onClose: () => void;
+  onExportSymbols?: () => void;
+  onImportSymbols?: (assets: CustomMapAsset[], categories: CustomSymbolCategory[]) => void;
 }
 
 export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
@@ -62,10 +67,16 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
   showSymbols,
   onToggleShowSymbols,
   onClose,
+  onExportSymbols,
+  onImportSymbols,
 }) => {
   const [activeCategoryId, setActiveCategoryId] = useState<string>('all');
   const [showCategoryManager, setShowCategoryManager] = useState<boolean>(false);
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+
+  // In-app deletion confirmation states (reliable in iframe where window.confirm is suppressed)
+  const [assetToDelete, setAssetToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
 
   // Form states for creating / editing category
   const [catNameInput, setCatNameInput] = useState<string>('');
@@ -515,6 +526,49 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
             <span className="text-xs font-bold text-[#c4b59d]">
               登録ドット絵シンボル ({filteredSymbols.length})
             </span>
+            <div className="flex items-center gap-1.5 text-[11px]">
+              {onExportSymbols && customAssets.length > 0 && (
+                <button
+                  type="button"
+                  onClick={onExportSymbols}
+                  className="px-2 py-0.5 rounded bg-[#241f19] hover:bg-[#2e261f] text-[#c4b59d] hover:text-[#f5ebd9] border border-[#3d3326] flex items-center gap-1 transition cursor-pointer"
+                  title="登録ドット絵シンボルをバックアップJSONファイルとして保存"
+                >
+                  <Download className="w-3 h-3 text-amber-400" />
+                  <span>保存</span>
+                </button>
+              )}
+              {onImportSymbols && (
+                <label
+                  className="px-2 py-0.5 rounded bg-[#241f19] hover:bg-[#2e261f] text-[#c4b59d] hover:text-[#f5ebd9] border border-[#3d3326] flex items-center gap-1 transition cursor-pointer"
+                  title="ドット絵シンボルのバックアップJSONファイルを読み込んで復元"
+                >
+                  <Upload className="w-3 h-3 text-emerald-400" />
+                  <span>読込</span>
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = (ev) => {
+                        try {
+                          const jsonStr = ev.target?.result as string;
+                          const { assets, categories: cats } = parseSymbolLibraryJson(jsonStr);
+                          onImportSymbols(assets, cats);
+                        } catch (err) {
+                          console.warn('Failed to parse symbols json:', err);
+                        }
+                      };
+                      reader.readAsText(file);
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              )}
+            </div>
           </div>
 
           {filteredSymbols.length === 0 ? (
@@ -570,32 +624,65 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
                     }}
                   >
                     {/* Action buttons on card */}
-                    <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 rounded px-1 py-0.5 backdrop-blur-sm z-10">
+                    <div className="absolute top-1.5 right-1.5 flex items-center gap-1 opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity bg-black/75 rounded-md px-1.5 py-1 backdrop-blur-sm z-10">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           onOpenPixelStudio(asset);
                         }}
-                        className="p-1 text-stone-300 hover:text-amber-300 transition-colors"
+                        className="p-1 text-stone-300 hover:text-amber-300 transition-colors cursor-pointer"
                         title="ドット絵エディタで再編集"
                       >
-                        <Edit2 className="w-3 h-3" />
+                        <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm(`シンボル「${asset.name}」を削除しますか？`)) {
-                            onDeleteCustomAsset(asset.id);
-                          }
+                          setAssetToDelete({ id: asset.id, name: asset.name });
                         }}
-                        className="p-1 text-stone-300 hover:text-red-400 transition-colors"
+                        className="p-1 text-stone-300 hover:text-red-400 transition-colors cursor-pointer"
                         title="シンボルを削除"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
+
+                    {/* In-card Delete Confirmation Overlay */}
+                    {assetToDelete?.id === asset.id && (
+                      <div
+                        className="absolute inset-0 bg-[#0e0c0a]/95 rounded-xl p-2 flex flex-col items-center justify-center text-center z-20 border border-red-800/80 shadow-lg animate-in fade-in zoom-in-95 duration-150"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <p className="text-[11px] font-bold text-red-300 mb-2 leading-tight px-1">
+                          「{asset.name}」を削除しますか？
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteCustomAsset(asset.id);
+                              setAssetToDelete(null);
+                            }}
+                            className="px-2.5 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold shadow cursor-pointer transition-colors"
+                          >
+                            削除
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setAssetToDelete(null);
+                            }}
+                            className="px-2.5 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-200 text-[11px] cursor-pointer transition-colors"
+                          >
+                            戻る
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Pixel Art Preview Image */}
                     <div className="w-14 h-14 flex items-center justify-center p-1 rounded-lg bg-[#0e0c0a] border border-[#2d261e] mb-1.5">
@@ -637,7 +724,7 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
             </span>
             <button
               onClick={onToggleShowSymbols}
-              className={`p-1 rounded flex items-center gap-1 text-xs transition-colors ${
+              className={`p-1 rounded flex items-center gap-1 text-xs transition-colors cursor-pointer ${
                 showSymbols ? 'text-amber-400' : 'text-stone-500'
               }`}
               title="配置済みシンボルの表示/非表示切り替え"
@@ -647,21 +734,46 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
             </button>
           </div>
 
-          {/* Wipe All Placed Symbols Button */}
-          <button
-            onClick={() => {
-              if (symbolCount === 0) return;
-              if (confirm('地図上に配置されたすべてのシンボルを消去しますか？（元に戻すことも可能です）')) {
-                onClearSymbols();
-              }
-            }}
-            disabled={symbolCount === 0}
-            className="w-full py-2 px-3 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/40 text-red-300 disabled:opacity-40 disabled:pointer-events-none text-xs font-medium flex items-center justify-center gap-2 transition-colors"
-            title="地図上のすべての配置シンボルを消去"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>キャンバス上の全シンボルを消去</span>
-          </button>
+          {/* Wipe All Placed Symbols Button with In-App Confirmation */}
+          {confirmClearAll ? (
+            <div className="p-2 rounded-lg bg-red-950/80 border border-red-700/60 flex flex-col items-center gap-1.5 text-center animate-in fade-in duration-150">
+              <span className="text-xs text-red-200 font-bold">
+                配置済みの全シンボルを消去しますか？
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClearSymbols();
+                    setConfirmClearAll(false);
+                  }}
+                  className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow cursor-pointer transition-colors"
+                >
+                  はい、消去する
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearAll(false)}
+                  className="px-3 py-1 rounded bg-stone-700 hover:bg-stone-600 text-stone-200 text-xs cursor-pointer transition-colors"
+                >
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                if (symbolCount === 0) return;
+                setConfirmClearAll(true);
+              }}
+              disabled={symbolCount === 0}
+              className="w-full py-2 px-3 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/40 text-red-300 disabled:opacity-40 disabled:pointer-events-none text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              title="地図上のすべての配置シンボルを消去"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>キャンバス上の全シンボルを消去</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

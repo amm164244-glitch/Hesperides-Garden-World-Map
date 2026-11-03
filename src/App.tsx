@@ -28,7 +28,7 @@ import { Toolbar } from './components/Toolbar';
 import { GeneratorPanel } from './components/GeneratorPanel';
 import { MapCanvas } from './components/MapCanvas';
 import { InspectorBar } from './components/InspectorBar';
-import { SupabaseModal } from './components/SupabaseModal';
+import { MapStorageModal } from './components/MapStorageModal';
 import { RegionSelector } from './components/RegionSelector';
 import { SymbolPalette } from './components/SymbolPalette';
 import { BiomePalette } from './components/BiomePalette';
@@ -45,6 +45,14 @@ import {
   DEFAULT_CUSTOM_CATEGORIES,
   DEFAULT_SYMBOL_COLOR_THEME,
 } from './types/symbols';
+import {
+  getInitialAssetsFromLocalStorage,
+  getInitialCategoriesFromLocalStorage,
+  loadPersistentAssets,
+  persistCustomAssets,
+  persistCustomCategories,
+  exportSymbolLibraryToJson,
+} from './utils/assetStorage';
 
 // Global Planetary 2:1 Aspect Ratio
 export const getResolutionDimensions = (gridRes: string) => {
@@ -271,33 +279,15 @@ export default function App() {
     opacity: 55,
   });
 
-  // Custom Categories (Starts empty, persisted in localStorage)
+  // Custom Categories (Persisted in IndexedDB + LocalStorage)
   const [categories, setCategories] = useState<CustomSymbolCategory[]>(() => {
-    try {
-      const saved = localStorage.getItem('fantasy_map_custom_categories');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // If stored categories are just the legacy default 5, purge them so it starts empty as requested
-          const isOldDefaults = parsed.length === 5 &&
-            parsed.every((c: any) => ['cat_village', 'cat_town', 'cat_dungeon', 'cat_nature', 'cat_quest'].includes(c?.id));
-          if (!isOldDefaults) {
-            return parsed;
-          }
-        }
-      }
-      return [];
-    } catch {
-      return [];
-    }
+    return getInitialCategoriesFromLocalStorage();
   });
 
   const handleAddCategory = useCallback((cat: CustomSymbolCategory) => {
     setCategories((prev) => {
       const next = [...prev, cat];
-      try {
-        localStorage.setItem('fantasy_map_custom_categories', JSON.stringify(next));
-      } catch {}
+      persistCustomCategories(next);
       return next;
     });
   }, []);
@@ -305,9 +295,7 @@ export default function App() {
   const handleUpdateCategory = useCallback((cat: CustomSymbolCategory) => {
     setCategories((prev) => {
       const next = prev.map((c) => (c.id === cat.id ? cat : c));
-      try {
-        localStorage.setItem('fantasy_map_custom_categories', JSON.stringify(next));
-      } catch {}
+      persistCustomCategories(next);
       return next;
     });
   }, []);
@@ -315,59 +303,65 @@ export default function App() {
   const handleDeleteCategory = useCallback((catId: string) => {
     setCategories((prev) => {
       const next = prev.filter((c) => c.id !== catId);
-      try {
-        localStorage.setItem('fantasy_map_custom_categories', JSON.stringify(next));
-      } catch {}
+      persistCustomCategories(next);
       return next;
     });
     setCustomAssets((prev) => {
       const next = prev.map((a) => (a.category === catId ? { ...a, category: '' } : a));
-      try {
-        localStorage.setItem('fantasy_map_custom_assets', JSON.stringify(next));
-      } catch {}
+      persistCustomAssets(next);
       return next;
     });
   }, []);
 
-  // User-created Custom Map Pixel Assets (Starts empty - user creates their own)
+  // User-created Custom Map Pixel Assets (Persisted in IndexedDB + LocalStorage)
   const [customAssets, setCustomAssets] = useState<CustomMapAsset[]>(() => {
-    try {
-      const saved = localStorage.getItem('fantasy_map_custom_assets');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((a: any) => a && !a.id.startsWith('starter_'));
-        }
-      }
-      return [];
-    } catch {
-      return [];
-    }
+    return getInitialAssetsFromLocalStorage();
   });
 
-  // Ensure clean state on mount (purge any previous starter symbols and old default categories)
+  // Restore and sync full persistent assets from IndexedDB on startup
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('fantasy_map_custom_assets');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const userOnly = parsed.filter((a: any) => a && !a.id.startsWith('starter_'));
-          localStorage.setItem('fantasy_map_custom_assets', JSON.stringify(userOnly));
-        }
+    loadPersistentAssets().then((assets) => {
+      if (assets.length > 0) {
+        setCustomAssets((prev) => {
+          const map = new Map<string, CustomMapAsset>();
+          for (const a of prev) map.set(a.id, a);
+          for (const a of assets) map.set(a.id, a);
+          return Array.from(map.values());
+        });
       }
-      const savedCats = localStorage.getItem('fantasy_map_custom_categories');
-      if (savedCats) {
-        const parsed = JSON.parse(savedCats);
-        if (Array.isArray(parsed)) {
-          const isOldDefaults = parsed.length === 5 &&
-            parsed.every((c: any) => ['cat_village', 'cat_town', 'cat_dungeon', 'cat_nature', 'cat_quest'].includes(c?.id));
-          if (isOldDefaults) {
-            localStorage.removeItem('fantasy_map_custom_categories');
-          }
-        }
-      }
-    } catch {}
+    });
+  }, []);
+
+  // Continuous background persistence whenever customAssets changes
+  useEffect(() => {
+    persistCustomAssets(customAssets);
+  }, [customAssets]);
+
+  // Continuous background persistence whenever categories changes
+  useEffect(() => {
+    persistCustomCategories(categories);
+  }, [categories]);
+
+  // Import custom symbol library handler (from standalone JSON backup or map file)
+  const handleImportSymbols = useCallback((importedAssets: CustomMapAsset[], importedCategories: CustomSymbolCategory[]) => {
+    setCustomAssets((prev) => {
+      const map = new Map<string, CustomMapAsset>();
+      for (const a of prev) map.set(a.id, a);
+      for (const a of importedAssets) map.set(a.id, a);
+      const merged = Array.from(map.values());
+      persistCustomAssets(merged);
+      return merged;
+    });
+    if (Array.isArray(importedCategories) && importedCategories.length > 0) {
+      setCategories((prev) => {
+        const map = new Map<string, CustomSymbolCategory>();
+        for (const c of prev) map.set(c.id, c);
+        for (const c of importedCategories) map.set(c.id, c);
+        const merged = Array.from(map.values());
+        persistCustomCategories(merged);
+        return merged;
+      });
+    }
   }, []);
 
   const [symbolToolSettings, setSymbolToolSettings] = useState<SymbolToolSettings>(() => {
@@ -432,6 +426,27 @@ export default function App() {
         return { ...prev, selectedCustomAssetId: null };
       }
       return prev;
+    });
+    // Also remove placed map symbols of this deleted custom asset
+    setMapData((prev) => {
+      const hasInWorld = prev.symbols?.some((s) => s.customAssetId === assetId);
+      let regionalChanged = false;
+      const updatedRegionalMaps = { ...prev.regionalMaps };
+      for (const regId of Object.keys(updatedRegionalMaps)) {
+        if (updatedRegionalMaps[regId].symbols?.some((s) => s.customAssetId === assetId)) {
+          regionalChanged = true;
+          updatedRegionalMaps[regId] = {
+            ...updatedRegionalMaps[regId],
+            symbols: updatedRegionalMaps[regId].symbols.filter((s) => s.customAssetId !== assetId),
+          };
+        }
+      }
+      if (!hasInWorld && !regionalChanged) return prev;
+      return {
+        ...prev,
+        symbols: prev.symbols?.filter((s) => s.customAssetId !== assetId) || [],
+        regionalMaps: updatedRegionalMaps,
+      };
     });
   }, []);
 
@@ -1207,6 +1222,8 @@ export default function App() {
               onClearSymbols={handleClearSymbols}
               showSymbols={showSymbols}
               onToggleShowSymbols={() => setShowSymbols((v) => !v)}
+              onExportSymbols={() => exportSymbolLibraryToJson(customAssets, categories)}
+              onImportSymbols={handleImportSymbols}
               onClose={() => setIsSymbolPaletteOpen(false)}
             />
           </div>
@@ -1238,6 +1255,7 @@ export default function App() {
           categories={categories}
           onAddCategory={handleAddCategory}
           onSaveCustomAsset={handleSaveCustomAsset}
+          onDeleteCustomAsset={handleDeleteCustomAsset}
           initialAsset={editingPixelAsset}
         />
 
@@ -1291,6 +1309,7 @@ export default function App() {
           onSave={handleSaveBiomeTypes}
           mapData={mapData}
           customAssets={customAssets}
+          seaLevel={activeRegionalMap ? activeRegionalMap.seaLevel : mapData.seaLevel}
         />
       </div>
 
@@ -1304,16 +1323,34 @@ export default function App() {
       </footer>
 
       {/* Storage Modal */}
-      <SupabaseModal
+      <MapStorageModal
         isOpen={isStorageOpen}
         onClose={() => setIsStorageOpen(false)}
         mapData={mapData}
-        onLoadMap={(loadedMap) => {
+        customAssets={customAssets}
+        categories={categories}
+        onLoadMap={(loadedMap, loadedAssets, loadedCategories) => {
           setMapData(loadedMap);
           if (loadedMap.biomeTypes && loadedMap.biomeTypes.length > 0) {
             setBiomeTypes(loadedMap.biomeTypes);
           } else {
             setBiomeTypes(DEFAULT_BIOME_TYPES);
+          }
+          if (Array.isArray(loadedAssets) && loadedAssets.length > 0) {
+            setCustomAssets((prev) => {
+              const map = new Map<string, CustomMapAsset>();
+              for (const a of prev) map.set(a.id, a);
+              for (const a of loadedAssets) map.set(a.id, a);
+              return Array.from(map.values());
+            });
+          }
+          if (Array.isArray(loadedCategories) && loadedCategories.length > 0) {
+            setCategories((prev) => {
+              const map = new Map<string, CustomSymbolCategory>();
+              for (const c of prev) map.set(c.id, c);
+              for (const c of loadedCategories) map.set(c.id, c);
+              return Array.from(map.values());
+            });
           }
           setConfig(loadedMap.config);
           setActiveRegionId(null);
@@ -1322,6 +1359,7 @@ export default function App() {
           setRedoStack([]);
           handleResetView();
         }}
+        onImportSymbols={handleImportSymbols}
       />
     </div>
   );

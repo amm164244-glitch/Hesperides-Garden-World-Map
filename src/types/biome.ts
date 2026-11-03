@@ -11,6 +11,8 @@ export interface BiomeSymbolRule {
   weight: number;                 // 1〜10(選ばれやすさ)
   scaleMin: number;               // 0.3〜3(初期値 0.8)
   scaleMax: number;               // scaleMin 以上、3 まで(初期値 1.2)
+  elevationMin?: number;          // 標高の最小値 (0〜100、任意。未設定なら制限なし)
+  elevationMax?: number;          // 標高の最大値 (0〜100、任意。未設定なら制限なし)
 }
 
 export interface BiomeType {
