@@ -70,7 +70,7 @@ export function generateTectonicWorld(
   const cellH = height / (gridRows - 1);
 
   const warpScale = 0.0018;
-  const warpStrength = 0.35 + (((config as any).coastlineComplexity ?? 5) / 10) * 0.4;
+  const warpStrength = 0.35 + ((config.coastlineComplexity ?? 8) / 10) * 0.45;
   const mountainMult = (config.mountainStrength / 5.0); // 0.2 ~ 2.0
   const islandDensityFactor = Math.max(1, Math.min(10, config.islandDensity || 5)) / 5.0; // 0.2 ~ 2.0
 
@@ -307,63 +307,11 @@ export function generateTectonicWorld(
     }
   }
 
-  // 4.5. RIA COASTLINE & SERRATED SHORELINE SYNTHESIS (リアス式海岸・ギザギザ海岸線の自動生成)
-  // Real coastlines feature dendritic drowned valleys (rias), rocky jagged headlands,
-  // narrow fjords, and chains of coastal barrier islets.
-  onProgress?.(68, 'リアス海岸・複雑な海岸線フラクタルを刻み込み中...');
-  const riaNoise = new Noise2D(seed + 8819);
-  const riaDetailNoise = new Noise2D(seed + 4127);
-  const riaComplexity = config.coastlineComplexity !== undefined ? config.coastlineComplexity : 7;
-  const riaIntensity = Math.max(0.1, Math.min(1.0, riaComplexity / 10.0));
-
-  for (let r = 0; r < gridRows; r++) {
-    const wy = r * cellH;
-    const rowOffset = r * gridCols;
-
-    for (let c = 0; c < gridCols; c++) {
-      const idx = rowOffset + c;
-      const curElev = elevationGrid[idx];
-      const dCoast = Math.abs(curElev - STANDARD_SEA_LEVEL);
-
-      // Apply ria fractal displacement specifically along coastal transition margin
-      if (dCoast < 16.0) {
-        const wx = c * cellW;
-        // Peak influence right at sea level (dCoast = 0), fading out inland and to deep sea
-        const coastWeight = Math.pow(Math.max(0.0, 1.0 - dCoast / 16.0), 1.25);
-
-        // 1. Meso bays and rugged peninsulas
-        const bayNoise = riaNoise.fbm(wx * 0.0055, wy * 0.0055, 3, 0.52, 2.05);
-
-        // 2. Dendritic ria fjords (drowned valleys) and protruding mountain spurs
-        const fjordRidge = riaNoise.ridged(wx * 0.0145, wy * 0.0145, 3, 0.55, 2.15);
-
-        // 3. High-frequency fractal serrations (rocky headlands and serrated shores)
-        const fineSerration =
-          riaDetailNoise.sample(wx * 0.038, wy * 0.038) * 0.65 +
-          riaDetailNoise.sample(wx * 0.082, wy * 0.082) * 0.35;
-
-        // 4. Chains of coastal islets / skerries hugging jagged capes
-        const skerryNoise = riaDetailNoise.sample(wx * 0.022, wy * 0.022);
-        const skerryBoost = (skerryNoise > 0.62 && curElev < STANDARD_SEA_LEVEL && curElev > STANDARD_SEA_LEVEL - 7.0) ? 6.5 : 0.0;
-
-        // Combined ria perturbation:
-        // Negative values carve deep saltwater coves & flooded river inlets inland;
-        // Positive values push rugged peninsulas and rocky barrier capes into the sea.
-        const riaDelta =
-          (bayNoise * 7.5 + (fjordRidge - 0.44) * 8.5 + fineSerration * 4.2 + skerryBoost) *
-          coastWeight *
-          riaIntensity;
-
-        elevationGrid[idx] = Math.max(0.0, Math.min(100.0, curElev + riaDelta));
-      }
-    }
-  }
-
-  // 5. Geomorphic Erosion Simulation (熱侵食＋単純な水による侵食)
+  // 5. Geomorphic Erosion Simulation (熱侵食＋単純な水による侵食 - 内陸の山脈と谷を形成)
   const erosionIterations = config.erosionIterations !== undefined ? config.erosionIterations : 20;
   const erosionStrength = (config.erosionStrength !== undefined ? config.erosionStrength : 5) / 10.0;
   if (erosionIterations > 0 && erosionStrength > 0) {
-    onProgress?.(72, '簡易侵食シミュレーションを実行中...');
+    onProgress?.(68, '簡易侵食シミュレーションを実行中...');
     applyErosion(
       elevationGrid,
       gridCols,
@@ -377,7 +325,99 @@ export function generateTectonicWorld(
     );
   }
 
-  // 6. Filter tiny island noise below minIslandArea
+  // 6. RIA COASTLINE & SERRATED SHORELINE SYNTHESIS (リアス式海岸・ギザギザ海岸線の自動生成)
+  // Real coastlines feature dendritic drowned valleys (rias), rocky jagged headlands,
+  // narrow fjords, and chains of coastal barrier islets.
+  // Using horizontal coordinate domain warping + dendritic ridged carving + multi-scale fractal serration.
+  onProgress?.(78, 'リアス海岸・複雑な海岸線フラクタルを刻み込み中...');
+  const riaNoise = new Noise2D(seed + 8819);
+  const riaWarpNoise = new Noise2D(seed + 2047);
+  const riaDetailNoise = new Noise2D(seed + 4127);
+  const riaComplexity = config.coastlineComplexity !== undefined ? config.coastlineComplexity : 8;
+  const riaIntensity = Math.max(0.1, Math.min(1.0, riaComplexity / 10.0));
+
+  // Copy post-erosion base elevation for domain-warped resampling along coastal margins
+  const baseElevations = new Float32Array(elevationGrid);
+
+  for (let r = 0; r < gridRows; r++) {
+    const wy = r * cellH;
+    const rowOffset = r * gridCols;
+
+    for (let c = 0; c < gridCols; c++) {
+      const idx = rowOffset + c;
+      const curElev = baseElevations[idx];
+      const dCoast = Math.abs(curElev - STANDARD_SEA_LEVEL);
+
+      // Apply ria fractal displacement specifically along the coastal margin (shallow water to coastal hills)
+      if (dCoast < 22.0) {
+        const wx = c * cellW;
+        // Peak influence right at sea level (dCoast = 0), smoothly tapering inland and offshore
+        const coastWeight = Math.pow(Math.max(0.0, 1.0 - dCoast / 22.0), 1.15);
+
+        // 1. Horizontal Coordinate Domain Warping (水平領域歪曲):
+        // Warps the sampling position across the coastline so straight contours fold into winding, rugged capes and bays
+        const warpAng = riaWarpNoise.sample(wx * 0.0035, wy * 0.0035) * Math.PI * 4;
+        const warpMag =
+          (riaWarpNoise.sample(wx * 0.007 + 19.3, wy * 0.007 + 41.7) * 0.65 +
+            riaDetailNoise.sample(wx * 0.022, wy * 0.022) * 0.35) *
+          (cellW * 8.5) *
+          riaIntensity *
+          coastWeight;
+        const dispX = Math.cos(warpAng) * warpMag;
+        const dispY = Math.sin(warpAng) * warpMag;
+
+        // Bilinear sample of base elevation at displaced coordinate (with periodic x-wrap)
+        const sc = c + dispX / cellW;
+        const sr = r + dispY / cellH;
+        const fc0 = ((Math.floor(sc) % gridCols) + gridCols) % gridCols;
+        const fc1 = (fc0 + 1) % gridCols;
+        const u = sc - Math.floor(sc);
+        const fr0 = Math.max(0, Math.min(gridRows - 1, Math.floor(sr)));
+        const fr1 = Math.max(0, Math.min(gridRows - 1, fr0 + 1));
+        const v = sr - Math.floor(sr);
+
+        const e00 = baseElevations[fr0 * gridCols + fc0];
+        const e10 = baseElevations[fr0 * gridCols + fc1];
+        const e01 = baseElevations[fr1 * gridCols + fc0];
+        const e11 = baseElevations[fr1 * gridCols + fc1];
+        const warpedElev = (e00 * (1 - u) + e10 * u) * (1 - v) + (e01 * (1 - u) + e11 * u) * v;
+
+        // Warped sample position for multi-scale noise
+        const sx = wx + dispX;
+        const sy = wy + dispY;
+
+        // 2. Meso bays and rugged peninsulas (中規模の湾・半島)
+        const bayNoise = (riaNoise.fbm(sx * 0.0045, sy * 0.0045, 3, 0.52, 2.1) - 0.5) * 2.0;
+
+        // 3. Dendritic ria fjords & drowned river valleys (樹状のリアス式入り江と海に突き出る岩山尾根)
+        const fjordRidge = riaNoise.ridged(sx * 0.0135, sy * 0.0135, 3, 0.56, 2.2);
+        const dendriticCarving = (fjordRidge - 0.44) * 11.5;
+
+        // 4. High-frequency fractal serrations (海岸線のギザギザ・鋸歯状フラクタル)
+        const s1 = riaDetailNoise.sample(sx * 0.035, sy * 0.035);
+        const s2 = riaDetailNoise.sample(sx * 0.085, sy * 0.085);
+        const s3 = riaDetailNoise.sample(sx * 0.19, sy * 0.19);
+        const fineSerration = (s1 * 0.50 + s2 * 0.35 + s3 * 0.15 - 0.5) * 7.5;
+
+        // 5. Chains of coastal barrier skerries & islets (沿岸の岩礁・小島群)
+        const skerryNoise = riaDetailNoise.sample(sx * 0.024, sy * 0.024);
+        const isShallowOffshore = warpedElev < STANDARD_SEA_LEVEL && warpedElev > STANDARD_SEA_LEVEL - 7.5;
+        const skerryBoost = (isShallowOffshore && skerryNoise > 0.58)
+          ? ((skerryNoise - 0.58) * 22.0 + 3.5)
+          : 0.0;
+
+        // Combined ria perturbation
+        const riaDelta =
+          (bayNoise * 6.0 + dendriticCarving + fineSerration + skerryBoost) *
+          coastWeight *
+          riaIntensity;
+
+        elevationGrid[idx] = Math.max(0.0, Math.min(100.0, warpedElev + riaDelta));
+      }
+    }
+  }
+
+  // 7. Filter tiny ocean noise below minIslandArea (while strictly protecting coastal skerries)
   const minArea = Math.max(1, config.minIslandArea || 1);
   if (minArea > 1) {
     onProgress?.(90, '小島ノイズのフィルタリング中...');
@@ -423,29 +463,27 @@ export function generateTectonicWorld(
         if (tail < minArea) {
           // Check if this tiny island is a coastal skerry (adjacent to shallow coastal water)
           let isCoastalSkerry = false;
-          if (tail >= 2) {
-            for (let i = 0; i < tail; i++) {
-              const qIdx = queue[i];
-              const qx = qIdx % gridCols;
-              const qy = Math.floor(qIdx / gridCols);
-              const testNeighbors = [
-                qy > 0 ? (qy - 1) * gridCols + qx : -1,
-                qy < gridRows - 1 ? (qy + 1) * gridCols + qx : -1,
-                (qx > 0 ? qx - 1 : gridCols - 1) + qy * gridCols,
-                (qx < gridCols - 1 ? qx + 1 : 0) + qy * gridCols,
-              ];
-              for (const n of testNeighbors) {
-                if (n >= 0 && elevationGrid[n] > STANDARD_SEA_LEVEL - 7.0 && elevationGrid[n] <= STANDARD_SEA_LEVEL) {
-                  isCoastalSkerry = true;
-                  break;
-                }
+          for (let i = 0; i < tail; i++) {
+            const qIdx = queue[i];
+            const qx = qIdx % gridCols;
+            const qy = Math.floor(qIdx / gridCols);
+            const testNeighbors = [
+              qy > 0 ? (qy - 1) * gridCols + qx : -1,
+              qy < gridRows - 1 ? (qy + 1) * gridCols + qx : -1,
+              (qx > 0 ? qx - 1 : gridCols - 1) + qy * gridCols,
+              (qx < gridCols - 1 ? qx + 1 : 0) + qy * gridCols,
+            ];
+            for (const n of testNeighbors) {
+              if (n >= 0 && elevationGrid[n] > STANDARD_SEA_LEVEL - 8.5 && elevationGrid[n] <= STANDARD_SEA_LEVEL) {
+                isCoastalSkerry = true;
+                break;
               }
-              if (isCoastalSkerry) break;
             }
+            if (isCoastalSkerry) break;
           }
 
-          // If not a coastal skerry, or tiny 1-cell speck, submerge it
-          if (!isCoastalSkerry || tail < 2) {
+          // If not a coastal skerry, submerge it
+          if (!isCoastalSkerry) {
             for (let i = 0; i < tail; i++) {
               elevationGrid[queue[i]] = STANDARD_SEA_LEVEL - 1.8;
             }

@@ -36,6 +36,12 @@ import {
   simplifyPolyline,
   smoothPolygon,
 } from '../utils/regionShape';
+import {
+  findNearestCoastlinePoint,
+  traceCoastlinePath,
+  findEnclosingIslandContour,
+  CoastlineSnapResult,
+} from '../utils/coastlineSelection';
 import { TownObject } from '../types/town';
 import { drawTownObjects } from '../utils/town/townRenderer';
 
@@ -178,6 +184,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     aspect: 4 / 3,
     detailScale: 0.15,
   });
+  const [snapCoastline, setSnapCoastline] = useState<boolean>(true);
+  const [followCoastline, setFollowCoastline] = useState<boolean>(true);
+  const [isAutoSelectingIsland, setIsAutoSelectingIsland] = useState<boolean>(false);
+  const snappedCoastRef = useRef<CoastlineSnapResult | null>(null);
 
   // Active map properties (Regional vs World)
   const isRegion = activeRegionalMap !== null;
@@ -255,6 +265,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       freehandPointsRef.current = [];
       setRect2Start(null);
       setSelectionBox(null);
+      setIsAutoSelectingIsland(false);
+      snappedCoastRef.current = null;
     }
   }, [brushSettings.mode]);
 
@@ -535,7 +547,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
 
     // 2. Region Selection Visuals: Selection Box / Polygon / Freehand / Confirmed Shape
-    if (selectionBox) {
+    if (selectionBox && !(selectMethod === 'rect2' && followCoastline)) {
       const minX = Math.min(selectionBox.startX, selectionBox.currentX);
       const maxX = Math.max(selectionBox.startX, selectionBox.currentX);
       const minY = Math.min(selectionBox.startY, selectionBox.currentY);
@@ -551,7 +563,74 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.restore();
     }
 
-    // In-progress Polygon vertices and rubber-band line
+    // Live 2-point coastline preview when in rect2 mode with followCoastline
+    if (brushSettings.mode === 'selectRegion' && selectMethod === 'rect2' && followCoastline && rect2Start) {
+      const curPos = cursorPosRef.current;
+      if (curPos) {
+        const startPt: [number, number] = [rect2Start.x, rect2Start.y];
+        const endPt: [number, number] = (snappedCoastRef.current && (snapCoastline || followCoastline))
+          ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+          : [curPos.x, curPos.y];
+        const traced = traceCoastlinePath(
+          startPt,
+          endPt,
+          currentElevation,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          currentSeaLevel,
+          40 / viewport.zoom
+        );
+
+        ctx.save();
+        if (traced.length > 2) {
+          // Fill inside closed coastal polygon
+          ctx.beginPath();
+          ctx.moveTo(traced[0][0], traced[0][1]);
+          for (let i = 1; i < traced.length; i++) {
+            ctx.lineTo(traced[i][0], traced[i][1]);
+          }
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(34, 211, 238, 0.14)';
+          ctx.fill();
+
+          // Traced coastline stroke (cyan glowing dashed line)
+          ctx.beginPath();
+          ctx.moveTo(traced[0][0], traced[0][1]);
+          for (let i = 1; i < traced.length; i++) {
+            ctx.lineTo(traced[i][0], traced[i][1]);
+          }
+          ctx.strokeStyle = '#22d3ee';
+          ctx.lineWidth = 2.4 / viewport.zoom;
+          ctx.setLineDash([5 / viewport.zoom, 3 / viewport.zoom]);
+          ctx.stroke();
+
+          // Straight closing chord
+          ctx.beginPath();
+          ctx.moveTo(endPt[0], endPt[1]);
+          ctx.lineTo(startPt[0], startPt[1]);
+          ctx.strokeStyle = 'rgba(34, 211, 238, 0.6)';
+          ctx.lineWidth = 1.4 / viewport.zoom;
+          ctx.setLineDash([3 / viewport.zoom, 3 / viewport.zoom]);
+          ctx.stroke();
+        }
+
+        // Start point marker
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(startPt[0], startPt[1], 5.5 / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = '#22d3ee';
+        ctx.fill();
+        ctx.strokeStyle = '#08111c';
+        ctx.lineWidth = 1.2 / viewport.zoom;
+        ctx.stroke();
+
+        ctx.restore();
+      }
+    }
+
+    // In-progress Polygon / Coastline vertices and live rubber-band line
     if (polygonPoints.length > 0) {
       ctx.save();
       ctx.strokeStyle = '#f59e0b';
@@ -561,11 +640,47 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       for (let i = 1; i < polygonPoints.length; i++) {
         ctx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
       }
+      ctx.stroke();
+
       const curPos = cursorPosRef.current;
       if (curPos) {
-        ctx.lineTo(curPos.x, curPos.y);
+        const lastPt = polygonPoints[polygonPoints.length - 1];
+        const shouldTraceCoast = selectMethod === 'polygon' && followCoastline;
+        const rubberPath = shouldTraceCoast
+          ? traceCoastlinePath(
+              lastPt,
+              [curPos.x, curPos.y],
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel,
+              35 / viewport.zoom
+            )
+          : [[lastPt[0], lastPt[1]], [curPos.x, curPos.y]];
+
+        ctx.beginPath();
+        ctx.moveTo(rubberPath[0][0], rubberPath[0][1]);
+        for (let i = 1; i < rubberPath.length; i++) {
+          ctx.lineTo(rubberPath[i][0], rubberPath[i][1]);
+        }
+        if (rubberPath.length > 2) {
+          // Coastline-following path: cyan glowing dashed line
+          ctx.strokeStyle = '#22d3ee';
+          ctx.lineWidth = 2.4 / viewport.zoom;
+          ctx.setLineDash([5 / viewport.zoom, 3 / viewport.zoom]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          // Straight rubberband line
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1.8 / viewport.zoom;
+          ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
       }
-      ctx.stroke();
 
       // Vertex handles
       for (let i = 0; i < polygonPoints.length; i++) {
@@ -591,6 +706,40 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
       }
       ctx.restore();
+    }
+
+    // Coastline Snap cursor indicator & Auto-island tooltip
+    if (brushSettings.mode === 'selectRegion') {
+      const curPos = cursorPosRef.current;
+      if (snappedCoastRef.current) {
+        const sp = snappedCoastRef.current.point;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(sp[0], sp[1], 5.5 / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(34, 211, 238, 0.35)';
+        ctx.fill();
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 1.8 / viewport.zoom;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(sp[0], sp[1], 1.8 / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        ctx.font = `bold ${Math.max(9, 10 / viewport.zoom)}px sans-serif`;
+        ctx.fillStyle = '#67e8f9';
+        ctx.fillText('海岸線', sp[0] + 8 / viewport.zoom, sp[1] - 4 / viewport.zoom);
+        ctx.restore();
+      }
+
+      if (isAutoSelectingIsland && curPos) {
+        ctx.save();
+        ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+        ctx.fillStyle = '#22d3ee';
+        ctx.fillText('⚡ 島・陸地をクリックで自動選択', curPos.x + 12 / viewport.zoom, curPos.y + 16 / viewport.zoom);
+        ctx.restore();
+      }
     }
 
     // In-progress Freehand line
@@ -1059,18 +1208,44 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (e.code === 'Space' && !e.repeat) setIsSpacePressed(true);
 
       if (brushSettings.mode === 'selectRegion') {
-        if (e.key === 'Backspace' && selectMethod === 'polygon' && polygonPoints.length > 0) {
+        if (
+          e.key === 'Backspace' &&
+          selectMethod === 'polygon' &&
+          polygonPoints.length > 0
+        ) {
           e.preventDefault();
           setPolygonPoints((prev) => prev.slice(0, prev.length - 1));
           return;
         }
-        if (e.key === 'Enter' && selectMethod === 'polygon' && polygonPoints.length >= 3) {
+        if (
+          e.key === 'Enter' &&
+          selectMethod === 'polygon' &&
+          polygonPoints.length >= 3
+        ) {
           e.preventDefault();
-          commitShapeSelection(polygonPoints);
+          const p0 = polygonPoints[0];
+          const lastPt = polygonPoints[polygonPoints.length - 1];
+          const closingTrace = followCoastline
+            ? traceCoastlinePath(
+                lastPt,
+                p0,
+                currentElevation,
+                currentCols,
+                currentRows,
+                currentWidth,
+                currentHeight,
+                currentSeaLevel,
+                40 / viewport.zoom
+              )
+            : [];
+          const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;
+          commitShapeSelection(fullLoop);
           return;
         }
         if (e.key === 'Escape') {
           e.preventDefault();
+          setIsAutoSelectingIsland(false);
+          snappedCoastRef.current = null;
           setPolygonPoints([]);
           setFreehandPoints([]);
           freehandPointsRef.current = [];
@@ -1114,6 +1289,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     brushSettings.mode,
     selectMethod,
     polygonPoints,
+    followCoastline,
+    currentElevation,
+    currentCols,
+    currentRows,
+    currentWidth,
+    currentHeight,
+    currentSeaLevel,
+    viewport.zoom,
     commitShapeSelection,
   ]);
 
@@ -1559,6 +1742,24 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (isPanAction) {
       isPanningRef.current = true;
     } else if (brushSettings.mode === 'selectRegion') {
+      if (isAutoSelectingIsland) {
+        const island = findEnclosingIslandContour(
+          worldPos.x,
+          worldPos.y,
+          currentElevation,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          currentSeaLevel
+        );
+        if (island && island.length >= 3) {
+          commitShapeSelection(island);
+        }
+        setIsAutoSelectingIsland(false);
+        return;
+      }
+
       if (selectMethod === 'town') {
         const townBounds = computeTownBounds(
           { width: currentWidth, height: currentHeight, widthKm: effectiveWidthKm },
@@ -1584,16 +1785,45 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         });
       } else if (selectMethod === 'rect2') {
         setConfirmedShape(null);
+        const clickPt: [number, number] = ((snapCoastline || followCoastline) && snappedCoastRef.current)
+          ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+          : [worldPos.x, worldPos.y];
+
         if (!rect2Start) {
-          setRect2Start({ x: worldPos.x, y: worldPos.y });
+          setRect2Start({ x: clickPt[0], y: clickPt[1] });
           setSelectionBox({
-            startX: worldPos.x,
-            startY: worldPos.y,
-            currentX: worldPos.x,
-            currentY: worldPos.y,
+            startX: clickPt[0],
+            startY: clickPt[1],
+            currentX: clickPt[0],
+            currentY: clickPt[1],
           });
         } else {
-          // 2nd click: commit 2-point rectangle
+          // 2nd click:
+          if (followCoastline) {
+            const startPt: [number, number] = [rect2Start.x, rect2Start.y];
+            const endPt: [number, number] = clickPt;
+            const traced = traceCoastlinePath(
+              startPt,
+              endPt,
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel,
+              40 / viewport.zoom
+            );
+
+            if (traced.length >= 3) {
+              const shape: [number, number][] = [...traced, startPt];
+              commitShapeSelection(shape);
+              setRect2Start(null);
+              setSelectionBox(null);
+              return;
+            }
+          }
+
+          // 2nd click standard rectangle: commit 2-point rectangle
           const sx = rect2Start.x;
           const sy = rect2Start.y;
           const cx = selectionBox ? selectionBox.currentX : worldPos.x;
@@ -1621,21 +1851,63 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
       } else if (selectMethod === 'polygon') {
         setConfirmedShape(null);
+        const clickPt: [number, number] = ((snapCoastline || followCoastline) && snappedCoastRef.current)
+          ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+          : [worldPos.x, worldPos.y];
+
         // If clicking near first vertex and length >= 3, close and commit
         if (polygonPoints.length >= 3) {
           const p0 = polygonPoints[0];
-          const distToFirst = Math.hypot(worldPos.x - p0[0], worldPos.y - p0[1]);
+          const distToFirst = Math.hypot(clickPt[0] - p0[0], clickPt[1] - p0[1]);
           if (distToFirst <= 18 / viewport.zoom) {
-            commitShapeSelection(polygonPoints);
+            const closingTrace = followCoastline
+              ? traceCoastlinePath(
+                  polygonPoints[polygonPoints.length - 1],
+                  p0,
+                  currentElevation,
+                  currentCols,
+                  currentRows,
+                  currentWidth,
+                  currentHeight,
+                  currentSeaLevel,
+                  40 / viewport.zoom
+                )
+              : [];
+            const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;
+            commitShapeSelection(fullLoop);
             return;
           }
         }
-        setPolygonPoints((prev) => [...prev, [worldPos.x, worldPos.y]]);
+
+        if (polygonPoints.length === 0) {
+          setPolygonPoints([clickPt]);
+        } else {
+          if (followCoastline) {
+            const lastPt = polygonPoints[polygonPoints.length - 1];
+            const traced = traceCoastlinePath(
+              lastPt,
+              clickPt,
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel,
+              40 / viewport.zoom
+            );
+            setPolygonPoints((prev) => [...prev, ...traced.slice(1)]);
+          } else {
+            setPolygonPoints((prev) => [...prev, clickPt]);
+          }
+        }
       } else if (selectMethod === 'freehand') {
         setConfirmedShape(null);
         isSelectingRef.current = true;
-        freehandPointsRef.current = [[worldPos.x, worldPos.y]];
-        setFreehandPoints([[worldPos.x, worldPos.y]]);
+        const startPt: [number, number] = (snapCoastline && snappedCoastRef.current)
+          ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+          : [worldPos.x, worldPos.y];
+        freehandPointsRef.current = [startPt];
+        setFreehandPoints([startPt]);
       }
     } else if (e.button === 0) {
       isPanningRef.current = false;
@@ -1648,6 +1920,34 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     const worldPos = screenToWorld(e.clientX, e.clientY);
     cursorPosRef.current = worldPos;
+
+    const isCoastlineAssisted = (
+      brushSettings.mode === 'selectRegion' && (
+        snapCoastline ||
+        ((selectMethod === 'rect2' || selectMethod === 'polygon') && followCoastline) ||
+        isAutoSelectingIsland
+      )
+    );
+
+    if (isCoastlineAssisted) {
+      const snap = findNearestCoastlinePoint(
+        worldPos.x,
+        worldPos.y,
+        currentElevation,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        currentSeaLevel,
+        28 / viewport.zoom
+      );
+      snappedCoastRef.current = snap;
+      if (snap) {
+        cursorPosRef.current = { x: snap.point[0], y: snap.point[1] };
+      }
+    } else {
+      snappedCoastRef.current = null;
+    }
 
     if (isDraggingCompassRef.current) {
       const newPos = {
@@ -1710,6 +2010,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           renderOverlay();
         } else if (selectMethod === 'polygon' && polygonPoints.length > 0) {
           renderOverlay();
+        } else if (isCoastlineAssisted) {
+          renderOverlay();
         }
       }
       renderCursorOverlay();
@@ -1738,9 +2040,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         });
       }
     } else if (brushSettings.mode === 'selectRegion' && selectMethod === 'freehand' && isSelectingRef.current) {
+      const pt: [number, number] = (snapCoastline && snappedCoastRef.current)
+        ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+        : [worldPos.x, worldPos.y];
       const last = freehandPointsRef.current[freehandPointsRef.current.length - 1];
-      if (!last || Math.hypot(worldPos.x - last[0], worldPos.y - last[1]) >= 4 / viewport.zoom) {
-        freehandPointsRef.current.push([worldPos.x, worldPos.y]);
+      if (!last || Math.hypot(pt[0] - last[0], pt[1] - last[1]) >= 4 / viewport.zoom) {
+        freehandPointsRef.current.push(pt);
         setFreehandPoints([...freehandPointsRef.current]);
         renderOverlay();
       }
@@ -2089,7 +2394,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         renderCursorOverlay();
       }}
       onDoubleClick={() => {
-        if (brushSettings.mode === 'selectRegion' && selectMethod === 'polygon' && polygonPoints.length >= 3) {
+        if (brushSettings.mode === 'selectRegion' && (selectMethod === 'polygon' || selectMethod === 'coastline') && polygonPoints.length >= 3) {
           commitShapeSelection(polygonPoints);
         }
       }}
@@ -2111,6 +2416,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             setRect2Start(null);
             setSelectionBox(null);
             setConfirmedShape(null);
+            setIsAutoSelectingIsland(false);
+            renderOverlay();
+          }}
+          snapCoastline={snapCoastline}
+          onToggleSnapCoastline={setSnapCoastline}
+          isAutoSelectingIsland={isAutoSelectingIsland}
+          onAutoSelectIsland={() => {
+            setIsAutoSelectingIsland((prev) => !prev);
             renderOverlay();
           }}
           aspect={regionAspect}
@@ -2141,6 +2454,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             setRect2Start(null);
             setSelectionBox(null);
             setConfirmedShape(null);
+            setIsAutoSelectingIsland(false);
             renderOverlay();
           }}
           townConfig={townConfig}

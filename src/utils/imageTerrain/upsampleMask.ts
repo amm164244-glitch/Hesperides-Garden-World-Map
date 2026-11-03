@@ -246,27 +246,14 @@ export function buildElevationFromMask(
   // Free source float array now that upsample is complete
   srcFloat = null;
 
-  // Step 4: 3-pass running-sum box blur on destination resolution (Array #2 of dstSize)
-  onProgress?.(50, 'ぼかし中');
+  // Step 4: 1-pass running-sum box blur on destination resolution (Array #2 of dstSize)
+  // Uses a lighter radius to prevent obliterating the user's natural capes, bays, and coastlines
+  onProgress?.(55, 'ぼかし中');
   const scale = dstWidth / srcWidth;
-  // Box blur radius proportional to scale to keep coastal transition identical across zoom levels
-  const rDst = Math.max(1, Math.round(baseRadius * scale * 0.55));
+  const rDst = Math.max(1, Math.round(baseRadius * scale * 0.28));
 
   let temp: Float32Array | null = new Float32Array(dstSize);
 
-  // Pass 1
-  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, rDst);
-  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, rDst);
-
-  onProgress?.(65, 'ぼかし中');
-
-  // Pass 2
-  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, rDst);
-  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, rDst);
-
-  onProgress?.(80, 'ぼかし中');
-
-  // Pass 3
   boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, rDst);
   boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, rDst);
 
@@ -274,12 +261,17 @@ export function buildElevationFromMask(
   temp = null;
 
   // Step 5: Map continuous values to elevation with authentic Ria Coastline fractal synthesis
-  onProgress?.(92, 'リアス海岸・ギザギザ海岸線を合成中...');
-  const riaRoughness = options.riaRoughness ?? 7;
+  // Uses coordinate domain warping + dendritic ridged carving + micro-fractal serrations + coastal skerries
+  onProgress?.(80, 'リアス海岸・ギザギザ海岸線を合成中...');
+  const riaRoughness = options.riaRoughness ?? 8;
   const intensity = Math.max(0.0, Math.min(1.0, riaRoughness / 10.0));
   const seed = options.seed ?? 88913;
   const riaNoise = new Noise2D(seed + 9821);
+  const riaWarp = new Noise2D(seed + 2047);
   const riaDetail = new Noise2D(seed + 4019);
+
+  // Copy blurred grid so we can perform domain-warped coordinate sampling
+  const blurredGrid = new Float32Array(elevationGrid);
 
   for (let y = 0; y < dstHeight; y++) {
     const rowOffset = y * dstWidth;
@@ -287,34 +279,69 @@ export function buildElevationFromMask(
 
     for (let x = 0; x < dstWidth; x++) {
       const idx = rowOffset + x;
-      const m = Math.max(0.0, Math.min(1.0, elevationGrid[idx]));
+      const nx = x / dstWidth;
 
       if (intensity <= 0) {
+        const m = Math.max(0.0, Math.min(1.0, blurredGrid[idx]));
         elevationGrid[idx] = (seaLevel - 12.0) + m * 24.0;
         continue;
       }
 
-      // Coastal envelope factor: 1.0 at coast (m = 0.5), tapering to 0 at deep ocean/interior
-      const coastWeight = 4.0 * m * (1.0 - m);
-      const nx = x / dstWidth;
+      // 1. Domain warping of coordinates along the coastline:
+      // Warps the sampling position so smooth curves turn into jagged, meandering rias
+      const warpAng = riaWarp.sample(nx * 14.0, ny * 14.0) * Math.PI * 4;
+      const warpMag =
+        (riaWarp.sample(nx * 26.0 + 13.7, ny * 26.0 + 47.1) * 0.65 +
+          riaDetail.sample(nx * 65.0, ny * 65.0) * 0.35) *
+        (0.018 * intensity);
 
-      // Multi-scale ria perturbation:
-      // 1. Meso bays and rugged peninsulas
-      const bayNoise = riaNoise.fbm(nx * 28.0, ny * 28.0, 3, 0.52, 2.1);
-      // 2. Dendritic ria fjords (drowned river valleys) and rocky spurs
-      const fjordRidge = riaNoise.ridged(nx * 75.0, ny * 75.0, 3, 0.55, 2.15);
-      // 3. High-frequency serrated shoreline crinkles
-      const fineSerration =
-        riaDetail.sample(nx * 190.0, ny * 190.0) * 0.65 +
-        riaDetail.sample(nx * 380.0, ny * 380.0) * 0.35;
-      // 4. Coastal barrier skerries
-      const skerryNoise = riaDetail.sample(nx * 110.0, ny * 110.0);
-      const skerryBoost = (skerryNoise > 0.60 && m < 0.5 && m > 0.30) ? 0.22 : 0.0;
+      const wx = nx + Math.cos(warpAng) * warpMag;
+      const wy = ny + Math.sin(warpAng) * warpMag;
+
+      // Sample blurredGrid at (wx * dstWidth, wy * dstHeight) with periodic x-wrapping
+      const sx = ((wx * dstWidth) % dstWidth + dstWidth) % dstWidth;
+      const sy = Math.max(0, Math.min(dstHeight - 1, wy * dstHeight));
+      const x0 = Math.floor(sx);
+      const x1 = (x0 + 1) % dstWidth;
+      const fx = sx - x0;
+      const y0 = Math.floor(sy);
+      const y1 = Math.max(0, Math.min(dstHeight - 1, y0 + 1));
+      const fy = sy - y0;
+
+      const m00 = blurredGrid[y0 * dstWidth + x0];
+      const m10 = blurredGrid[y0 * dstWidth + x1];
+      const m01 = blurredGrid[y1 * dstWidth + x0];
+      const m11 = blurredGrid[y1 * dstWidth + x1];
+      const m = Math.max(
+        0.0,
+        Math.min(1.0, (m00 * (1 - fx) + m10 * fx) * (1 - fy) + (m01 * (1 - fx) + m11 * fx) * fy)
+      );
+
+      // Coastal envelope factor: peaks at coastline (m = 0.5)
+      const coastWeight = Math.pow(Math.max(0.0, 1.0 - Math.abs(m - 0.5) / 0.45), 1.15);
+
+      // 2. Meso bays and rugged peninsulas
+      const bayNoise = (riaNoise.fbm(wx * 28.0, wy * 28.0, 3, 0.52, 2.1) - 0.5) * 0.28;
+
+      // 3. Dendritic ria fjords (drowned river valleys) and rocky mountain spurs
+      const fjordRidge = riaNoise.ridged(wx * 68.0, wy * 68.0, 3, 0.56, 2.2);
+      const dendriticCarving = (fjordRidge - 0.44) * 0.36;
+
+      // 4. High-frequency serrated shoreline crinkles (岩肌・鋸歯状フラクタル)
+      const s1 = riaDetail.sample(wx * 140.0, wy * 140.0);
+      const s2 = riaDetail.sample(wx * 320.0, wy * 320.0);
+      const s3 = riaDetail.sample(wx * 640.0, wy * 640.0);
+      const fineSerration = (s1 * 0.5 + s2 * 0.35 + s3 * 0.15 - 0.5) * 0.26;
+
+      // 5. Coastal barrier skerries (沿岸の岩礁・小島群)
+      const skerryNoise = riaDetail.sample(wx * 80.0, wy * 80.0);
+      const isShallow = m < 0.5 && m > 0.28;
+      const skerryBoost = (isShallow && skerryNoise > 0.58)
+        ? ((skerryNoise - 0.58) * 0.75 + 0.12)
+        : 0.0;
 
       const riaPerturbation =
-        (bayNoise * 0.28 + (fjordRidge - 0.44) * 0.32 + fineSerration * 0.18 + skerryBoost) *
-        coastWeight *
-        intensity;
+        (bayNoise + dendriticCarving + fineSerration + skerryBoost) * coastWeight * intensity;
 
       const perturbedM = Math.max(0.0, Math.min(1.0, m + riaPerturbation));
 
@@ -322,14 +349,14 @@ export function buildElevationFromMask(
         // Land: smooth rise towards interior hills/highlands
         const landFactor = (perturbedM - 0.5) / 0.5;
         const inlandHills =
-          (riaNoise.fbm(nx * 18.0, ny * 18.0, 3) * 0.5 + 0.5) *
+          (riaNoise.fbm(wx * 18.0, wy * 18.0, 3) * 0.5 + 0.5) *
           Math.pow(landFactor, 0.8) *
-          14.0;
-        elevationGrid[idx] = seaLevel + landFactor * 12.0 + inlandHills;
+          15.0;
+        elevationGrid[idx] = seaLevel + landFactor * 13.0 + inlandHills;
       } else {
         // Ocean: shelf sloping down into deeper ocean
         const oceanFactor = (0.5 - perturbedM) / 0.5;
-        elevationGrid[idx] = seaLevel - oceanFactor * 14.0;
+        elevationGrid[idx] = seaLevel - oceanFactor * 15.0;
       }
     }
   }

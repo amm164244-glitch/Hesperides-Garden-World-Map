@@ -226,4 +226,99 @@ test('applyErosion smooths steep talus slopes and carves valleys', () => {
   assert(grid[neighborIdx] > 40.0, 'Adjacent cells should receive eroded sediment');
 });
 
+test('generateTectonicWorld with coastlineComplexity generates jagged rias coastlines', () => {
+  const config: GeneratorConfig = {
+    seed: 99182,
+    gridResolution: '1024x512',
+    worldWidthKm: 40000,
+    plateCount: 10,
+    seaRatio: 60,
+    continentCount: 3,
+    continentSize: 5,
+    mountainStrength: 5,
+    islandDensity: 5,
+    minIslandArea: 10,
+    coastlineComplexity: 8,
+  };
+
+  const worldMap = generateTectonicWorld(2000, 1000, config);
+  const elev = worldMap.elevationGrid;
+  const seaLevel = worldMap.seaLevel;
+  const cols = worldMap.gridCols;
+  const rows = worldMap.gridRows;
+
+  // Measure shoreline cells and local elevation variance along coast
+  let coastalCells = 0;
+  let totalVariance = 0;
+
+  for (let r = 1; r < rows - 1; r++) {
+    for (let c = 1; c < cols - 1; c++) {
+      const idx = r * cols + c;
+      const h = elev[idx];
+      const isLand = h > seaLevel;
+      // Check 4-neighbors for land-sea transition
+      const topLand = elev[(r - 1) * cols + c] > seaLevel;
+      const btmLand = elev[(r + 1) * cols + c] > seaLevel;
+      const leftLand = elev[r * cols + (c - 1)] > seaLevel;
+      const rightLand = elev[r * cols + (c + 1)] > seaLevel;
+
+      if (isLand !== topLand || isLand !== btmLand || isLand !== leftLand || isLand !== rightLand) {
+        coastalCells++;
+        // Local roughness in neighborhood
+        const diffX = Math.abs(elev[r * cols + (c + 1)] - elev[r * cols + (c - 1)]);
+        const diffY = Math.abs(elev[(r + 1) * cols + c] - elev[(r - 1) * cols + c]);
+        totalVariance += diffX + diffY;
+      }
+    }
+  }
+
+  assert(coastalCells > 100, 'World map should feature hundreds of coastal transition cells');
+  const meanRoughness = totalVariance / coastalCells;
+  assert(meanRoughness > 1.0, `Coastline roughness should be significant for rias features (got ${meanRoughness})`);
+});
+
+test('image-to-terrain buildElevationFromMask and maskToElevationGrid generate jagged rias coastlines from straight mask', async () => {
+  const { buildElevationFromMask } = await import('./imageTerrain/upsampleMask.ts');
+  const { maskToElevationGrid } = await import('./imageTerrain/maskEditor.ts');
+
+  const width = 128;
+  const height = 64;
+  const mask = new Uint8Array(width * height);
+
+  // Half land, half ocean with a perfectly straight horizontal boundary at y = 32
+  for (let y = 32; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      mask[y * width + x] = 1;
+    }
+  }
+
+  // 1. Direct maskToElevationGrid with riaRoughness = 8
+  const directElev = maskToElevationGrid(mask, width, height, 35.0, 2.0, 8, 4242);
+  // Along the straight nominal boundary y = 32, the zero-crossing positions (elev = 35.0) should vary along x due to domain warping and dendritic carving
+  const yBoundaryValues: number[] = [];
+  for (let x = 0; x < width; x++) {
+    yBoundaryValues.push(directElev[32 * width + x]);
+  }
+  const minVal = Math.min(...yBoundaryValues);
+  const maxVal = Math.max(...yBoundaryValues);
+  assert(maxVal - minVal > 2.0, `Domain-warped rias should produce non-uniform, jagged values along nominal straight boundary (variance: ${maxVal - minVal})`);
+
+  // 2. buildElevationFromMask with upsampling (128x64 -> 256x128)
+  const upsampledElev = buildElevationFromMask(mask, width, height, 256, 128, 35.0, {
+    riaRoughness: 8,
+    seed: 4242,
+  });
+  assert.equal(upsampledElev.length, 256 * 128);
+
+  // Verify non-uniformity across boundary in upsampled grid as well
+  const upsampledValues: number[] = [];
+  for (let x = 0; x < 256; x++) {
+    upsampledValues.push(upsampledElev[64 * 256 + x]);
+  }
+  const upMin = Math.min(...upsampledValues);
+  const upMax = Math.max(...upsampledValues);
+  assert(upMax - upMin > 2.0, `Upsampled terrain must also feature jagged rias along straight mask edge (variance: ${upMax - upMin})`);
+});
+
+
 

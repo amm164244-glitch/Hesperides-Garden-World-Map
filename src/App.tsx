@@ -86,6 +86,7 @@ export default function App() {
     minIslandArea: 15,
     erosionIterations: 15,
     erosionStrength: 5,
+    coastlineComplexity: 8,
   });
 
   // Toolbar collapsed state persisted in localStorage

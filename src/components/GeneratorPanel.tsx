@@ -262,6 +262,28 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
           </div>
         </div>
 
+        {/* Coastline Complexity (Rias Coastline & Serrations) */}
+        <div className="flex flex-col gap-1 border-t border-stone-800 pt-2">
+          <div className="flex justify-between text-stone-300">
+            <span>海岸線の複雑さ・リアス度</span>
+            <span className="font-mono text-amber-400">Lv {config.coastlineComplexity ?? 8}</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={10}
+            step={1}
+            value={config.coastlineComplexity ?? 8}
+            onChange={(e) => onUpdateConfig({ coastlineComplexity: Number(e.target.value) })}
+            className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+          />
+          <div className="flex justify-between text-[10px] text-stone-500">
+            <span>Lv 1 (滑らか)</span>
+            <span className="text-amber-400/90 font-medium">Lv 8 (標準リアス海岸)</span>
+            <span>Lv 10 (極大フィヨルド・岩礁)</span>
+          </div>
+        </div>
+
         {/* Geomorphic Erosion (Thermal + Water Erosion) */}
         <div className="flex flex-col gap-1 border-t border-stone-800 pt-2">
           <div className="flex justify-between text-stone-300">

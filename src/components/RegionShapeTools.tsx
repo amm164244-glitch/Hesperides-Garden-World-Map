@@ -1,5 +1,5 @@
 import React from 'react';
-import { Square, MousePointerClick, Hexagon, PenTool, Check, X, Home, Sliders } from 'lucide-react';
+import { Square, MousePointerClick, Hexagon, PenTool, Check, X, Home, Waves, Magnet, Wand2 } from 'lucide-react';
 import { formatDistance } from '../utils/regionLayout';
 
 export type RegionSelectMethod = 'rect' | 'rect2' | 'polygon' | 'freehand' | 'town';
@@ -23,9 +23,16 @@ interface RegionShapeToolsProps {
   polygonPointCount: number;
   onFinishPolygon?: () => void;
   onCancelPolygon?: () => void;
+  followCoastline?: boolean;
+  onToggleFollowCoastline?: (f: boolean) => void;
+  snapCoastline?: boolean;
+  onToggleSnapCoastline?: (s: boolean) => void;
+  onAutoSelectIsland?: () => void;
+  isAutoSelectingIsland?: boolean;
   townConfig?: TownConfig;
   onChangeTownConfig?: (patch: Partial<TownConfig>) => void;
   parentWidthKm?: number;
+  isRect2Active?: boolean;
 }
 
 export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
@@ -40,9 +47,16 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
   polygonPointCount,
   onFinishPolygon,
   onCancelPolygon,
+  followCoastline = true,
+  onToggleFollowCoastline,
+  snapCoastline = true,
+  onToggleSnapCoastline,
+  onAutoSelectIsland,
+  isAutoSelectingIsland = false,
   townConfig,
   onChangeTownConfig,
   parentWidthKm = 40000,
+  isRect2Active = false,
 }) => {
   return (
     <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-stone-900/95 backdrop-blur-md border border-amber-600/70 rounded-xl px-3.5 py-2 shadow-2xl flex flex-col gap-2 text-xs text-stone-200 pointer-events-auto animate-in fade-in slide-in-from-top-2 max-w-[95vw]">
@@ -72,7 +86,7 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
                 ? 'bg-amber-600 text-stone-950 font-bold shadow'
                 : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
             }`}
-            title="対角の2点をクリックして矩形を選択"
+            title="2点をクリックして指定 (海岸線沿いオプション対応)"
           >
             <MousePointerClick className="w-3 h-3" />
             <span>2点クリック</span>
@@ -86,7 +100,7 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
                 ? 'bg-amber-600 text-stone-950 font-bold shadow'
                 : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
             }`}
-            title="クリックで頂点を結んで多角形を作成"
+            title="クリックで頂点を結んで多角形を作成 (海岸線沿いオプション対応)"
           >
             <Hexagon className="w-3 h-3" />
             <span>多角形</span>
@@ -122,8 +136,8 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
           </button>
         </div>
 
-        {/* Rectangle Aspect ratio controls */}
-        {(method === 'rect' || method === 'rect2') && (
+        {/* Rectangle Drag Aspect Ratio Controls */}
+        {method === 'rect' && (
           <div className="flex items-center gap-1 ml-2 border-l border-stone-700/80 pl-2">
             <span className="text-[11px] text-stone-400 shrink-0">縦横比:</span>
             <div className="flex items-center gap-0.5 bg-stone-950/80 p-0.5 rounded-lg border border-stone-800">
@@ -152,9 +166,211 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
           </div>
         )}
 
-        {/* Polygon / Freehand Options: Smooth & Margin */}
-        {(method === 'polygon' || method === 'freehand') && (
-          <div className="flex items-center gap-3 ml-2 border-l border-stone-700/80 pl-2.5 flex-wrap">
+        {/* 2-Point Click Options: Coastline-follow toggle OR Aspect Ratio */}
+        {method === 'rect2' && (
+          <div className="flex items-center gap-2.5 ml-2 border-l border-stone-700/80 pl-2.5 flex-wrap">
+            {onToggleFollowCoastline && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300 bg-stone-950/70 border border-stone-800 hover:border-cyan-700/80 px-2 py-0.5 rounded-md transition">
+                <input
+                  type="checkbox"
+                  checked={followCoastline}
+                  onChange={(e) => onToggleFollowCoastline(e.target.checked)}
+                  className="rounded accent-cyan-500 cursor-pointer"
+                />
+                <Waves className="w-3.5 h-3.5 text-cyan-400" />
+                <span className={followCoastline ? 'text-cyan-300 font-bold' : ''}>海岸線沿い</span>
+              </label>
+            )}
+
+            {!followCoastline ? (
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-stone-400 shrink-0">縦横比:</span>
+                <div className="flex items-center gap-0.5 bg-stone-950/80 p-0.5 rounded-lg border border-stone-800">
+                  {(
+                    [
+                      { id: 'free', label: 'なし' },
+                      { id: '2:1', label: '2:1' },
+                      { id: '1:1', label: '1:1' },
+                      { id: 'current', label: '表示中' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => onChangeAspect(opt.id)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition ${
+                        aspect === opt.id
+                          ? 'bg-amber-600 text-stone-950 font-bold shadow'
+                          : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                {onToggleSnapCoastline && (
+                  <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300">
+                    <input
+                      type="checkbox"
+                      checked={snapCoastline}
+                      onChange={(e) => onToggleSnapCoastline(e.target.checked)}
+                      className="rounded accent-cyan-500 cursor-pointer"
+                    />
+                    <Magnet className="w-3 h-3 text-cyan-400" />
+                    <span>スナップ</span>
+                  </label>
+                )}
+
+                {onAutoSelectIsland && (
+                  <button
+                    type="button"
+                    onClick={onAutoSelectIsland}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer border ${
+                      isAutoSelectingIsland
+                        ? 'bg-cyan-500 text-stone-950 border-cyan-400 font-bold animate-pulse'
+                        : 'bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 hover:text-white border-cyan-700/80'
+                    }`}
+                    title="島または陸地をクリックしてその海岸線全体を一発で選択"
+                  >
+                    <Wand2 className="w-3 h-3 text-cyan-400" />
+                    <span>{isAutoSelectingIsland ? '島をクリック…' : '島・陸地を一括選択'}</span>
+                  </button>
+                )}
+
+                <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-amber-300">
+                  <input
+                    type="checkbox"
+                    checked={smooth}
+                    onChange={(e) => onToggleSmooth(e.target.checked)}
+                    className="rounded accent-amber-500 cursor-pointer"
+                  />
+                  <span>角を丸める</span>
+                </label>
+
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-stone-400">余白:</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="30"
+                    step="1"
+                    value={marginPercent}
+                    onChange={(e) => onChangeMargin(Number(e.target.value))}
+                    className="w-16 accent-amber-500 h-1.5 bg-stone-700 rounded-lg cursor-pointer"
+                  />
+                  <span className="font-mono text-amber-300 w-7 text-right">{marginPercent}%</span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Polygon Options: Coastline-follow toggle, Snap, Auto-Island, Smooth, Margin */}
+        {method === 'polygon' && (
+          <div className="flex items-center gap-2.5 ml-2 border-l border-stone-700/80 pl-2.5 flex-wrap">
+            {onToggleFollowCoastline && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300 bg-stone-950/70 border border-stone-800 hover:border-cyan-700/80 px-2 py-0.5 rounded-md transition">
+                <input
+                  type="checkbox"
+                  checked={followCoastline}
+                  onChange={(e) => onToggleFollowCoastline(e.target.checked)}
+                  className="rounded accent-cyan-500 cursor-pointer"
+                />
+                <Waves className="w-3.5 h-3.5 text-cyan-400" />
+                <span className={followCoastline ? 'text-cyan-300 font-bold' : ''}>海岸線沿い</span>
+              </label>
+            )}
+
+            {onToggleSnapCoastline && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300">
+                <input
+                  type="checkbox"
+                  checked={snapCoastline}
+                  onChange={(e) => onToggleSnapCoastline(e.target.checked)}
+                  className="rounded accent-cyan-500 cursor-pointer"
+                />
+                <Magnet className="w-3 h-3 text-cyan-400" />
+                <span>スナップ</span>
+              </label>
+            )}
+
+            {onAutoSelectIsland && (
+              <button
+                type="button"
+                onClick={onAutoSelectIsland}
+                className={`px-2 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer border ${
+                  isAutoSelectingIsland
+                    ? 'bg-cyan-500 text-stone-950 border-cyan-400 font-bold animate-pulse'
+                    : 'bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 hover:text-white border-cyan-700/80'
+                }`}
+                title="島または陸地をクリックしてその海岸線全体を一発で選択"
+              >
+                <Wand2 className="w-3 h-3 text-cyan-400" />
+                <span>{isAutoSelectingIsland ? '島をクリック…' : '島・陸地を一括選択'}</span>
+              </button>
+            )}
+
+            <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-amber-300">
+              <input
+                type="checkbox"
+                checked={smooth}
+                onChange={(e) => onToggleSmooth(e.target.checked)}
+                className="rounded accent-amber-500 cursor-pointer"
+              />
+              <span>角を丸める</span>
+            </label>
+
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <span className="text-stone-400">余白:</span>
+              <input
+                type="range"
+                min="0"
+                max="30"
+                step="1"
+                value={marginPercent}
+                onChange={(e) => onChangeMargin(Number(e.target.value))}
+                className="w-16 accent-amber-500 h-1.5 bg-stone-700 rounded-lg cursor-pointer"
+              />
+              <span className="font-mono text-amber-300 w-7 text-right">{marginPercent}%</span>
+            </div>
+          </div>
+        )}
+
+        {/* Freehand Options: Snap, Auto-Island, Smooth, Margin */}
+        {method === 'freehand' && (
+          <div className="flex items-center gap-2.5 ml-2 border-l border-stone-700/80 pl-2.5 flex-wrap">
+            {onToggleSnapCoastline && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300">
+                <input
+                  type="checkbox"
+                  checked={snapCoastline}
+                  onChange={(e) => onToggleSnapCoastline(e.target.checked)}
+                  className="rounded accent-cyan-500 cursor-pointer"
+                />
+                <Magnet className="w-3 h-3 text-cyan-400" />
+                <span>スナップ</span>
+              </label>
+            )}
+
+            {onAutoSelectIsland && (
+              <button
+                type="button"
+                onClick={onAutoSelectIsland}
+                className={`px-2 py-0.5 rounded text-[10px] font-semibold flex items-center gap-1 transition cursor-pointer border ${
+                  isAutoSelectingIsland
+                    ? 'bg-cyan-500 text-stone-950 border-cyan-400 font-bold animate-pulse'
+                    : 'bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 hover:text-white border-cyan-700/80'
+                }`}
+                title="島または陸地をクリックしてその海岸線全体を一発で選択"
+              >
+                <Wand2 className="w-3 h-3 text-cyan-400" />
+                <span>{isAutoSelectingIsland ? '島をクリック…' : '島・陸地を一括選択'}</span>
+              </button>
+            )}
+
             <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-amber-300">
               <input
                 type="checkbox"
@@ -292,12 +508,16 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
         </div>
       )}
 
-      {/* Guide message & actions for polygon / freehand */}
+      {/* Guide message & actions for polygon / freehand / rect2 */}
       {method === 'polygon' && (
         <div className="flex justify-between items-center text-[10px] text-stone-400 border-t border-stone-800/80 pt-1.5">
           <span>
             {polygonPointCount === 0
-              ? '地図上をクリックして最初の頂点を配置してください'
+              ? followCoastline
+                ? '地図上をクリックして開始（海岸線近くでは沿岸を自動追従）。Escで取消'
+                : '地図上をクリックして最初の頂点を配置してください'
+              : followCoastline
+              ? `沿岸頂点 ${polygonPointCount}個配置中 (始点クリック・ダブルクリック・Enterで確定、BackSpaceで戻る、Escで取消)`
               : `頂点 ${polygonPointCount}個配置済み (始点クリック・ダブルクリック・Enterで確定、BackSpaceで1つ戻る、Escで取消)`}
           </span>
           {polygonPointCount >= 3 && onFinishPolygon && (
@@ -333,7 +553,19 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
 
       {method === 'rect2' && (
         <div className="text-[10px] text-stone-400 border-t border-stone-800/80 pt-1">
-          <span>1点目をクリックして対角の始点を決め、2点目で終点を決定します (Escでキャンセル)</span>
+          {followCoastline ? (
+            <span>
+              {isRect2Active
+                ? '2点目の海岸線をクリックして確定します (Escで取消)'
+                : '海岸線の1点目をクリックし、2点目で終点をクリックして海岸線沿いの範囲を作成します (Escで取消)'}
+            </span>
+          ) : (
+            <span>
+              {isRect2Active
+                ? '対角の2点目をクリックして矩形を決定します (Escで取消)'
+                : '1点目をクリックして対角の始点を決め、2点目で終点を決定します (Escで取消)'}
+            </span>
+          )}
         </div>
       )}
     </div>

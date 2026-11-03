@@ -251,6 +251,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   const [minIslandAreaRatio, setMinIslandAreaRatio] = useState<number>(0.002); // 0.20%
   const [smoothingIterations, setSmoothingIterations] = useState<number>(1);
   const [marginPercent, setMarginPercent] = useState<number>(3); // 0 to 8% (default 3%)
+  const [riaRoughness, setRiaRoughness] = useState<number>(8); // 1 to 10 (海岸線の複雑さ・リアス度、初期値 8)
 
   // Seed visualization & status
   const [showSeeds, setShowSeeds] = useState<boolean>(false);
@@ -1791,7 +1792,11 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
         manualMask,
         dstCols,
         dstRows,
-        { gridResolution: croppedResult.resolution },
+        {
+          gridResolution: croppedResult.resolution,
+          coastlineComplexity: riaRoughness,
+          riaRoughness,
+        } as any,
         elevationGrid
       );
       setIsApplyingToWorld(false);
@@ -1825,6 +1830,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
         dstWidth: dstCols,
         dstHeight: dstRows,
         seaLevel: STANDARD_SEA_LEVEL,
+        riaRoughness,
       };
 
       const handleWorkerMessage = (e: MessageEvent<UpsampleWorkerResponse>) => {
@@ -1855,6 +1861,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
             dstRows,
             STANDARD_SEA_LEVEL,
             {
+              riaRoughness,
               onProgress: (percent, step) => {
                 setApplyProgress({ step, percent });
               },
@@ -1867,7 +1874,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
         }
       }, 50);
     }
-  }, [manualMask, croppedResult, onApplyToWorldMap, onCropped, onClose]);
+  }, [manualMask, croppedResult, onApplyToWorldMap, onCropped, onClose, riaRoughness]);
 
   // Step 4 Mouse interactions
   const handleStep4MouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -3884,6 +3891,31 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                   </div>
                 );
               })()}
+
+              {/* Coastline Complexity & Rias Setting */}
+              <div className="space-y-1.5 p-3 rounded-xl bg-stone-950/80 border border-stone-800 text-xs">
+                <div className="flex justify-between items-center text-stone-300">
+                  <span className="font-medium text-stone-200">海岸線の複雑さ・リアス度</span>
+                  <span className="font-mono text-amber-400 font-bold">Lv {riaRoughness}</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={riaRoughness}
+                  onChange={(e) => setRiaRoughness(Number(e.target.value))}
+                  className="w-full accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+                />
+                <div className="flex justify-between text-[10px] text-stone-400">
+                  <span>Lv 1 (なだらか)</span>
+                  <span className="text-amber-400/90 font-medium">Lv 8 (標準リアス海岸)</span>
+                  <span>Lv 10 (極大フィヨルド・岩礁)</span>
+                </div>
+                <div className="text-[10px] text-stone-400 pt-0.5 leading-relaxed">
+                  ※ 自動で座標歪曲・樹状の入り江・岬のギザギザ・沿岸岩礁群を形成します。
+                </div>
+              </div>
 
               <div className="space-y-2 text-xs text-stone-300 leading-relaxed bg-stone-950/60 p-3.5 rounded-xl border border-stone-800">
                 <p className="font-bold text-rose-400">
