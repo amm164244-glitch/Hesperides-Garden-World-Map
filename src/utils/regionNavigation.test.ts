@@ -31,7 +31,6 @@ const createDummyRegion = (
   gridCols: 1024,
   gridRows: 512,
   elevationGrid: new Float32Array(0),
-  temperatureGrid: new Float32Array(0),
   seaLevel: 35,
   createdAt: new Date().toISOString(),
   parentId: null,

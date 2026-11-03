@@ -21,6 +21,7 @@ export interface PlaceBiomeSymbolsParams {
   edgeFade?: number;
   maxCount?: number;
   dryRun?: boolean;
+  onProgress?: (progress: number, message: string, slot?: number) => void;
 }
 
 export interface PlaceBiomeSymbolsStats {
@@ -172,6 +173,7 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
     edgeFade = 6,
     maxCount = 20000,
     dryRun = false,
+    onProgress,
   } = params;
 
   const stats: PlaceBiomeSymbolsStats = {
@@ -236,9 +238,13 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
 
   const newlyPlacedSymbols: MapSymbolInstance[] = [];
 
-  for (const b of effectiveBiomeTypes) {
+  for (let bIdx = 0; bIdx < effectiveBiomeTypes.length; bIdx++) {
+    const b = effectiveBiomeTypes[bIdx];
     const slot = b.slot;
     stats.placedPerSlot[slot] = 0;
+
+    const progressPct = Math.round((bIdx / effectiveBiomeTypes.length) * 100);
+    onProgress?.(progressPct, `${b.name} (${bIdx + 1}/${effectiveBiomeTypes.length}) を配置中...`, slot);
 
     if (stats.totalPlaced >= maxCount) {
       stats.truncated = true;
@@ -503,8 +509,65 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
     }
   }
 
+  onProgress?.(100, '配置完了', undefined);
+
   return {
     symbols: dryRun ? [] : [...retainedSymbols, ...newlyPlacedSymbols],
     stats,
   };
 }
+
+export interface RemoveAutoBiomeSymbolsOptions {
+  targetSlot?: number;
+}
+
+/**
+ * Removes auto-placed symbols (where autoBiomeSlot !== undefined).
+ * If targetSlot is specified, only symbols matching that autoBiomeSlot are removed.
+ * Hand-placed symbols (autoBiomeSlot === undefined) are ALWAYS preserved.
+ */
+export function removeAutoBiomeSymbols(
+  symbols: MapSymbolInstance[],
+  options?: RemoveAutoBiomeSymbolsOptions
+): {
+  remainingSymbols: MapSymbolInstance[];
+  removedCount: number;
+} {
+  const targetSlot = options?.targetSlot;
+  const remainingSymbols: MapSymbolInstance[] = [];
+  let removedCount = 0;
+
+  for (const sym of symbols) {
+    if (sym.autoBiomeSlot !== undefined) {
+      if (targetSlot === undefined || sym.autoBiomeSlot === targetSlot) {
+        removedCount++;
+        continue;
+      }
+    }
+    remainingSymbols.push(sym);
+  }
+
+  return {
+    remainingSymbols,
+    removedCount,
+  };
+}
+
+/**
+ * Counts auto-placed symbols in a collection, optionally filtered by slot.
+ */
+export function countAutoBiomeSymbols(
+  symbols: MapSymbolInstance[],
+  targetSlot?: number
+): number {
+  let count = 0;
+  for (const sym of symbols) {
+    if (sym.autoBiomeSlot !== undefined) {
+      if (targetSlot === undefined || sym.autoBiomeSlot === targetSlot) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+

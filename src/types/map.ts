@@ -49,7 +49,6 @@ export interface RegionalMapData {
   gridCols: number;
   gridRows: number;
   elevationGrid: Float32Array;
-  temperatureGrid: Float32Array;
   seaLevel: number;
   createdAt: string;
   parentId: string | null; // null = 世界マップが親
@@ -73,7 +72,6 @@ export interface ParentMapSource {
   gridCols: number;
   gridRows: number;
   elevationGrid: Float32Array;
-  temperatureGrid: Float32Array;
   seaLevel: number;
   seed: number;
   widthKm: number;
@@ -87,8 +85,6 @@ export interface MapCell {
   isWater: boolean;
   isLake?: boolean;
   isOcean?: boolean;
-  temperature: number; // 0 - 100 (0: Polar -40°C, 100: Equatorial +40°C)
-  moisture: number; // 0 - 100
   neighbors: number[];
   polygon?: [number, number][];
 }
@@ -107,9 +103,8 @@ export interface MapData {
   config: GeneratorConfig;
   createdAt: string;
 
-  // High-performance Float32 elevation and temperature fields
+  // High-performance Float32 elevation field
   elevationGrid: Float32Array;
-  temperatureGrid: Float32Array;
 
   // Tectonic simulation metadata
   plates?: TectonicPlate[];
@@ -177,7 +172,7 @@ export interface Viewport {
   zoom: number;
 }
 
-export type ViewMode = 'elevation' | 'temperature' | 'moisture' | 'landSea' | 'plates';
+export type ViewMode = 'elevation' | 'landSea' | 'plates';
 
 export interface HistoryRecord {
   description: string;

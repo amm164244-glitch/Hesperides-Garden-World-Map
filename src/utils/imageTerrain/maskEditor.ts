@@ -425,31 +425,17 @@ export function createMapDataFromMask(
   mask: Uint8Array,
   gridCols: number,
   gridRows: number,
-  config: Partial<GeneratorConfig> = {}
+  config: Partial<GeneratorConfig> = {},
+  existingElevationGrid?: Float32Array
 ): MapData {
   const width = 2000;
   const height = 1000;
   const seaLevel = STANDARD_SEA_LEVEL;
 
-  // 1. Generate smoothed elevation grid
-  const elevationGrid = maskToElevationGrid(mask, gridCols, gridRows, seaLevel, 2.5);
+  // 1. Generate smoothed elevation grid (or reuse provided high-res grid)
+  const elevationGrid = existingElevationGrid || maskToElevationGrid(mask, gridCols, gridRows, seaLevel, 2.5);
 
-  // 2. Latitude-based temperature grid
-  const total = gridCols * gridRows;
-  const temperatureGrid = new Float32Array(total);
-  for (let r = 0; r < gridRows; r++) {
-    const latNorm = Math.abs((2.0 * r) / (gridRows - 1) - 1.0);
-    const baseTemp = 92.0 * Math.pow(1.0 - Math.pow(latNorm, 1.35), 0.85) + 6.0;
-
-    for (let c = 0; c < gridCols; c++) {
-      const idx = r * gridCols + c;
-      const elev = elevationGrid[idx];
-      const altitudeLapse = Math.max(0.0, elev - seaLevel) * 0.65;
-      temperatureGrid[idx] = Math.max(0.0, Math.min(100.0, baseTemp - altitudeLapse));
-    }
-  }
-
-  // 3. Sample cells for inspector telemetry (100x50 cells)
+  // 2. Sample cells for inspector telemetry (100x50 cells)
   const sampleCols = 100;
   const sampleRows = 50;
   const cells: MapCell[] = [];
@@ -467,7 +453,6 @@ export function createMapDataFromMask(
       const idx = gr * gridCols + gc;
 
       const elev = elevationGrid[idx];
-      const temp = Math.round(temperatureGrid[idx]);
       const isWater = elev <= seaLevel;
 
       cells.push({
@@ -477,8 +462,6 @@ export function createMapDataFromMask(
         elevation: elev,
         isWater,
         isOcean: isWater,
-        temperature: temp,
-        moisture: isWater ? 95 : Math.max(10, Math.round(55 - (elev - seaLevel) * 0.4)),
         neighbors: [],
       });
     }
@@ -512,7 +495,6 @@ export function createMapDataFromMask(
     config: fullConfig,
     createdAt: new Date().toISOString(),
     elevationGrid,
-    temperatureGrid,
     plates: [],
     cells,
     regionalMaps: {},

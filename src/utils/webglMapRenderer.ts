@@ -23,12 +23,11 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 uniform sampler2D u_elevation_tex;
-uniform sampler2D u_temperature_tex;
 uniform vec2 u_resolution;
 uniform vec2 u_world_size;
 uniform vec2 u_grid_size;
 uniform vec4 u_viewport; // x, y, zoom, seaLevel
-uniform int u_view_mode;  // 0: elevation, 1: temperature, 2: moisture, 3: landSea
+uniform int u_view_mode;  // 0: elevation, 3: landSea
 uniform float u_show_shading;
 uniform float u_shallows_width;
 uniform float u_show_ripples;
@@ -235,24 +234,6 @@ void main() {
 
     // Overlay subtle paper fiber / parchment noise texture
     float paperNoise = noise(worldPos * 0.8) * 0.5;
-    col *= (0.96 + paperNoise * 0.07);
-
-  } else if (u_view_mode == 1) {
-    // 1: Temperature (from sampled texture or latitude function)
-    float rawTemp = texture(u_temperature_tex, uv).r * 100.0;
-    float temp = clamp(rawTemp / 100.0, 0.0, 1.0);
-    vec3 cCold = vec3(0.14, 0.25, 0.42);  // Frozen polar
-    vec3 cMid = vec3(0.22, 0.62, 0.40);   // Temperate green
-    vec3 cWarm = vec3(0.85, 0.32, 0.18);  // Equatorial heat
-    col = temp < 0.5 ? mix(cCold, cMid, temp / 0.5) : mix(cMid, cWarm, (temp - 0.5) / 0.5);
-
-  } else if (u_view_mode == 2) {
-    // 2: Moisture
-    float m = elev <= seaLevel ? 0.95 : clamp((55.0 - (elev - seaLevel) * 0.4) / 100.0, 0.1, 0.9);
-    vec3 cDry = vec3(0.85, 0.75, 0.35);
-    vec3 cWet = vec3(0.17, 0.42, 0.69);
-    col = mix(cDry, cWet, m);
-
   } else if (u_view_mode == 3) {
     // 3: Land / Sea mask
     col = elev <= seaLevel ? vec3(0.18, 0.35, 0.45) : vec3(0.72, 0.68, 0.52);
@@ -266,7 +247,6 @@ export class WebGLMapRenderer {
   private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private elevationTexture: WebGLTexture | null = null;
-  private temperatureTexture: WebGLTexture | null = null;
   private quadVao: WebGLVertexArrayObject | null = null;
 
   private uResolutionLoc: WebGLUniformLocation | null = null;
@@ -278,12 +258,10 @@ export class WebGLMapRenderer {
   private uShowRipplesLoc: WebGLUniformLocation | null = null;
   private uShallowsWidthLoc: WebGLUniformLocation | null = null;
   private uElevationTexLoc: WebGLUniformLocation | null = null;
-  private uTemperatureTexLoc: WebGLUniformLocation | null = null;
 
   private currentCols: number = 0;
   private currentRows: number = 0;
   private byteElev: Uint8Array | null = null;
-  private byteTemp: Uint8Array | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -343,7 +321,6 @@ export class WebGLMapRenderer {
     this.uShowRipplesLoc = gl.getUniformLocation(program, 'u_show_ripples');
     this.uShallowsWidthLoc = gl.getUniformLocation(program, 'u_shallows_width');
     this.uElevationTexLoc = gl.getUniformLocation(program, 'u_elevation_tex');
-    this.uTemperatureTexLoc = gl.getUniformLocation(program, 'u_temperature_tex');
   }
 
   private initGeometry() {
@@ -369,11 +346,10 @@ export class WebGLMapRenderer {
   }
 
   /**
-   * Upload elevation grid and temperature grid
+   * Upload elevation grid
    */
   updateGridTextures(
     elevationGrid: Float32Array,
-    temperatureGrid: Float32Array | undefined,
     cols: number,
     rows: number
   ) {
@@ -401,27 +377,6 @@ export class WebGLMapRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    // Temperature texture
-    if (!this.temperatureTexture) {
-      this.temperatureTexture = gl.createTexture();
-    }
-    gl.bindTexture(gl.TEXTURE_2D, this.temperatureTexture);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-
-    if (!this.byteTemp || this.byteTemp.length !== totalCells) {
-      this.byteTemp = new Uint8Array(totalCells);
-    }
-    if (temperatureGrid) {
-      for (let i = 0; i < totalCells; i++) {
-        this.byteTemp[i] = Math.max(0, Math.min(255, Math.round(temperatureGrid[i] * 2.55)));
-      }
-    }
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows, 0, gl.RED, gl.UNSIGNED_BYTE, this.byteTemp);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
     this.currentCols = cols;
     this.currentRows = rows;
   }
@@ -440,7 +395,7 @@ export class WebGLMapRenderer {
   ) {
     const gl = this.gl;
     if (!gl || !this.elevationTexture || !this.byteElev || cols !== this.currentCols || rows !== this.currentRows) {
-      this.updateGridTextures(grid, undefined, cols, rows);
+      this.updateGridTextures(grid, cols, rows);
       return;
     }
 
@@ -488,7 +443,6 @@ export class WebGLMapRenderer {
     gridCols: number,
     gridRows: number,
     elevationGrid: Float32Array,
-    temperatureGrid: Float32Array | undefined,
     seaLevel: number,
     viewport: Viewport,
     options: {
@@ -502,7 +456,7 @@ export class WebGLMapRenderer {
     if (!gl || !this.program || !this.quadVao) return;
 
     if (!this.elevationTexture || this.currentCols !== gridCols || this.currentRows !== gridRows) {
-      this.updateGridTextures(elevationGrid, temperatureGrid, gridCols, gridRows);
+      this.updateGridTextures(elevationGrid, gridCols, gridRows);
     }
 
     const displayW = gl.canvas.width;
@@ -524,8 +478,6 @@ export class WebGLMapRenderer {
 
     const modeMap: Record<ViewMode, number> = {
       elevation: 0,
-      temperature: 1,
-      moisture: 2,
       landSea: 3,
       plates: 0,
     };
@@ -538,10 +490,6 @@ export class WebGLMapRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.elevationTexture);
     gl.uniform1i(this.uElevationTexLoc, 0);
 
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.temperatureTexture);
-    gl.uniform1i(this.uTemperatureTexLoc, 1);
-
     gl.bindVertexArray(this.quadVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
@@ -551,7 +499,6 @@ export class WebGLMapRenderer {
     const gl = this.gl;
     if (!gl) return;
     if (this.elevationTexture) gl.deleteTexture(this.elevationTexture);
-    if (this.temperatureTexture) gl.deleteTexture(this.temperatureTexture);
     if (this.quadVao) gl.deleteVertexArray(this.quadVao);
     if (this.program) gl.deleteProgram(this.program);
   }

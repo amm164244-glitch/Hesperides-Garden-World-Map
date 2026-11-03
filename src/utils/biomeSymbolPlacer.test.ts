@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { placeBiomeSymbols } from './biomeSymbolPlacer';
+import {
+  placeBiomeSymbols,
+  removeAutoBiomeSymbols,
+  countAutoBiomeSymbols,
+} from './biomeSymbolPlacer';
 import { BiomeType } from '../types/biome';
 import { CustomMapAsset, MapSymbolInstance } from '../types/symbols';
 import { serializeMapData, deserializeMapData } from './serialization';
@@ -533,7 +537,6 @@ test('13. Serialization round-trip: autoBiomeSlot and rule elevationMin/elevatio
     gridRows: 32,
     cells: [],
     elevationGrid: new Float32Array(64 * 32),
-    temperatureGrid: new Float32Array(64 * 32),
     symbols: [
       {
         id: 'sym_auto_1',
@@ -640,3 +643,135 @@ test('13. Serialization round-trip: autoBiomeSlot and rule elevationMin/elevatio
   assert.equal(legacyData.biomeTypes[0].symbols[0].elevationMin, undefined);
   assert.equal(legacyData.biomeTypes[0].symbols[0].elevationMax, undefined);
 });
+
+test('14. Unit test: removeAutoBiomeSymbols strictly preserves hand-placed symbols and filters target slot correctly', () => {
+  const symbols: MapSymbolInstance[] = [
+    { id: 'hand_1', type: 'tree_pine', x: 10, y: 10, scale: 1 }, // Hand-placed (no autoBiomeSlot)
+    { id: 'hand_2', type: 'mountain_rock', x: 50, y: 50, scale: 1.2 }, // Hand-placed
+    { id: 'auto_slot1_a', type: 'tree_pine', x: 100, y: 100, scale: 1, autoBiomeSlot: 1 },
+    { id: 'auto_slot1_b', type: 'tree_pine', x: 120, y: 120, scale: 1, autoBiomeSlot: 1 },
+    { id: 'auto_slot2_a', type: 'tree_oak', x: 200, y: 200, scale: 1, autoBiomeSlot: 2 },
+    { id: 'auto_slot3_a', type: 'tree_dead', x: 300, y: 300, scale: 1, autoBiomeSlot: 3 },
+  ];
+
+  // Count checks
+  assert.equal(countAutoBiomeSymbols(symbols), 4);
+  assert.equal(countAutoBiomeSymbols(symbols, 1), 2);
+  assert.equal(countAutoBiomeSymbols(symbols, 2), 1);
+  assert.equal(countAutoBiomeSymbols(symbols, 3), 1);
+  assert.equal(countAutoBiomeSymbols(symbols, 99), 0);
+
+  // 1. Remove only Slot 1
+  const delSlot1 = removeAutoBiomeSymbols(symbols, { targetSlot: 1 });
+  assert.equal(delSlot1.removedCount, 2);
+  assert.equal(delSlot1.remainingSymbols.length, 4);
+  // Hand-placed must remain
+  assert(delSlot1.remainingSymbols.some((s) => s.id === 'hand_1'));
+  assert(delSlot1.remainingSymbols.some((s) => s.id === 'hand_2'));
+  // Slot 2 and Slot 3 auto symbols must remain
+  assert(delSlot1.remainingSymbols.some((s) => s.id === 'auto_slot2_a'));
+  assert(delSlot1.remainingSymbols.some((s) => s.id === 'auto_slot3_a'));
+  // Slot 1 auto symbols must be gone
+  assert(!delSlot1.remainingSymbols.some((s) => s.id === 'auto_slot1_a'));
+  assert(!delSlot1.remainingSymbols.some((s) => s.id === 'auto_slot1_b'));
+
+  // 2. Remove All auto-placed symbols
+  const delAll = removeAutoBiomeSymbols(symbols);
+  assert.equal(delAll.removedCount, 4);
+  assert.equal(delAll.remainingSymbols.length, 2);
+  // Only hand-placed symbols must remain
+  assert.deepEqual(
+    delAll.remainingSymbols.map((s) => s.id),
+    ['hand_1', 'hand_2']
+  );
+  for (const s of delAll.remainingSymbols) {
+    assert.equal(s.autoBiomeSlot, undefined, 'Remaining symbols must all be hand-placed');
+  }
+});
+
+test('15. Integration test: dryRun estimation count strictly matches actual placement count and newly added symbols', () => {
+  const setup = createTestSetup();
+
+  const existingSymbols: MapSymbolInstance[] = [
+    { id: 'user_sym_1', type: 'tree_pine', x: 25, y: 25, scale: 1 }, // Hand-placed
+    { id: 'prev_auto_1', type: 'tree_pine', x: 100, y: 100, scale: 1, autoBiomeSlot: 1 }, // Old auto slot 1
+  ];
+
+  // Test Append Mode
+  const appendDry = placeBiomeSymbols({
+    ...setup,
+    existingSymbols,
+    mode: 'append',
+    seed: 88214,
+    edgeFade: 4,
+    maxCount: 500,
+    dryRun: true,
+  });
+
+  const appendReal = placeBiomeSymbols({
+    ...setup,
+    existingSymbols,
+    mode: 'append',
+    seed: 88214,
+    edgeFade: 4,
+    maxCount: 500,
+    dryRun: false,
+  });
+
+  assert(appendDry.stats.totalPlaced > 0, 'Estimate must place symbols');
+  assert.equal(appendDry.symbols.length, 0, 'dryRun must not return symbol instances');
+  assert.equal(
+    appendDry.stats.totalPlaced,
+    appendReal.stats.totalPlaced,
+    'Estimated total must strictly equal actual placed count'
+  );
+  assert.equal(
+    appendReal.symbols.length - existingSymbols.length,
+    appendDry.stats.totalPlaced,
+    'Newly added symbols in append mode must strictly equal estimated count'
+  );
+  assert.deepEqual(
+    appendDry.stats.placedPerSlot,
+    appendReal.stats.placedPerSlot,
+    'Per-slot breakdown must match between dryRun and actual execution'
+  );
+
+  // Test Replace Mode
+  const replaceDry = placeBiomeSymbols({
+    ...setup,
+    existingSymbols,
+    mode: 'replace',
+    seed: 94712,
+    edgeFade: 6,
+    maxCount: 400,
+    dryRun: true,
+  });
+
+  const replaceReal = placeBiomeSymbols({
+    ...setup,
+    existingSymbols,
+    mode: 'replace',
+    seed: 94712,
+    edgeFade: 6,
+    maxCount: 400,
+    dryRun: false,
+  });
+
+  assert.equal(
+    replaceDry.stats.totalPlaced,
+    replaceReal.stats.totalPlaced,
+    'Estimated count in replace mode must strictly equal actual placed count'
+  );
+
+  // Hand-placed symbol must be preserved
+  assert(
+    replaceReal.symbols.some((s) => s.id === 'user_sym_1'),
+    'Hand-placed symbol must never be removed in replace mode'
+  );
+  // Old auto slot 1 must have been replaced
+  assert(
+    !replaceReal.symbols.some((s) => s.id === 'prev_auto_1'),
+    'Old auto-placed symbol for target slot must be replaced in replace mode'
+  );
+});
+

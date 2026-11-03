@@ -366,7 +366,6 @@ test('removeBiomeType: replaces cells with 0 across world and regional maps and 
     cellCount: worldCols * worldRows,
     createdAt: new Date().toISOString(),
     elevationGrid: new Float32Array(worldCols * worldRows),
-    temperatureGrid: new Float32Array(worldCols * worldRows),
     biomeGrid: worldGrid,
     biomeTypes,
     cells: [],
@@ -387,7 +386,6 @@ test('removeBiomeType: replaces cells with 0 across world and regional maps and 
         createdAt: new Date().toISOString(),
         parentId: null,
         elevationGrid: new Float32Array(regCols * regRows),
-        temperatureGrid: new Float32Array(regCols * regRows),
         biomeGrid: regGrid,
         symbols: [],
       },
@@ -548,7 +546,6 @@ test('serialization: biomeTypes roundtrip and sanitizes unknown biome slots in g
     cellCount: worldCols * worldRows,
     createdAt: new Date().toISOString(),
     elevationGrid: new Float32Array(worldCols * worldRows),
-    temperatureGrid: new Float32Array(worldCols * worldRows),
     biomeGrid: worldGrid,
     biomeTypes: DEFAULT_BIOME_TYPES, // only slots 1..7 exist
     cells: [],

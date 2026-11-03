@@ -222,8 +222,6 @@ export function generateTerrain(
       y: mesh.centroids[i].y,
       elevation,
       isWater: elevation <= STANDARD_SEA_LEVEL,
-      moisture: 50,
-      temperature: 50,
       neighbors: mesh.neighbors[i],
       polygon: mesh.polygons[i],
     };
@@ -353,26 +351,7 @@ export function generateTerrain(
     }
   }
 
-  // 7. Calculate Temperature and Moisture
-  for (let i = 0; i < cellCount; i++) {
-    const c = cells[i];
-    const latNorm = c.y / height;
-    const baseTemp = 20 + latNorm * 65;
-    const lapseRate = Math.max(0, c.elevation - STANDARD_SEA_LEVEL) * 0.65;
-    const tempNoise = noise.sample(c.x * 0.005, c.y * 0.005) * 8;
-    c.temperature = Math.max(0, Math.min(100, Math.round(baseTemp - lapseRate + tempNoise)));
 
-    if (c.isWater) {
-      c.moisture = 95;
-    } else {
-      const mNoise = detailNoise.sample((c.x + 500) * 0.004, (c.y + 500) * 0.004);
-      let m = 50 + mNoise * 35;
-      if (c.elevation > 70) {
-        m -= (c.elevation - 70) * 0.5;
-      }
-      c.moisture = Math.max(5, Math.min(95, Math.round(m)));
-    }
-  }
 
   onProgress?.(85, '高精細等高線と海岸線を抽出中...');
 
@@ -468,7 +447,6 @@ export function generateTerrain(
     gridCols,
     gridRows,
     elevationGrid: smoothGrid,
-    temperatureGrid: new Float32Array(gridCols * gridRows),
     regionalMaps: {},
     coastlines: smoothedCoastlines,
     ripples: smoothedRipples,

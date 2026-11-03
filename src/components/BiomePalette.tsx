@@ -13,7 +13,9 @@ import {
   Palette,
 } from 'lucide-react';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
-import { BrushMode } from '../types/map';
+import { BrushMode, Viewport } from '../types/map';
+import { CustomMapAsset, MapSymbolInstance } from '../types/symbols';
+import { BiomePlacePanel } from './BiomePlacePanel';
 
 export interface BiomePaletteProps {
   brushMode: BrushMode;
@@ -34,6 +36,20 @@ export interface BiomePaletteProps {
   onClose: () => void;
   biomeTypes?: BiomeType[];
   onOpenEditor?: () => void;
+
+  // Auto-placement props
+  customAssets?: CustomMapAsset[];
+  activeBiomeGrid?: Uint8Array;
+  elevationGrid?: Float32Array;
+  seaLevel?: number;
+  gridCols?: number;
+  gridRows?: number;
+  mapWidth?: number;
+  mapHeight?: number;
+  viewport?: Viewport;
+  existingSymbols?: MapSymbolInstance[];
+  onApplySymbols?: (symbols: MapSymbolInstance[], description: string) => void;
+  activeRegionId?: string | null;
 }
 
 export const BiomePalette: React.FC<BiomePaletteProps> = ({
@@ -55,13 +71,25 @@ export const BiomePalette: React.FC<BiomePaletteProps> = ({
   onClose,
   biomeTypes,
   onOpenEditor,
+  customAssets = [],
+  activeBiomeGrid,
+  elevationGrid,
+  seaLevel,
+  gridCols,
+  gridRows,
+  mapWidth,
+  mapHeight,
+  viewport,
+  existingSymbols,
+  onApplySymbols,
+  activeRegionId,
 }) => {
   const [showConfirmClear, setShowConfirmClear] = useState<boolean>(false);
   const activeBiomeTypes = biomeTypes && biomeTypes.length > 0 ? biomeTypes : DEFAULT_BIOME_TYPES;
   const currentBiome = activeBiomeTypes.find((b) => b.slot === selectedBiomeId);
 
   return (
-    <div className="w-80 max-w-[calc(100vw-2rem)] bg-stone-900/95 backdrop-blur-md text-stone-200 p-3 rounded-xl border border-stone-700/80 shadow-2xl flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-150">
+    <div className="w-80 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2.5rem)] overflow-y-auto bg-stone-900/95 backdrop-blur-md text-stone-200 p-3 rounded-xl border border-stone-700/80 shadow-2xl flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-150">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-stone-800 pb-2">
         <div className="flex items-center gap-1.5">
@@ -276,6 +304,26 @@ export const BiomePalette: React.FC<BiomePaletteProps> = ({
           />
         </div>
       </div>
+
+      {/* Auto-Placement of Symbols Section */}
+      {onApplySymbols && viewport && (
+        <BiomePlacePanel
+          selectedBiomeId={selectedBiomeId}
+          biomeTypes={activeBiomeTypes}
+          customAssets={customAssets}
+          activeBiomeGrid={activeBiomeGrid}
+          elevationGrid={elevationGrid}
+          seaLevel={seaLevel ?? 35}
+          gridCols={gridCols ?? 1024}
+          gridRows={gridRows ?? 512}
+          mapWidth={mapWidth ?? 2000}
+          mapHeight={mapHeight ?? 1000}
+          viewport={viewport}
+          existingSymbols={existingSymbols ?? []}
+          onApplySymbols={onApplySymbols}
+          activeRegionId={activeRegionId ?? null}
+        />
+      )}
 
       {/* Clear Biome Grid Button with Confirm Dialog */}
       {!showConfirmClear ? (

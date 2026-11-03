@@ -232,7 +232,6 @@ test('serialization: preserves outline field and backward compatibility when out
         bounds: { minX: 10, minY: 10, maxX: 100, maxY: 100 },
         zoomScale: 4,
         elevationGridBase64: serialized.regionalMaps[regionWithOutline.id].elevationGridBase64,
-        temperatureGridBase64: serialized.regionalMaps[regionWithOutline.id].temperatureGridBase64,
         // outline is omitted
       },
     },

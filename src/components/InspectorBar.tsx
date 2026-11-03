@@ -1,5 +1,5 @@
 import React from 'react';
-import { Compass, Thermometer, Droplets, Mountain, MapPin } from 'lucide-react';
+import { Compass, Mountain, MapPin } from 'lucide-react';
 import { MapCell, MapData, Viewport } from '../types/map';
 
 interface InspectorBarProps {
@@ -68,22 +68,7 @@ const InspectorBarComponent: React.FC<InspectorBarProps> = ({
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5">
-              <Thermometer className="w-3.5 h-3.5 text-orange-400" />
-              <span className="text-stone-400">気温:</span>
-              <span className="font-mono text-stone-200">
-                {hoveredCell.temperature}
-                <span className="text-[10px] text-stone-500">
-                  {' '}(約{Math.round(hoveredCell.temperature * 0.4 - 10)}℃)
-                </span>
-              </span>
-            </div>
 
-            <div className="flex items-center gap-1.5">
-              <Droplets className="w-3.5 h-3.5 text-sky-400" />
-              <span className="text-stone-400">湿度:</span>
-              <span className="font-mono text-stone-200">{hoveredCell.moisture}%</span>
-            </div>
           </>
         ) : (
           <div className="text-stone-500 italic flex items-center gap-1.5">

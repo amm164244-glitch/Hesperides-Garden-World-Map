@@ -69,10 +69,8 @@ export function serializeMapData(
         widthKm: reg.widthKm,
         symbols: reg.symbols || [],
         elevationGridBase64: float32ToBase64(reg.elevationGrid),
-        temperatureGridBase64: float32ToBase64(reg.temperatureGrid),
         biomeGridBase64: reg.biomeGrid ? biomeGridToBase64(reg.biomeGrid) : undefined,
         elevationGrid: undefined,
-        temperatureGrid: undefined,
         biomeGrid: undefined,
       };
     }
@@ -88,10 +86,8 @@ export function serializeMapData(
     customAssets: assetsToSave,
     customCategories: categoriesToSave,
     elevationGridBase64: float32ToBase64(mapData.elevationGrid),
-    temperatureGridBase64: float32ToBase64(mapData.temperatureGrid),
     biomeGridBase64: mapData.biomeGrid ? biomeGridToBase64(mapData.biomeGrid) : undefined,
     elevationGrid: undefined,
-    temperatureGrid: undefined,
     biomeGrid: undefined,
     regionalMaps: regionalMapsSerialized,
   };
@@ -124,10 +120,6 @@ export function deserializeMapData(raw: any): MapData {
     ? base64ToFloat32(raw.elevationGridBase64)
     : ensureFloat32Array(raw.elevationGrid, expectedTotal);
 
-  const temperatureGrid = raw.temperatureGridBase64
-    ? base64ToFloat32(raw.temperatureGridBase64)
-    : ensureFloat32Array(raw.temperatureGrid, expectedTotal);
-
   // Restore biomeTypes, falling back to defaults if absent
   const biomeTypes: BiomeType[] = Array.isArray(raw.biomeTypes) && raw.biomeTypes.length > 0
     ? raw.biomeTypes
@@ -144,10 +136,6 @@ export function deserializeMapData(raw: any): MapData {
       const regElev = regRaw.elevationGridBase64
         ? base64ToFloat32(regRaw.elevationGridBase64)
         : ensureFloat32Array(regRaw.elevationGrid, regTotal);
-
-      const regTemp = regRaw.temperatureGridBase64
-        ? base64ToFloat32(regRaw.temperatureGridBase64)
-        : ensureFloat32Array(regRaw.temperatureGrid, regTotal);
 
       let regBiome = regRaw.biomeGridBase64
         ? base64ToBiomeGrid(regRaw.biomeGridBase64, regTotal)
@@ -166,7 +154,10 @@ export function deserializeMapData(raw: any): MapData {
         ? regRaw.widthKm
         : Math.round(worldWidthKm * (boundsW / worldW));
 
+      const { temperatureGrid: _t1, temperatureGridBase64: _tb1, ...cleanRegRaw } = regRaw;
+
       regionalMaps[id] = {
+        ...cleanRegRaw,
         id: regRaw.id || id,
         name: regRaw.name || '地域マップ',
         bounds: regRaw.bounds,
@@ -176,7 +167,6 @@ export function deserializeMapData(raw: any): MapData {
         gridCols: regCols,
         gridRows: regRows,
         elevationGrid: regElev,
-        temperatureGrid: regTemp,
         seaLevel: regRaw.seaLevel ?? 35.0,
         createdAt: regRaw.createdAt || new Date().toISOString(),
         parentId,
@@ -195,12 +185,13 @@ export function deserializeMapData(raw: any): MapData {
 
   biomeGrid = sanitizeBiomeGrid(biomeGrid, validSlots);
 
+  const { temperatureGrid: _t2, temperatureGridBase64: _tb2, ...cleanRaw } = raw;
+
   return {
-    ...raw,
+    ...cleanRaw,
     gridCols,
     gridRows,
     elevationGrid,
-    temperatureGrid,
     biomeGrid,
     biomeTypes,
     symbols: Array.isArray(raw.symbols) ? raw.symbols : [],

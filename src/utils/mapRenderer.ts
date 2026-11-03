@@ -61,20 +61,6 @@ export function getElevationRgb(elevation: number, seaLevel: number): [number, n
   }
 }
 
-export function getTemperatureRgb(temp: number): [number, number, number] {
-  const t = Math.max(0, Math.min(1, temp / 100));
-  if (t < 0.25) return lerpColor('#2a4365', '#3182ce', t / 0.25);
-  if (t < 0.5) return lerpColor('#3182ce', '#38a169', (t - 0.25) / 0.25);
-  if (t < 0.75) return lerpColor('#38a169', '#d69e2e', (t - 0.5) / 0.25);
-  return lerpColor('#d69e2e', '#e53e3e', (t - 0.75) / 0.25);
-}
-
-export function getMoistureRgb(moisture: number): [number, number, number] {
-  const t = Math.max(0, Math.min(1, moisture / 100));
-  if (t < 0.25) return lerpColor('#ecc94b', '#d69e2e', t / 0.25);
-  if (t < 0.6) return lerpColor('#d69e2e', '#48bb78', (t - 0.25) / 0.35);
-  return lerpColor('#48bb78', '#2b6cb0', (t - 0.6) / 0.4);
-}
 
 export interface RenderOptions {
   viewMode: ViewMode;
@@ -169,14 +155,6 @@ export function renderMap(
             let [red, green, blue] = [0, 0, 0];
             if (options.viewMode === 'elevation') {
               [red, green, blue] = getElevationRgb(elev, seaLevel);
-            } else if (options.viewMode === 'temperature') {
-              const latNorm = r / rows;
-              const lapse = Math.max(0, elev - seaLevel) * 0.65;
-              const temp = Math.max(0, Math.min(100, Math.round(20 + latNorm * 65 - lapse)));
-              [red, green, blue] = getTemperatureRgb(temp);
-            } else if (options.viewMode === 'moisture') {
-              const m = elev <= seaLevel ? 95 : Math.max(10, Math.min(90, Math.round(55 - (elev - seaLevel) * 0.4)));
-              [red, green, blue] = getMoistureRgb(m);
             } else if (options.viewMode === 'landSea') {
               [red, green, blue] = elev <= seaLevel ? [32, 74, 110] : [115, 158, 86];
             }

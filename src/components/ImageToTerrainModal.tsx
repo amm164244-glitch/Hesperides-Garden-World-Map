@@ -29,6 +29,7 @@ import {
   Globe,
   Spline,
   Palette,
+  Loader2,
 } from 'lucide-react';
 import {
   ColorSample,
@@ -42,6 +43,7 @@ import {
   computeCoastlineOutline,
   runLabKMeans,
   analyzeSeeds,
+  estimateSegmentationMemory,
 } from '../utils/imageTerrain/segmentLandSea';
 import {
   MaskPatch,
@@ -51,18 +53,51 @@ import {
   floodFillMask,
   applyPolygonToMask,
   createMapDataFromMask,
+  maskToElevationGrid,
 } from '../utils/imageTerrain/maskEditor';
+import { STANDARD_SEA_LEVEL } from '../utils/tectonicGenerator';
+import { buildElevationFromMask } from '../utils/imageTerrain/upsampleMask';
 import { MapData } from '../types/map';
 import {
   SegmentationWorkerRequest,
   SegmentationWorkerResponse,
 } from '../workers/segmentationWorker';
+import {
+  UpsampleWorkerRequest,
+  UpsampleWorkerResponse,
+} from '../workers/upsampleWorker';
 
-export type TerrainResolution = '1024x512' | '2048x1024';
+export type TerrainResolution = '1024x512' | '2048x1024' | '4096x2048' | '8192x4096';
+export type AnalysisResolution = 'auto' | '1024x512' | '2048x1024' | '4096x2048';
+
+/**
+ * Calculates effective analysis resolution based on user setting, crop width, and output resolution.
+ */
+export function getEffectiveAnalysisResolution(
+  analysisRes: AnalysisResolution,
+  outputRes: TerrainResolution,
+  cropWidth: number
+): '1024x512' | '2048x1024' | '4096x2048' {
+  if (analysisRes !== 'auto') {
+    if (analysisRes === '4096x2048' && cropWidth < 4096) {
+      return '2048x1024';
+    }
+    return analysisRes;
+  }
+  // Auto mode:
+  // If crop width < 2048: 1024x512
+  // If output resolution is 1024x512: 1024x512
+  // Otherwise: 2048x1024
+  if (cropWidth < 2048 || outputRes === '1024x512') {
+    return '1024x512';
+  }
+  return '2048x1024';
+}
 
 export interface CroppedTerrainResult {
   imageData: ImageData;
   resolution: TerrainResolution;
+  analysisResolution?: '1024x512' | '2048x1024' | '4096x2048';
   width: number;
   height: number;
   dataUrl?: string;

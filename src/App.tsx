@@ -256,8 +256,13 @@ export default function App() {
     flattenTarget: 50,
   });
 
-  // Display toggles
   const [viewMode, setViewMode] = useState<ViewMode>('elevation');
+
+  useEffect(() => {
+    if ((viewMode as string) === 'temperature' || (viewMode as string) === 'moisture') {
+      setViewMode('elevation');
+    }
+  }, [viewMode]);
   const [showMesh, setShowMesh] = useState<boolean>(false);
   const [showShading, setShowShading] = useState<boolean>(true);
   const [showRipples, setShowRipples] = useState<boolean>(true);
@@ -793,12 +798,47 @@ export default function App() {
   // Commit history record
   const handleCommitHistory = useCallback((record: HistoryRecord) => {
     setUndoStack((prev) => {
-      const next = [...prev, record];
+      let next = [...prev, record];
+
+      // シンボルが 10,000 個を超える履歴レコードはメモリを大量消費するため、
+      // 直近の最新レコードだけを保持し、過去の大規模履歴レコードは破棄してメモリリークを防ぐ
+      const hasLargeSymbols = (r: HistoryRecord) => {
+        const sc = r.symbolChanges;
+        return !!sc && (sc.prevSymbols.length > 10000 || sc.newSymbols.length > 10000);
+      };
+
+      const largeIndices = next
+        .map((r, idx) => (hasLargeSymbols(r) ? idx : -1))
+        .filter((idx) => idx !== -1);
+
+      if (largeIndices.length > 1) {
+        // 直近（最後の1件）以外の大規模シンボル履歴を取り除く
+        const keepIdx = largeIndices[largeIndices.length - 1];
+        next = next.filter((r, idx) => !hasLargeSymbols(r) || idx === keepIdx);
+      }
+
       if (next.length > 30) next.shift();
       return next;
     });
     setRedoStack([]);
   }, []);
+
+  // Apply auto-placed or auto-deleted symbols with undo history
+  const handleApplyAutoSymbols = useCallback(
+    (newSymbols: MapSymbolInstance[], description: string) => {
+      handleCommitHistory({
+        description,
+        timestamp: Date.now(),
+        symbolChanges: {
+          prevSymbols: currentSymbols,
+          newSymbols,
+        },
+      });
+      handleUpdateSymbols(newSymbols);
+      setSelectedSymbolId(null);
+    },
+    [currentSymbols, handleCommitHistory, handleUpdateSymbols]
+  );
 
   // Undo
   const handleUndo = useCallback(() => {
@@ -1198,6 +1238,18 @@ export default function App() {
               }
               biomeTypes={biomeTypes}
               onOpenEditor={() => setIsBiomeTypeEditorOpen(true)}
+              customAssets={customAssets}
+              activeBiomeGrid={activeRegionalMap ? activeRegionalMap.biomeGrid : mapData.biomeGrid}
+              elevationGrid={activeRegionalMap ? activeRegionalMap.elevationGrid : mapData.elevationGrid}
+              seaLevel={activeRegionalMap ? activeRegionalMap.seaLevel : mapData.seaLevel}
+              gridCols={activeRegionalMap ? activeRegionalMap.gridCols : mapData.gridCols}
+              gridRows={activeRegionalMap ? activeRegionalMap.gridRows : mapData.gridRows}
+              mapWidth={activeRegionalMap ? activeRegionalMap.width : mapData.width}
+              mapHeight={activeRegionalMap ? activeRegionalMap.height : mapData.height}
+              viewport={viewport}
+              existingSymbols={currentSymbols}
+              onApplySymbols={handleApplyAutoSymbols}
+              activeRegionId={activeRegionId}
             />
           </div>
         )}

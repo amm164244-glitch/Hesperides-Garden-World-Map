@@ -133,7 +133,6 @@ test('createMapDataFromMask constructs complete MapData with Float32Array grids 
   assert.equal(mapData.gridCols, 32);
   assert.equal(mapData.gridRows, 16);
   assert.equal(mapData.elevationGrid.length, 32 * 16);
-  assert.equal(mapData.temperatureGrid.length, 32 * 16);
   assert.equal(mapData.cells.length, 100 * 50);
   assert.equal(mapData.symbols?.length, 0);
   assert.deepEqual(mapData.regionalMaps, {});

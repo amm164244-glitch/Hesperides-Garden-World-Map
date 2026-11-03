@@ -163,7 +163,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const currentCols = isRegion ? activeRegionalMap.gridCols : mapData.gridCols;
   const currentRows = isRegion ? activeRegionalMap.gridRows : mapData.gridRows;
   const currentElevation = isRegion ? activeRegionalMap.elevationGrid : mapData.elevationGrid;
-  const currentTemperature = isRegion ? activeRegionalMap.temperatureGrid : mapData.temperatureGrid;
   const currentSeaLevel = isRegion ? activeRegionalMap.seaLevel : mapData.seaLevel;
   const currentBiomeGrid = isRegion ? activeRegionalMap?.biomeGrid : mapData.biomeGrid;
 
@@ -277,7 +276,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       rendererRef.current = new WebGLMapRenderer(glCanvas);
       rendererRef.current.updateGridTextures(
         currentElevation,
-        currentTemperature,
         currentCols,
         currentRows
       );
@@ -296,12 +294,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (rendererRef.current) {
       rendererRef.current.updateGridTextures(
         currentElevation,
-        currentTemperature,
         currentCols,
         currentRows
       );
     }
-  }, [currentElevation, currentTemperature, currentCols, currentRows]);
+  }, [currentElevation, currentCols, currentRows]);
 
   // Screen to World coordinates
   const screenToWorld = useCallback(
@@ -332,7 +329,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         currentCols,
         currentRows,
         currentElevation,
-        currentTemperature,
         currentSeaLevel,
         viewport,
         {
@@ -349,7 +345,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     currentCols,
     currentRows,
     currentElevation,
-    currentTemperature,
     currentSeaLevel,
     viewport,
     viewMode,
@@ -1023,7 +1018,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         } else {
           rendererRef.current.updateGridTextures(
             currentElevation,
-            currentTemperature,
             currentCols,
             currentRows
           );
@@ -1035,7 +1029,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     },
     [
       currentElevation,
-      currentTemperature,
       currentCols,
       currentRows,
       currentWidth,

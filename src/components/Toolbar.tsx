@@ -655,8 +655,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           {(
             [
               { id: 'elevation', label: '標高' },
-              { id: 'temperature', label: '気温' },
-              { id: 'moisture', label: '湿度' },
               { id: 'landSea', label: '陸/海' },
             ] as const
           ).map((m) => (

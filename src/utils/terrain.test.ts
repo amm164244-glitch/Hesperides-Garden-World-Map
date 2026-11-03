@@ -49,19 +49,7 @@ test('generateTectonicWorld creates 2:1 global map with plates and Float32 grids
   assert.equal(mapData.gridCols, 1024);
   assert.equal(mapData.gridRows, 512);
   assert(mapData.elevationGrid instanceof Float32Array);
-  assert(mapData.temperatureGrid instanceof Float32Array);
   assert(mapData.plates && mapData.plates.length >= 8);
-
-  // Check latitude-dependent temperature gradient
-  // Equator row is at index r = 256
-  const equatorTemp = mapData.temperatureGrid[256 * 1024 + 512];
-  // Arctic row is at index r = 10
-  const arcticTemp = mapData.temperatureGrid[10 * 1024 + 512];
-  // Antarctic row is at index r = 500
-  const antarcticTemp = mapData.temperatureGrid[500 * 1024 + 512];
-
-  assert(equatorTemp > arcticTemp, `Equator temp (${equatorTemp}) should be warmer than Arctic (${arcticTemp})`);
-  assert(equatorTemp > antarcticTemp, `Equator temp (${equatorTemp}) should be warmer than Antarctic (${antarcticTemp})`);
 });
 
 test('generateRegionalMap inherits macro terrain and adds micro detail at 4x and 16x', () => {
@@ -162,12 +150,15 @@ test('serializeMapData and deserializeMapData preserve Float32Array grids and re
 
   const serialized = serializeMapData(worldMap);
   assert(typeof serialized.elevationGridBase64 === 'string', 'Should produce base64 string for elevation');
+  assert.equal(serialized.temperatureGridBase64, undefined, 'Should not serialize temperatureGrid');
   assert(typeof serialized.regionalMaps[region.id].elevationGridBase64 === 'string', 'Should serialize region grids');
+  assert.equal(serialized.regionalMaps[region.id].temperatureGridBase64, undefined, 'Should not serialize region temperatureGrid');
   assert.equal(serialized.symbols.length, 1);
   assert.equal(serialized.regionalMaps[region.id].symbols.length, 1);
 
   const restored = deserializeMapData(serialized);
   assert(restored.elevationGrid instanceof Float32Array, 'Should restore Float32Array for world elevation');
+  assert.equal((restored as any).temperatureGrid, undefined, 'World map should not have temperatureGrid');
   assert.equal(restored.elevationGrid.length, worldMap.elevationGrid.length);
   assert.equal(restored.elevationGrid[500], worldMap.elevationGrid[500]);
   assert.equal(restored.symbols?.length, 1);
@@ -176,9 +167,42 @@ test('serializeMapData and deserializeMapData preserve Float32Array grids and re
   const restoredRegion = restored.regionalMaps[region.id];
   assert(restoredRegion, 'Should restore regional map');
   assert(restoredRegion.elevationGrid instanceof Float32Array);
+  assert.equal((restoredRegion as any).temperatureGrid, undefined, 'Regional map should not have temperatureGrid');
   assert.equal(restoredRegion.elevationGrid[200], region.elevationGrid[200]);
   assert.equal(restoredRegion.symbols?.length, 1);
   assert.equal(restoredRegion.symbols?.[0].id, 'region_sym1');
+});
+
+test('deserializeMapData ignores legacy temperatureGrid and temperatureGridBase64', () => {
+  const legacyData = {
+    width: 2000,
+    height: 1000,
+    gridCols: 10,
+    gridRows: 10,
+    seed: 12345,
+    seaLevel: 35,
+    worldWidthKm: 40000,
+    elevationGridBase64: 'AAAAAA==',
+    temperatureGridBase64: 'AAAAAA==',
+    temperatureGrid: new Float32Array(100),
+    regionalMaps: {
+      reg1: {
+        id: 'reg1',
+        gridCols: 10,
+        gridRows: 10,
+        elevationGridBase64: 'AAAAAA==',
+        temperatureGridBase64: 'AAAAAA==',
+        temperatureGrid: new Float32Array(100),
+        bounds: { minX: 0, minY: 0, maxX: 100, maxY: 100 },
+      },
+    },
+  };
+
+  const restored = deserializeMapData(legacyData);
+  assert.equal((restored as any).temperatureGrid, undefined);
+  assert.equal((restored as any).temperatureGridBase64, undefined);
+  assert.equal((restored.regionalMaps.reg1 as any).temperatureGrid, undefined);
+  assert.equal((restored.regionalMaps.reg1 as any).temperatureGridBase64, undefined);
 });
 
 test('applyErosion smooths steep talus slopes and carves valleys', () => {

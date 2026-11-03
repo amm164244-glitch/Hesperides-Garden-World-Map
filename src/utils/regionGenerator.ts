@@ -20,7 +20,6 @@ export function toParentMapSource(source: ParentMapSource | MapData | RegionalMa
       gridCols: world.gridCols,
       gridRows: world.gridRows,
       elevationGrid: world.elevationGrid,
-      temperatureGrid: world.temperatureGrid,
       seaLevel: world.seaLevel,
       seed: world.seed,
       widthKm: world.worldWidthKm,
@@ -33,7 +32,6 @@ export function toParentMapSource(source: ParentMapSource | MapData | RegionalMa
     gridCols: source.gridCols,
     gridRows: source.gridRows,
     elevationGrid: source.elevationGrid,
-    temperatureGrid: source.temperatureGrid,
     seaLevel: source.seaLevel,
     seed: source.seed,
     widthKm: (source as RegionalMapData).widthKm ?? (source as any).worldWidthKm ?? 40000,
@@ -65,7 +63,6 @@ export function generateRegionalMap(
   const gridRows = layout.gridRows;
 
   const elevationGrid = new Float32Array(gridCols * gridRows);
-  const temperatureGrid = new Float32Array(gridCols * gridRows);
 
   const boundsW = bounds.maxX - bounds.minX;
   const boundsH = bounds.maxY - bounds.minY;
@@ -109,14 +106,6 @@ export function generateRegionalMap(
     return hermite(rows[0], rows[1], rows[2], rows[3], ty);
   };
 
-  const sampleParentTemp = (wx: number, wy: number): number => {
-    const clampedX = Math.max(0, Math.min(parent.width, wx));
-    const clampedY = Math.max(0, Math.min(parent.height, wy));
-    const gc = Math.round((clampedX / parent.width) * (parentCols - 1));
-    const gr = Math.round((clampedY / parent.height) * (parentRows - 1));
-    return parent.temperatureGrid[gr * parentCols + gc];
-  };
-
   const noiseScale = zoomScale === 16 ? 0.03 : 0.012;
   const detailAmp = zoomScale === 16 ? 4.5 : 2.8;
 
@@ -150,12 +139,6 @@ export function generateRegionalMap(
 
       const idx = r * gridCols + c;
       elevationGrid[idx] = finalElev;
-
-      // 3. Inherit & adjust temperature based on elevation change
-      const baseTemp = sampleParentTemp(wx, wy);
-      const deltaElev = finalElev - baseElev;
-      const temp = Math.max(0, Math.min(100, baseTemp - deltaElev * 0.65));
-      temperatureGrid[idx] = temp;
     }
   }
 
@@ -182,7 +165,6 @@ export function generateRegionalMap(
     gridCols,
     gridRows,
     elevationGrid,
-    temperatureGrid,
     seaLevel: parent.seaLevel,
     createdAt: new Date().toISOString(),
     parentId: parent.id ?? null,

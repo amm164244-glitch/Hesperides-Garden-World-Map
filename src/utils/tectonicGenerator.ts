@@ -65,7 +65,6 @@ export function generateTectonicWorld(
   onProgress?.(30, 'プレート境界・衝突山脈・海溝を計算中...');
 
   const elevationGrid = new Float32Array(gridCols * gridRows);
-  const temperatureGrid = new Float32Array(gridCols * gridRows);
 
   const cellW = width / (gridCols - 1);
   const cellH = height / (gridRows - 1);
@@ -378,25 +377,6 @@ export function generateTectonicWorld(
     }
   }
 
-  // 4. Calculate Latitude-Dependent Realistic Temperature
-  for (let r = 0; r < gridRows; r++) {
-    const latNorm = Math.abs((2.0 * r) / (gridRows - 1) - 1.0); // 0 at equator, 1 at poles
-    // Equator ~88-95 (+32°C), Temperate ~45-60 (+15°C), Poles ~5-15 (-35°C)
-    const baseTemp = 92.0 * Math.pow(1.0 - Math.pow(latNorm, 1.35), 0.85) + 6.0;
-
-    for (let c = 0; c < gridCols; c++) {
-      const idx = r * gridCols + c;
-      const elev = elevationGrid[idx];
-
-      // Lapse rate: altitude cools temperature by 6.5°C per 1,000m
-      const altitudeLapse = Math.max(0.0, elev - STANDARD_SEA_LEVEL) * 0.65;
-      const localNoise = detailNoise.sample(c * 0.02, r * 0.02) * 4.0;
-
-      const temp = Math.max(0.0, Math.min(100.0, baseTemp - altitudeLapse + localNoise));
-      temperatureGrid[idx] = temp;
-    }
-  }
-
   onProgress?.(85, '地域マップ基盤とセルデータを生成中...');
 
   // 5. Generate cell sampling for inspector telemetry
@@ -417,7 +397,6 @@ export function generateTectonicWorld(
       const idx = gr * gridCols + gc;
 
       const elev = elevationGrid[idx];
-      const temp = Math.round(temperatureGrid[idx]);
       const isWater = elev <= STANDARD_SEA_LEVEL;
 
       cells.push({
@@ -427,8 +406,6 @@ export function generateTectonicWorld(
         elevation: elev,
         isWater,
         isOcean: isWater,
-        temperature: temp,
-        moisture: isWater ? 95 : Math.max(10, Math.round(55 - (elev - STANDARD_SEA_LEVEL) * 0.4)),
         neighbors: [],
       });
     }
@@ -448,7 +425,6 @@ export function generateTectonicWorld(
     config,
     createdAt: new Date().toISOString(),
     elevationGrid,
-    temperatureGrid,
     plates,
     cells,
     regionalMaps: {},
@@ -473,17 +449,6 @@ export function generateBlankOceanWorld(
   const elevationGrid = new Float32Array(total);
   elevationGrid.fill(16.0);
 
-  // Standard planetary latitudinal temperature gradient
-  const temperatureGrid = new Float32Array(total);
-  for (let r = 0; r < gridRows; r++) {
-    const lat = Math.abs((r / (gridRows - 1)) * 2 - 1);
-    const temp = Math.max(0, Math.min(100, Math.round((1 - lat * 0.9) * 100)));
-    const rowOffset = r * gridCols;
-    for (let c = 0; c < gridCols; c++) {
-      temperatureGrid[rowOffset + c] = temp;
-    }
-  }
-
   const cells: MapCell[] = [];
   return {
     width,
@@ -497,7 +462,6 @@ export function generateBlankOceanWorld(
     config,
     createdAt: new Date().toISOString(),
     elevationGrid,
-    temperatureGrid,
     plates: [],
     cells,
     regionalMaps: {},
