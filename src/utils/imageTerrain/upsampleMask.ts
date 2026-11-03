@@ -1,4 +1,5 @@
 import { STANDARD_SEA_LEVEL } from '../tectonicGenerator';
+import { maskToElevationGrid } from './maskEditor';
 
 export interface UpsampleOptions {
   blurRadius?: number; // Base blur radius at source resolution (default: 2.5)
@@ -33,7 +34,7 @@ export function boxBlurHorizontalWrap(
 
     // Initialize running sum for x = 0 (from -r to r with periodic wrap)
     for (let k = -r; k <= r; k++) {
-      const nx = (k % width + width) % width;
+      const nx = ((k % width) + width) % width;
       sum += src[rowOffset + nx];
     }
     dst[rowOffset] = sum * invWindow;
@@ -89,7 +90,7 @@ export function boxBlurVerticalClamp(
 }
 
 /**
- * Bilinearly upsamples a binary or grayscale mask from (srcWidth x srcHeight)
+ * Bilinearly upsamples a mask/grid from (srcWidth x srcHeight)
  * to (dstWidth x dstHeight) with periodic x-wrapping and clamped y poles.
  */
 export function bilinearUpsample(
@@ -133,7 +134,8 @@ export function bilinearUpsample(
 
       const top = v00 * (1 - fx) + v10 * fx;
       const btm = v01 * (1 - fx) + v11 * fx;
-      outGrid[dstRow + dx] = top * (1 - fy) + btm * fy;
+      const val = top * (1 - fy) + btm * fy;
+      outGrid[dstRow + dx] = Math.max(0, Math.min(1, val));
     }
   }
 }
@@ -142,12 +144,15 @@ export function bilinearUpsample(
  * Builds a smooth elevation grid at (dstWidth x dstHeight) from an analysis mask at (srcWidth x srcHeight).
  *
  * Method:
- * 1. Bilinear upsampling to destination resolution (with continuous fractional values in 0..1)
- * 2. 3 passes of 1D horizontal (periodic wrap) + 1D vertical (clamp) running-sum box blur.
- *    By the Central Limit Theorem, 3 box blur passes accurately approximate Gaussian smoothing
- *    in O(N) time with no memory bloat.
- * 3. Mapping continuous [0, 1] values to elevation:
- *    elevation = (seaLevel - 12.0) + m * 24.0 (sea interior ~seaLevel-12, land interior ~seaLevel+12)
+ * 1. If dst === src, skip upsampling and produce the exact same result as legacy maskToElevationGrid.
+ * 2. Blur source mask in source resolution (using separable Gaussian blur).
+ * 3. Bilinear upsample into dst-sized elevationGrid.
+ * 4. Apply 3 passes of running-sum box blur at destination resolution with radius scaled proportionally.
+ * 5. Lerp continuous [0, 1] values to elevation: elevation = (seaLevel - 12) + m * 24.
+ *
+ * Memory optimization:
+ * Only allocates elevationGrid (output) and a single temporary buffer at destination resolution.
+ * Never keeps 3 or more destination-sized arrays alive concurrently.
  */
 export function buildElevationFromMask(
   sourceMask: Uint8Array,
@@ -159,62 +164,114 @@ export function buildElevationFromMask(
   options: UpsampleOptions = {}
 ): Float32Array {
   const onProgress = options.onProgress;
+  const baseRadius = options.blurRadius ?? 2.5;
+
+  // Step 1: If source and destination resolutions are identical, use direct blur to ensure 100% equivalence
+  if (srcWidth === dstWidth && srcHeight === dstHeight) {
+    onProgress?.(10, '標高を作成中...');
+    const result = maskToElevationGrid(sourceMask, srcWidth, srcHeight, seaLevel, baseRadius);
+    onProgress?.(100, '標高を作成完了');
+    return result;
+  }
+
+  // Step 2: Blur at source resolution
+  onProgress?.(5, 'マスクを平滑化中...');
+  const srcSize = srcWidth * srcHeight;
+  let srcFloat: Float32Array | null = new Float32Array(srcSize);
+  let srcTemp: Float32Array | null = new Float32Array(srcSize);
+
+  // Gaussian weights for source blur
+  const rSrc = Math.min(Math.floor(Math.min(srcWidth, srcHeight) / 4), Math.max(1, Math.ceil(baseRadius)));
+  const sigmaSrc = baseRadius * 0.55;
+  const twoSigmaSq = 2.0 * sigmaSrc * sigmaSrc;
+  const kSize = 2 * rSrc + 1;
+  const weights = new Float32Array(kSize);
+  let weightSum = 0;
+  for (let d = -rSrc; d <= rSrc; d++) {
+    const w = Math.exp(-(d * d) / twoSigmaSq);
+    weights[d + rSrc] = w;
+    weightSum += w;
+  }
+  for (let i = 0; i < kSize; i++) {
+    weights[i] /= weightSum;
+  }
+
+  // Horizontal blur on source
+  for (let y = 0; y < srcHeight; y++) {
+    const rowOffset = y * srcWidth;
+    for (let x = 0; x < srcWidth; x++) {
+      let sum = 0;
+      for (let k = -rSrc; k <= rSrc; k++) {
+        const nx = ((x + k) % srcWidth + srcWidth) % srcWidth;
+        sum += sourceMask[rowOffset + nx] * weights[k + rSrc];
+      }
+      srcTemp[rowOffset + x] = sum;
+    }
+  }
+
+  // Vertical blur on source
+  for (let x = 0; x < srcWidth; x++) {
+    for (let y = 0; y < srcHeight; y++) {
+      let sum = 0;
+      for (let k = -rSrc; k <= rSrc; k++) {
+        const ny = Math.max(0, Math.min(srcHeight - 1, y + k));
+        sum += srcTemp[ny * srcWidth + x] * weights[k + rSrc];
+      }
+      srcFloat[y * srcWidth + x] = Math.max(0, Math.min(1, sum));
+    }
+  }
+  // Free temporary source buffer
+  srcTemp = null;
+
+  // Step 3: Bilinear upsample into destination grid (Array #1 of dstSize)
+  onProgress?.(25, 'マスクを拡大中');
   const dstSize = dstWidth * dstHeight;
   const elevationGrid = new Float32Array(dstSize);
 
-  // If same resolution and no upsample needed, perform direct smoothing
+  bilinearUpsample(srcFloat, srcWidth, srcHeight, dstWidth, dstHeight, elevationGrid, (ratio) => {
+    onProgress?.(Math.round(25 + ratio * 20), 'マスクを拡大中');
+  });
+
+  // Free source float array now that upsample is complete
+  srcFloat = null;
+
+  // Step 4: 3-pass running-sum box blur on destination resolution (Array #2 of dstSize)
+  onProgress?.(50, 'ぼかし中');
   const scale = dstWidth / srcWidth;
-  const baseRadius = options.blurRadius ?? 2.5;
-  // Scaled box blur radius: 3 passes of radius r approximates Gaussian with sigma ~ sqrt(r*(r+1))
-  // For baseRadius=2.5, r=2 gives sigma~2.45. Scaling r proportionally with scale preserves coastal width.
-  const r = Math.max(1, Math.round(baseRadius * scale * 0.8));
+  // Box blur radius proportional to scale to keep coastal transition identical across zoom levels
+  const rDst = Math.max(1, Math.round(baseRadius * scale * 0.55));
 
-  onProgress?.(5, '解像度の拡大（バイリニア補間）中...');
+  let temp: Float32Array | null = new Float32Array(dstSize);
 
-  // Step 1: Bilinear upsample into elevationGrid
-  if (srcWidth === dstWidth && srcHeight === dstHeight) {
-    for (let i = 0; i < dstSize; i++) {
-      elevationGrid[i] = sourceMask[i];
-    }
-  } else {
-    bilinearUpsample(sourceMask, srcWidth, srcHeight, dstWidth, dstHeight, elevationGrid, (ratio) => {
-      onProgress?.(Math.round(5 + ratio * 30), '解像度の拡大（バイリニア補間）中...');
-    });
-  }
+  // Pass 1
+  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, rDst);
+  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, rDst);
 
-  onProgress?.(40, '滑らかな海岸線の生成（平滑化パス 1/3）中...');
+  onProgress?.(65, 'ぼかし中');
 
-  // Ping-pong buffer for 3-pass box blur
-  const temp = new Float32Array(dstSize);
+  // Pass 2
+  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, rDst);
+  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, rDst);
 
-  // Pass 1: Horizontal & Vertical
-  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, r);
-  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, r);
+  onProgress?.(80, 'ぼかし中');
 
-  onProgress?.(60, '滑らかな海岸線の生成（平滑化パス 2/3）中...');
+  // Pass 3
+  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, rDst);
+  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, rDst);
 
-  // Pass 2: Horizontal & Vertical
-  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, r);
-  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, r);
+  // Free temporary destination buffer immediately
+  temp = null;
 
-  onProgress?.(80, '滑らかな海岸線の生成（平滑化パス 3/3）中...');
-
-  // Pass 3: Horizontal & Vertical
-  boxBlurHorizontalWrap(elevationGrid, temp, dstWidth, dstHeight, r);
-  boxBlurVerticalClamp(temp, elevationGrid, dstWidth, dstHeight, r);
-
-  onProgress?.(92, '標高値マッピング中...');
-
-  // Step 3: Elevation lerp mapping
-  // m in [0, 1] -> elevation in [seaLevel - 12, seaLevel + 12]
+  // Step 5: Map continuous values to elevation [seaLevel - 12, seaLevel + 12]
+  onProgress?.(92, '標高を作成中');
   const minElev = seaLevel - 12.0;
-  const elevRange = 24.0;
+  const range = 24.0;
 
   for (let i = 0; i < dstSize; i++) {
     const m = Math.max(0.0, Math.min(1.0, elevationGrid[i]));
-    elevationGrid[i] = minElev + m * elevRange;
+    elevationGrid[i] = minElev + m * range;
   }
 
-  onProgress?.(100, '標高生成完了');
+  onProgress?.(100, '標高を作成完了');
   return elevationGrid;
 }

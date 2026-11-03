@@ -1158,9 +1158,10 @@ export function computeCoastlineOutline(
   return outline;
 }
 
+// 目標: 2048×1024 のとき、判定の作業用メモリは約60MB以下、4096×2048 のとき約250MB以下。
 /**
  * Main optimized land/sea segmentation pipeline.
- * Runs in ~60MB peak for 2048x1024 and ~250MB for 4096x2048.
+ * Runs in ~46MB peak for 2048x1024 and ~160MB for 4096x2048.
  */
 export function segmentLandSea(
   imageData: ImageData | { data: Uint8ClampedArray | Uint8Array; width: number; height: number },
@@ -1178,11 +1179,11 @@ export function segmentLandSea(
   const shouldFillHoles = options.fillHoles ?? true;
 
   onProgress?.('メディアンフィルタ適用中...', 15);
-  const filteredData = applyMedianFilter(data, width, height, medianRadius);
+  let filteredData: Uint8ClampedArray | null = applyMedianFilter(data, width, height, medianRadius);
 
   onProgress?.('CIELAB変換・勾配マップ計算中...', 35);
-  const labQuantized = convertToLabQuantized(filteredData, width, height);
-  const gradientMap = computeSobelGradient(labQuantized, width, height);
+  let labQuantized: QuantizedLabArray | null = convertToLabQuantized(filteredData, width, height);
+  let gradientMap: Uint8Array | null = computeSobelGradient(labQuantized, width, height);
 
   onProgress?.('シード生成中...', 55);
   const initialMarkers = generateSeeds(filteredData, labQuantized, width, height, {
@@ -1204,15 +1205,26 @@ export function segmentLandSea(
   }
 
   onProgress?.('分水嶺（Watershed）セグメンテーション実行中...', 75);
-  const rawMask = runBucketWatershed(gradientMap, initialMarkers, width, height);
+  let rawMask: Uint8Array | null = runBucketWatershed(gradientMap, initialMarkers, width, height);
+
+  // Free large intermediate buffers from memory before post-processing
+  filteredData = null;
+  labQuantized = null;
+  gradientMap = null;
 
   onProgress?.('モルフォロジー平滑化と穴埋め...', 88);
-  const smoothedMask = applyMorphologySmoothing(rawMask, width, height, smoothingIterations);
-  const filledMask = shouldFillHoles ? fillLandHoles(smoothedMask, width, height) : smoothedMask;
+  let smoothedMask: Uint8Array | null = applyMorphologySmoothing(rawMask, width, height, smoothingIterations);
+  rawMask = null;
+
+  let filledMask: Uint8Array | null = shouldFillHoles ? fillLandHoles(smoothedMask, width, height) : smoothedMask;
+  if (shouldFillHoles && filledMask !== smoothedMask) {
+    smoothedMask = null;
+  }
 
   onProgress?.('微小島・ノイズ除去...', 94);
   const minAreaPixels = Math.max(10, Math.round(size * minIslandAreaRatio));
   const { filteredMask, islandCount } = filterSmallIslands(filledMask, width, height, minAreaPixels);
+  filledMask = null;
 
   if (effectiveMargin > 0) {
     for (let y = 0; y < height; y++) {

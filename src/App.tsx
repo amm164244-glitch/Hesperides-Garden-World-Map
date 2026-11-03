@@ -28,6 +28,8 @@ import { Toolbar } from './components/Toolbar';
 import { GeneratorPanel } from './components/GeneratorPanel';
 import { MapCanvas } from './components/MapCanvas';
 import { InspectorBar } from './components/InspectorBar';
+import { TownObjectsPanel } from './components/TownObjectsPanel';
+import { TownObject } from './types/town';
 import { MapStorageModal } from './components/MapStorageModal';
 import { RegionSelector } from './components/RegionSelector';
 import { SymbolPalette } from './components/SymbolPalette';
@@ -229,11 +231,45 @@ export default function App() {
     [activeRegionId]
   );
 
+  // Town Objects state for town-scale regional maps
+  const [showTownObjects, setShowTownObjects] = useState<boolean>(true);
+  const [selectedTownObjectId, setSelectedTownObjectId] = useState<string | null>(null);
+
+  // Current active map town objects (derived from active regional map if kind is 'town')
+  const currentTownObjects = useMemo(() => {
+    if (activeRegionId && mapData.regionalMaps[activeRegionId]?.kind === 'town') {
+      return mapData.regionalMaps[activeRegionId].townObjects || [];
+    }
+    return [];
+  }, [activeRegionId, mapData.regionalMaps]);
+
+  // Update town objects for the currently active town map
+  const handleUpdateTownObjects = useCallback(
+    (nextObjects: TownObject[]) => {
+      if (!activeRegionId) return;
+      setMapData((prev) => {
+        if (!prev.regionalMaps[activeRegionId]) return prev;
+        return {
+          ...prev,
+          regionalMaps: {
+            ...prev.regionalMaps,
+            [activeRegionId]: {
+              ...prev.regionalMaps[activeRegionId],
+              townObjects: nextObjects,
+            },
+          },
+        };
+      });
+    },
+    [activeRegionId]
+  );
+
   // Pending Region Selection Bounds for modal prompt
   const [pendingRegionInfo, setPendingRegionInfo] = useState<{
     bounds: RegionalBounds;
     adjusted: boolean;
     shapePolygon?: [number, number][];
+    options?: { kind?: 'region' | 'town'; name?: string; detailScale?: number };
   } | null>(null);
 
   // Spatial index for fast queries
@@ -744,10 +780,20 @@ export default function App() {
 
   // Create Regional Map from selection
   const handleCreateRegionalMap = useCallback(
-    (bounds: RegionalBounds, zoomScale: 4 | 16, name: string, shapeMask?: ShapeMaskConfig) => {
+    (
+      bounds: RegionalBounds,
+      zoomScale: 4 | 16,
+      name: string,
+      shapeMask?: ShapeMaskConfig,
+      options?: { kind?: 'region' | 'town'; detailScale?: number }
+    ) => {
       setPendingRegionInfo(null);
       setIsGenerating(true);
-      setGenerationProgress({ progress: 10, message: '地域マップを4x/16x解像度で合成中...' });
+      const isTown = options?.kind === 'town';
+      setGenerationProgress({
+        progress: 10,
+        message: isTown ? '町マップの地面を親マップから生成中...' : '地域マップを4x/16x解像度で合成中...',
+      });
 
       // Parent is active regional map if viewing one, otherwise the world map
       const parentSource = activeRegionalMap || mapData;
@@ -763,11 +809,12 @@ export default function App() {
           zoomScale,
           name,
           shapeMask,
+          options,
         });
       } else {
         setTimeout(() => {
           try {
-            const newRegion = generateRegionalMap(parentMapInput, bounds, zoomScale, name, shapeMask);
+            const newRegion = generateRegionalMap(parentMapInput, bounds, zoomScale, name, shapeMask, options);
             setMapData((prev) => ({
               ...prev,
               regionalMaps: {
@@ -840,6 +887,22 @@ export default function App() {
     [currentSymbols, handleCommitHistory, handleUpdateSymbols]
   );
 
+  // Apply town objects with undo history record
+  const handleApplyTownObjectsWithHistory = useCallback(
+    (newObjects: TownObject[], description: string) => {
+      handleCommitHistory({
+        description,
+        timestamp: Date.now(),
+        townChanges: {
+          prevObjects: currentTownObjects,
+          newObjects,
+        },
+      });
+      handleUpdateTownObjects(newObjects);
+    },
+    [currentTownObjects, handleCommitHistory, handleUpdateTownObjects]
+  );
+
   // Undo
   const handleUndo = useCallback(() => {
     if (undoStack.length === 0) return;
@@ -873,10 +936,15 @@ export default function App() {
       setSelectedSymbolId(null);
     }
 
+    if (lastRecord.townChanges) {
+      handleUpdateTownObjects(lastRecord.townChanges.prevObjects);
+      setSelectedTownObjectId(null);
+    }
+
     setUndoStack((prev) => prev.slice(0, prev.length - 1));
     setRedoStack((prev) => [...prev, lastRecord]);
     setMapData((prev) => ({ ...prev }));
-  }, [undoStack, activeRegionalMap, mapData, handleUpdateSymbols]);
+  }, [undoStack, activeRegionalMap, mapData, handleUpdateSymbols, handleUpdateTownObjects]);
 
   // Redo
   const handleRedo = useCallback(() => {
@@ -911,10 +979,15 @@ export default function App() {
       setSelectedSymbolId(null);
     }
 
+    if (nextRecord.townChanges) {
+      handleUpdateTownObjects(nextRecord.townChanges.newObjects);
+      setSelectedTownObjectId(null);
+    }
+
     setRedoStack((prev) => prev.slice(0, prev.length - 1));
     setUndoStack((prev) => [...prev, nextRecord]);
     setMapData((prev) => ({ ...prev }));
-  }, [redoStack, activeRegionalMap, mapData, handleUpdateSymbols]);
+  }, [redoStack, activeRegionalMap, mapData, handleUpdateSymbols, handleUpdateTownObjects]);
 
   // Clear all biome grid data
   const handleClearBiomeGrid = useCallback(() => {
@@ -1014,7 +1087,7 @@ export default function App() {
 
   // Breadcrumb Trail from World -> Parent Regions -> Current Region
   const breadcrumbs = useMemo(() => {
-    const trail: { id: string | null; name: string }[] = [{ id: null, name: '世界' }];
+    const trail: { id: string | null; name: string; kind?: 'region' | 'town' }[] = [{ id: null, name: '世界', kind: 'region' }];
     if (!activeRegionId || !mapData.regionalMaps[activeRegionId]) return trail;
 
     const chain: RegionalMapData[] = [];
@@ -1029,7 +1102,7 @@ export default function App() {
     }
 
     for (const reg of chain) {
-      trail.push({ id: reg.id, name: reg.name });
+      trail.push({ id: reg.id, name: reg.name, kind: reg.kind });
     }
 
     return trail;
@@ -1040,6 +1113,7 @@ export default function App() {
     (targetId: string | null) => {
       setActiveRegionId(targetId);
       setSelectedSymbolId(null);
+      setSelectedTownObjectId(null);
       setUndoStack([]);
       setRedoStack([]);
       handleResetView();
@@ -1061,6 +1135,7 @@ export default function App() {
       .map((r) => ({
         id: r.id,
         name: r.name,
+        kind: r.kind,
       }));
   }, [activeRegionalMap, mapData.regionalMaps]);
 
@@ -1124,13 +1199,19 @@ export default function App() {
           onUpdateSymbols={handleUpdateSymbols}
           selectedSymbolId={selectedSymbolId}
           onSelectSymbolId={setSelectedSymbolId}
+          townObjects={currentTownObjects}
+          showTownObjects={showTownObjects}
+          selectedTownObjectId={selectedTownObjectId}
+          onSelectTownObjectId={setSelectedTownObjectId}
+          onUpdateTownObjects={handleUpdateTownObjects}
           biomeSettings={biomeSettings}
           biomeTypes={biomeTypes}
           onCommitHistory={handleCommitHistory}
           onHoverCell={setHoveredCell}
-          onSelectRegionBounds={(bounds, adjusted = false, shapePolygon) =>
-            setPendingRegionInfo({ bounds, adjusted, shapePolygon })
+          onSelectRegionBounds={(bounds, adjusted = false, shapePolygon, options) =>
+            setPendingRegionInfo({ bounds, adjusted, shapePolygon, options })
           }
+          onSelectRegionMap={handleNavigateToRegion}
           mapBackgroundUrl={mapBackgroundUrl}
           onClearMapBackground={() => setMapBackgroundUrl(null)}
           maxZoom={maxZoom}
@@ -1348,6 +1429,8 @@ export default function App() {
             shapePolygon={pendingRegionInfo.shapePolygon}
             worldWidthKm={activeRegionalMap ? activeRegionalMap.widthKm : (mapData.worldWidthKm || 40000)}
             mapWidth={activeRegionalMap ? activeRegionalMap.width : mapData.width}
+            initialName={pendingRegionInfo.options?.name}
+            options={pendingRegionInfo.options}
             onGenerate={handleCreateRegionalMap}
             onCancel={() => setPendingRegionInfo(null)}
           />
@@ -1363,12 +1446,29 @@ export default function App() {
           customAssets={customAssets}
           seaLevel={activeRegionalMap ? activeRegionalMap.seaLevel : mapData.seaLevel}
         />
+
+        {/* Town Objects Panel (Appears when viewing a town map) */}
+        {activeRegionalMap?.kind === 'town' && (
+          <div className="absolute bottom-2 left-3 z-30 max-w-sm w-full pointer-events-auto">
+            <TownObjectsPanel
+              mapWidth={activeRegionalMap.width}
+              mapHeight={activeRegionalMap.height}
+              metersPerUnit={(activeRegionalMap.widthKm * 1000) / activeRegionalMap.width}
+              townSeed={activeRegionalMap.seed}
+              townObjects={currentTownObjects}
+              showTownObjects={showTownObjects}
+              onToggleShowTownObjects={setShowTownObjects}
+              onApplyTownObjects={handleApplyTownObjectsWithHistory}
+            />
+          </div>
+        )}
       </div>
 
       {/* Bottom Inspector Bar */}
       <footer className="h-10 z-20">
         <InspectorBar
           mapData={mapData}
+          activeRegionalMap={activeRegionalMap}
           hoveredCell={hoveredCell}
           viewport={viewport}
         />

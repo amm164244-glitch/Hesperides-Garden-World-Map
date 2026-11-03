@@ -8,7 +8,9 @@ import {
   runBucketWatershed,
   runLabKMeans,
   InsufficientSeedsError,
+  estimateSegmentationMemory,
 } from './segmentLandSea.ts';
+import { segmentLandSea as segmentLandSeaRef } from './__reference__/segmentLandSeaReference.ts';
 
 test('rgbToLab and deltaE distinguish parchment sea from green/brown land', () => {
   // Parchment sea color (pale cream/light beige)
@@ -297,3 +299,114 @@ test('合成画像から提案された色の候補に、陸と海それぞれ�
   const totalRatio = clusters.reduce((sum, c) => sum + c.ratioPercent, 0);
   assert(totalRatio >= 99 && totalRatio <= 101, `Total ratio should be approx 100%, got ${totalRatio}`);
 });
+
+test('配列の確保量の見積もり(estimateSegmentationMemory)が、2048×1024 で約60MB以下、4096×2048 で約250MB以下になること', () => {
+  const est2048 = estimateSegmentationMemory(2048, 1024);
+  const est4096 = estimateSegmentationMemory(4096, 2048);
+
+  assert(
+    est2048.mb <= 60,
+    `2048x1024 のメモリ見積もりは 60MB 以下であるべき: 実際は ${est2048.mb} MB`
+  );
+  assert(
+    est4096.mb <= 250,
+    `4096x2048 のメモリ見積もりは 250MB 以下であるべき: 実際は ${est4096.mb} MB`
+  );
+  assert.equal(est2048.isTooLarge, false, '2048x1024 は 1.2GB を超えないこと');
+  assert.equal(est4096.isTooLarge, false, '4096x2048 は 1.2GB を超えないこと');
+});
+
+test('segmentLandSea(軽量化後)と、リファレンス実装を合成画像で比較し、陸海マスクの一致率が 99.5% 以上であること', () => {
+
+  // Synthetic image with:
+  // - Left brown land
+  // - Right pale yellow-green sea
+  // - Thin black lines (grid line noise)
+  // - Text-like noise dots
+  // - Dark outer border margin
+  const width = 128;
+  const height = 64;
+  const data = new Uint8ClampedArray(width * height * 4);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      // Dark border margin
+      if (x < 4 || x >= width - 4 || y < 4 || y >= height - 4) {
+        data[idx] = 30;
+        data[idx + 1] = 25;
+        data[idx + 2] = 20;
+        data[idx + 3] = 255;
+      } else if (x < width / 2) {
+        // Brown land
+        data[idx] = 120;
+        data[idx + 1] = 80;
+        data[idx + 2] = 50;
+        data[idx + 3] = 255;
+      } else {
+        // Pale yellow-green parchment sea
+        data[idx] = 220;
+        data[idx + 1] = 230;
+        data[idx + 2] = 195;
+        data[idx + 3] = 255;
+      }
+    }
+  }
+
+  // Thin black line (grid line) across sea
+  for (let x = width / 2; x < width - 4; x++) {
+    const idx = (20 * width + x) * 4;
+    data[idx] = 15;
+    data[idx + 1] = 15;
+    data[idx + 2] = 15;
+  }
+
+  // Text-like noise dots
+  const textDots = [
+    [70, 10], [71, 10], [70, 11],
+    [85, 35], [86, 35], [87, 36],
+    [100, 45], [101, 45],
+  ];
+  for (const [nx, ny] of textDots) {
+    const idx = (ny * width + nx) * 4;
+    data[idx] = 10;
+    data[idx + 1] = 10;
+    data[idx + 2] = 10;
+  }
+
+  const options = {
+    medianRadius: 2,
+    tolerance: 18,
+    marginPx: 4,
+    minIslandAreaRatio: 0.01,
+    smoothingIterations: 1,
+    fillHoles: true,
+    seaSamples: [
+      { id: 's', r: 220, g: 230, b: 195, lab: rgbToLab(220, 230, 195), type: 'sea' as const },
+    ],
+    landSamples: [
+      { id: 'l', r: 120, g: 80, b: 50, lab: rgbToLab(120, 80, 50), type: 'land' as const },
+    ],
+  };
+
+  const copyForRef = new Uint8ClampedArray(data);
+  const copyForOpt = new Uint8ClampedArray(data);
+
+  const refResult = segmentLandSeaRef({ data: copyForRef, width, height }, options);
+  const optResult = segmentLandSea({ data: copyForOpt, width, height }, options);
+
+  let matchCount = 0;
+  const total = width * height;
+  for (let i = 0; i < total; i++) {
+    if (refResult.mask[i] === optResult.mask[i]) {
+      matchCount++;
+    }
+  }
+
+  const agreementRate = (matchCount / total) * 100;
+  assert(
+    agreementRate >= 99.5,
+    `リファレンス実装とのマスク一致率は 99.5% 以上であること: 実際は ${agreementRate.toFixed(2)}%`
+  );
+});
+

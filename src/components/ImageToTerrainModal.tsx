@@ -94,6 +94,38 @@ export function getEffectiveAnalysisResolution(
   return '2048x1024';
 }
 
+/**
+ * Probes the client WebGL environment for MAX_TEXTURE_SIZE.
+ */
+export function getMaxTextureSize(): number | null {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) return null;
+    const max = (gl as WebGLRenderingContext).getParameter((gl as WebGLRenderingContext).MAX_TEXTURE_SIZE);
+    return typeof max === 'number' && max > 0 ? max : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns pixel width, height, and approximate elevation grid memory for each TerrainResolution.
+ */
+export function getResolutionDims(res: TerrainResolution): { width: number; height: number; memMb: number } {
+  switch (res) {
+    case '8192x4096':
+      return { width: 8192, height: 4096, memMb: 134 };
+    case '4096x2048':
+      return { width: 4096, height: 2048, memMb: 34 };
+    case '2048x1024':
+      return { width: 2048, height: 1024, memMb: 8 };
+    case '1024x512':
+    default:
+      return { width: 1024, height: 512, memMb: 2 };
+  }
+}
+
 export interface CroppedTerrainResult {
   imageData: ImageData;
   resolution: TerrainResolution;
@@ -149,10 +181,39 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   const [scaledDimensions, setScaledDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
 
-  // Step 2 Crop settings
+  // WebGL capabilities probe
+  const maxTextureSize = useMemo(() => getMaxTextureSize(), []);
+
+  // Step 2 Crop & Resolution settings
   const [crop, setCrop] = useState<CropRect>({ x: 0, y: 0, width: 200, height: 100 });
   const [lockAspectRatio, setLockAspectRatio] = useState<boolean>(true);
   const [resolution, setResolution] = useState<TerrainResolution>('1024x512');
+  const [analysisResolution, setAnalysisResolution] = useState<AnalysisResolution>('auto');
+
+  // Application to world map status
+  const [isApplyingToWorld, setIsApplyingToWorld] = useState<boolean>(false);
+  const [applyProgress, setApplyProgress] = useState<{ step: string; percent: number }>({
+    step: '',
+    percent: 0,
+  });
+  const [applyError, setApplyError] = useState<string | null>(null);
+
+  // Effective analysis resolution and memory estimate
+  const effectiveAnalysisRes = useMemo(() => {
+    return getEffectiveAnalysisResolution(analysisResolution, resolution, Math.round(crop.width));
+  }, [analysisResolution, resolution, crop.width]);
+
+  const effectiveAnalysisDims = useMemo(() => {
+    if (effectiveAnalysisRes === '4096x2048') return { width: 4096, height: 2048 };
+    if (effectiveAnalysisRes === '2048x1024') return { width: 2048, height: 1024 };
+    return { width: 1024, height: 512 };
+  }, [effectiveAnalysisRes]);
+
+  const outputDims = useMemo(() => getResolutionDims(resolution), [resolution]);
+
+  const segMemoryEstimate = useMemo(() => {
+    return estimateSegmentationMemory(effectiveAnalysisDims.width, effectiveAnalysisDims.height);
+  }, [effectiveAnalysisDims]);
 
   // Viewport for Step 2 canvas
   const [viewport, setViewport] = useState<{ x: number; y: number; zoom: number }>({ x: 0, y: 0, zoom: 1 });
@@ -268,8 +329,9 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   const step4OutlineCanvasCache = useRef<HTMLCanvasElement | null>(null);
   const lastBrushPosRef = useRef<{ x: number; y: number } | null>(null);
 
-  // Worker reference
+  // Worker references
   const segWorkerRef = useRef<Worker | null>(null);
+  const upsampleWorkerRef = useRef<Worker | null>(null);
 
   // Cached render canvases for Step 3
   const maskCanvasCache = useRef<HTMLCanvasElement | null>(null);
@@ -284,7 +346,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   const step3ContainerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Initialize Worker
+  // Initialize Workers
   useEffect(() => {
     try {
       segWorkerRef.current = new Worker(
@@ -321,12 +383,23 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
         }
       };
     } catch (err) {
-      console.warn('Worker initialization fallback to main thread:', err);
+      console.warn('Segmentation Worker initialization fallback to main thread:', err);
+    }
+
+    try {
+      upsampleWorkerRef.current = new Worker(
+        new URL('../workers/upsampleWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+    } catch (err) {
+      console.warn('Upsample Worker initialization fallback to main thread:', err);
     }
 
     return () => {
       segWorkerRef.current?.terminate();
       segWorkerRef.current = null;
+      upsampleWorkerRef.current?.terminate();
+      upsampleWorkerRef.current = null;
     };
   }, []);
 
@@ -933,7 +1006,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
           },
           options,
         };
-        segWorkerRef.current.postMessage(req);
+        segWorkerRef.current.postMessage(req, [clampedCopy.buffer]);
       } else {
         setTimeout(() => {
           try {
@@ -1014,9 +1087,10 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
   // Step 2 -> Step 3: Perform crop and trigger segmentation
   const handleProceedToStep3 = () => {
     if (!sourceCanvas) return;
+    if (segMemoryEstimate.isTooLarge) return;
 
-    const targetW = resolution === '1024x512' ? 1024 : 2048;
-    const targetH = resolution === '1024x512' ? 512 : 1024;
+    const targetW = effectiveAnalysisDims.width;
+    const targetH = effectiveAnalysisDims.height;
 
     const offscreen = document.createElement('canvas');
     offscreen.width = targetW;
@@ -1044,6 +1118,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
     const result: CroppedTerrainResult = {
       imageData: imgData,
       resolution,
+      analysisResolution: effectiveAnalysisRes,
       width: targetW,
       height: targetH,
       dataUrl,
@@ -1700,23 +1775,98 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
     setStep4RedrawTrigger((t) => t + 1);
   }, [initialStep3Mask, manualMask, croppedResult, updateStep4MaskCanvas]);
 
-  // Confirm Apply to World Map
+  // Confirm Apply to World Map with upsampling and worker progress
   const handleConfirmApplyWorld = useCallback(() => {
     if (!manualMask || !croppedResult) return;
-    const newMap = createMapDataFromMask(
-      manualMask,
-      croppedResult.width,
-      croppedResult.height,
-      { gridResolution: croppedResult.resolution }
-    );
-    setShowConfirmApply(false);
-    onApplyToWorldMap?.(newMap);
-    onCropped?.({
-      ...croppedResult,
-      mask: manualMask,
-      boundaryMask: computeCoastlineOutline(manualMask, croppedResult.width, croppedResult.height),
-    });
-    onClose();
+    setApplyError(null);
+
+    const dstDims = getResolutionDims(croppedResult.resolution);
+    const dstCols = dstDims.width;
+    const dstRows = dstDims.height;
+    const srcCols = croppedResult.width;
+    const srcRows = croppedResult.height;
+
+    const finishApply = (elevationGrid?: Float32Array) => {
+      const newMap = createMapDataFromMask(
+        manualMask,
+        dstCols,
+        dstRows,
+        { gridResolution: croppedResult.resolution },
+        elevationGrid
+      );
+      setIsApplyingToWorld(false);
+      setShowConfirmApply(false);
+      onApplyToWorldMap?.(newMap);
+      onCropped?.({
+        ...croppedResult,
+        mask: manualMask,
+        boundaryMask: computeCoastlineOutline(manualMask, srcCols, srcRows),
+      });
+      onClose();
+    };
+
+    // If source and destination dimensions are identical, apply directly
+    if (srcCols === dstCols && srcRows === dstRows) {
+      finishApply();
+      return;
+    }
+
+    // High-resolution upsampling via Web Worker
+    setIsApplyingToWorld(true);
+    setApplyProgress({ step: 'マスクを拡大中...', percent: 10 });
+
+    if (upsampleWorkerRef.current) {
+      const maskCopy = new Uint8Array(manualMask);
+      const req: UpsampleWorkerRequest = {
+        type: 'upsample',
+        sourceMask: maskCopy,
+        srcWidth: srcCols,
+        srcHeight: srcRows,
+        dstWidth: dstCols,
+        dstHeight: dstRows,
+        seaLevel: STANDARD_SEA_LEVEL,
+      };
+
+      const handleWorkerMessage = (e: MessageEvent<UpsampleWorkerResponse>) => {
+        const data = e.data;
+        if (data.type === 'progress') {
+          setApplyProgress({ step: data.step, percent: data.percent });
+        } else if (data.type === 'complete') {
+          upsampleWorkerRef.current?.removeEventListener('message', handleWorkerMessage);
+          finishApply(data.elevationGrid);
+        } else if (data.type === 'error') {
+          upsampleWorkerRef.current?.removeEventListener('message', handleWorkerMessage);
+          setIsApplyingToWorld(false);
+          setApplyError(data.error || 'メモリが足りません。解像度を下げてお試しください');
+        }
+      };
+
+      upsampleWorkerRef.current.addEventListener('message', handleWorkerMessage);
+      upsampleWorkerRef.current.postMessage(req, [maskCopy.buffer]);
+    } else {
+      // Fallback if Web Worker is unavailable
+      setTimeout(() => {
+        try {
+          const elevationGrid = buildElevationFromMask(
+            manualMask,
+            srcCols,
+            srcRows,
+            dstCols,
+            dstRows,
+            STANDARD_SEA_LEVEL,
+            {
+              onProgress: (percent, step) => {
+                setApplyProgress({ step, percent });
+              },
+            }
+          );
+          finishApply(elevationGrid);
+        } catch (err: any) {
+          setIsApplyingToWorld(false);
+          setApplyError('メモリが足りません。解像度を下げてお試しください');
+        }
+      }, 50);
+    }
   }, [manualMask, croppedResult, onApplyToWorldMap, onCropped, onClose]);
 
   // Step 4 Mouse interactions
@@ -2204,61 +2354,349 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                   </button>
                 </div>
 
-                {/* Resolution Selector */}
-                <div className="space-y-2 p-3 rounded-xl bg-stone-900/70 border border-stone-800">
-                  <div className="font-bold text-stone-200">出力解像度（2:1）</div>
-                  <div className="grid grid-cols-1 gap-2">
-                    <label
-                      className={`p-2.5 rounded-lg border cursor-pointer transition flex items-center justify-between ${
-                        resolution === '1024x512'
-                          ? 'bg-amber-950/60 border-amber-500/80 text-amber-200'
-                          : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="resolution"
-                          value="1024x512"
-                          checked={resolution === '1024x512'}
-                          onChange={() => setResolution('1024x512')}
-                          className="accent-amber-500"
-                        />
-                        <div>
-                          <div className="font-mono font-bold text-xs">1024 × 512</div>
-                          <div className="text-[10px] text-stone-400">標準・軽量（推奨）</div>
-                        </div>
-                      </div>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">
-                        高速
+                {/* Resolution Selectors (Output Resolution & Analysis Resolution) */}
+                <div className="space-y-3 p-3 rounded-xl bg-stone-900/70 border border-stone-800">
+                  {/* Output Resolution */}
+                  <div className="space-y-1.5">
+                    <div className="font-bold text-stone-200 flex items-center justify-between">
+                      <span>出力解像度（2:1）</span>
+                      <span className="font-mono text-[10px] text-amber-400">
+                        {outputDims.width} × {outputDims.height}
                       </span>
-                    </label>
+                    </div>
 
-                    <label
-                      className={`p-2.5 rounded-lg border cursor-pointer transition flex items-center justify-between ${
-                        resolution === '2048x1024'
-                          ? 'bg-amber-950/60 border-amber-500/80 text-amber-200'
-                          : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="resolution"
-                          value="2048x1024"
-                          checked={resolution === '2048x1024'}
-                          onChange={() => setResolution('2048x1024')}
-                          className="accent-amber-500"
-                        />
-                        <div>
-                          <div className="font-mono font-bold text-xs">2048 × 1024</div>
-                          <div className="text-[10px] text-stone-400">高精細（巨大マップ向け）</div>
-                        </div>
-                      </div>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-700 text-stone-300 font-mono">
-                        HD
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {/* 1024x512 */}
+                      {(() => {
+                        const isDisabled = maxTextureSize !== null && 1024 > maxTextureSize;
+                        return (
+                          <label
+                            className={`p-2 rounded-lg border transition flex items-center justify-between ${
+                              isDisabled
+                                ? 'bg-stone-900/40 border-stone-800/60 opacity-40 cursor-not-allowed'
+                                : resolution === '1024x512'
+                                ? 'bg-amber-950/60 border-amber-500/80 text-amber-200 cursor-pointer'
+                                : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600 cursor-pointer'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="outputResolution"
+                                value="1024x512"
+                                disabled={isDisabled}
+                                checked={resolution === '1024x512'}
+                                onChange={() => setResolution('1024x512')}
+                                className="accent-amber-500"
+                              />
+                              <div>
+                                <div className="font-mono font-bold text-xs">1024 × 512</div>
+                                <div className="text-[10px] text-stone-400">
+                                  標準・軽量（標高格子: 約2MB）
+                                </div>
+                                {isDisabled && (
+                                  <div className="text-[10px] text-rose-400">
+                                    この環境では使えません（最大テクスチャサイズ: {maxTextureSize}）
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">
+                              高速
+                            </span>
+                          </label>
+                        );
+                      })()}
+
+                      {/* 2048x1024 */}
+                      {(() => {
+                        const isDisabled = maxTextureSize !== null && 2048 > maxTextureSize;
+                        return (
+                          <label
+                            className={`p-2 rounded-lg border transition flex items-center justify-between ${
+                              isDisabled
+                                ? 'bg-stone-900/40 border-stone-800/60 opacity-40 cursor-not-allowed'
+                                : resolution === '2048x1024'
+                                ? 'bg-amber-950/60 border-amber-500/80 text-amber-200 cursor-pointer'
+                                : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600 cursor-pointer'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="outputResolution"
+                                value="2048x1024"
+                                disabled={isDisabled}
+                                checked={resolution === '2048x1024'}
+                                onChange={() => setResolution('2048x1024')}
+                                className="accent-amber-500"
+                              />
+                              <div>
+                                <div className="font-mono font-bold text-xs">2048 × 1024</div>
+                                <div className="text-[10px] text-stone-400">
+                                  高精細（標高格子: 約8MB）
+                                </div>
+                                {isDisabled && (
+                                  <div className="text-[10px] text-rose-400">
+                                    この環境では使えません（最大テクスチャサイズ: {maxTextureSize}）
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-stone-700 text-stone-300 font-mono">
+                              HD
+                            </span>
+                          </label>
+                        );
+                      })()}
+
+                      {/* 4096x2048 */}
+                      {(() => {
+                        const isDisabled = maxTextureSize !== null && 4096 > maxTextureSize;
+                        return (
+                          <label
+                            className={`p-2 rounded-lg border transition flex items-center justify-between ${
+                              isDisabled
+                                ? 'bg-stone-900/40 border-stone-800/60 opacity-40 cursor-not-allowed'
+                                : resolution === '4096x2048'
+                                ? 'bg-amber-950/60 border-amber-500/80 text-amber-200 cursor-pointer'
+                                : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600 cursor-pointer'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="outputResolution"
+                                value="4096x2048"
+                                disabled={isDisabled}
+                                checked={resolution === '4096x2048'}
+                                onChange={() => setResolution('4096x2048')}
+                                className="accent-amber-500"
+                              />
+                              <div>
+                                <div className="font-mono font-bold text-xs">4096 × 2048</div>
+                                <div className="text-[10px] text-stone-400">
+                                  超高精細（標高格子: 約34MB）
+                                </div>
+                                {isDisabled && (
+                                  <div className="text-[10px] text-rose-400">
+                                    この環境では使えません（最大テクスチャサイズ: {maxTextureSize}）
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-300 font-mono">
+                              4K
+                            </span>
+                          </label>
+                        );
+                      })()}
+
+                      {/* 8192x4096 */}
+                      {(() => {
+                        const isDisabled = maxTextureSize !== null && 8192 > maxTextureSize;
+                        return (
+                          <label
+                            className={`p-2 rounded-lg border transition flex items-center justify-between ${
+                              isDisabled
+                                ? 'bg-stone-900/40 border-stone-800/60 opacity-40 cursor-not-allowed'
+                                : resolution === '8192x4096'
+                                ? 'bg-amber-950/60 border-amber-500/80 text-amber-200 cursor-pointer'
+                                : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600 cursor-pointer'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="outputResolution"
+                                value="8192x4096"
+                                disabled={isDisabled}
+                                checked={resolution === '8192x4096'}
+                                onChange={() => setResolution('8192x4096')}
+                                className="accent-amber-500"
+                              />
+                              <div>
+                                <div className="font-mono font-bold text-xs">8192 × 4096</div>
+                                <div className="text-[10px] text-stone-400">
+                                  極大解像度（標高格子: 約134MB）
+                                </div>
+                                <div className="text-[10px] text-amber-400/90 leading-tight mt-0.5">
+                                  ※ メモリの多いPC向け。保存や読み込みも重くなります
+                                </div>
+                                {isDisabled && (
+                                  <div className="text-[10px] text-rose-400">
+                                    この環境では使えません（最大テクスチャサイズ: {maxTextureSize}）
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono">
+                              8K
+                            </span>
+                          </label>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Analysis Resolution Selector */}
+                  <div className="space-y-1.5 pt-2 border-t border-stone-800/80">
+                    <div className="font-bold text-stone-200 flex items-center justify-between">
+                      <span>判定・補正解像度</span>
+                      <span className="font-mono text-[10px] text-amber-400">
+                        {effectiveAnalysisDims.width} × {effectiveAnalysisDims.height}
                       </span>
-                    </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {/* Auto */}
+                      <label
+                        className={`p-2 rounded-lg border cursor-pointer transition flex items-center justify-between ${
+                          analysisResolution === 'auto'
+                            ? 'bg-amber-950/60 border-amber-500/80 text-amber-200'
+                            : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="analysisResolution"
+                            value="auto"
+                            checked={analysisResolution === 'auto'}
+                            onChange={() => setAnalysisResolution('auto')}
+                            className="accent-amber-500"
+                          />
+                          <div>
+                            <div className="font-bold text-xs">自動（初期値・推奨）</div>
+                            <div className="text-[10px] text-stone-400">
+                              元画像と出力解像度から最適化（最大 2048×1024）
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">
+                          Auto
+                        </span>
+                      </label>
+
+                      {/* 1024x512 */}
+                      <label
+                        className={`p-2 rounded-lg border cursor-pointer transition flex items-center justify-between ${
+                          analysisResolution === '1024x512'
+                            ? 'bg-amber-950/60 border-amber-500/80 text-amber-200'
+                            : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="analysisResolution"
+                            value="1024x512"
+                            checked={analysisResolution === '1024x512'}
+                            onChange={() => setAnalysisResolution('1024x512')}
+                            className="accent-amber-500"
+                          />
+                          <div>
+                            <div className="font-mono font-bold text-xs">1024 × 512</div>
+                            <div className="text-[10px] text-stone-400">最軽量・高速判定</div>
+                          </div>
+                        </div>
+                      </label>
+
+                      {/* 2048x1024 */}
+                      <label
+                        className={`p-2 rounded-lg border cursor-pointer transition flex items-center justify-between ${
+                          analysisResolution === '2048x1024'
+                            ? 'bg-amber-950/60 border-amber-500/80 text-amber-200'
+                            : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="analysisResolution"
+                            value="2048x1024"
+                            checked={analysisResolution === '2048x1024'}
+                            onChange={() => setAnalysisResolution('2048x1024')}
+                            className="accent-amber-500"
+                          />
+                          <div>
+                            <div className="font-mono font-bold text-xs">2048 × 1024</div>
+                            <div className="text-[10px] text-stone-400">標準高解像度判定</div>
+                          </div>
+                        </div>
+                      </label>
+
+                      {/* 4096x2048 */}
+                      {(() => {
+                        const isCropTooSmall = Math.round(crop.width) < 4096;
+                        return (
+                          <label
+                            className={`p-2 rounded-lg border transition flex items-center justify-between ${
+                              isCropTooSmall
+                                ? 'bg-stone-900/40 border-stone-800/60 opacity-40 cursor-not-allowed'
+                                : analysisResolution === '4096x2048'
+                                ? 'bg-amber-950/60 border-amber-500/80 text-amber-200 cursor-pointer'
+                                : 'bg-stone-800/60 border-stone-700 text-stone-300 hover:border-stone-600 cursor-pointer'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="radio"
+                                name="analysisResolution"
+                                value="4096x2048"
+                                disabled={isCropTooSmall}
+                                checked={analysisResolution === '4096x2048'}
+                                onChange={() => setAnalysisResolution('4096x2048')}
+                                className="accent-amber-500"
+                              />
+                              <div>
+                                <div className="font-mono font-bold text-xs">4096 × 2048</div>
+                                <div className="text-[10px] text-stone-400">
+                                  超高解像度判定（手動指定のみ）
+                                </div>
+                                {isCropTooSmall && (
+                                  <div className="text-[10px] text-amber-400/90 leading-tight mt-0.5">
+                                    元画像の切り抜き幅が4096px未満のため選択できません（現在の切り抜き幅: {Math.round(crop.width)}px）
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Summary & Memory Estimate */}
+                  <div className="p-2.5 rounded-lg bg-stone-950/70 border border-stone-800 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between items-center">
+                      <span className="text-stone-400">判定解像度:</span>
+                      <span className="font-mono font-bold text-amber-300">
+                        {effectiveAnalysisDims.width} × {effectiveAnalysisDims.height}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-stone-400">出力解像度:</span>
+                      <span className="font-mono font-bold text-stone-200">
+                        {outputDims.width} × {outputDims.height}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-stone-400">判定時メモリ見積もり:</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          segMemoryEstimate.isTooLarge ? 'text-rose-400' : 'text-emerald-400'
+                        }`}
+                      >
+                        {segMemoryEstimate.formatted}
+                      </span>
+                    </div>
+
+                    {segMemoryEstimate.isTooLarge && (
+                      <div className="p-2 rounded bg-rose-950/60 border border-rose-600/70 text-rose-300 text-[10px] leading-tight mt-1">
+                        ⚠️ メモリ見積もりが1.2GBを超えているため実行できません。判定解像度を下げてください。
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2267,7 +2705,12 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                   <button
                     type="button"
                     onClick={handleProceedToStep3}
-                    className="w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 hover:from-amber-500 hover:to-amber-500 text-stone-950 shadow-lg shadow-amber-950/40 ring-1 ring-amber-400 cursor-pointer active:scale-98"
+                    disabled={segMemoryEstimate.isTooLarge}
+                    className={`w-full py-2.5 px-4 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all ${
+                      segMemoryEstimate.isTooLarge
+                        ? 'bg-stone-800 text-stone-500 cursor-not-allowed border border-stone-700'
+                        : 'bg-gradient-to-r from-amber-600 via-amber-500 to-amber-600 hover:from-amber-500 hover:to-amber-500 text-stone-950 shadow-lg shadow-amber-950/40 ring-1 ring-amber-400 cursor-pointer active:scale-98'
+                    }`}
                   >
                     <span>切り抜きを確定して陸海判定へ</span>
                     <ChevronRight className="w-4 h-4 font-bold" />
@@ -2363,6 +2806,13 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                       シードを表示 (<span className="text-blue-400 font-bold">青:海</span> / <span className="text-red-400 font-bold">赤:陸</span>)
                     </span>
                   </label>
+
+                  {/* Resolution Indicator Pill */}
+                  <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-stone-900/90 backdrop-blur-md border border-stone-700/80 shadow-2xl text-[11px] font-mono">
+                    <span className="text-amber-300 font-bold">判定: {croppedResult.width}×{croppedResult.height}</span>
+                    <span className="text-stone-500">|</span>
+                    <span className="text-stone-200">出力: {getResolutionDims(croppedResult.resolution).width}×{getResolutionDims(croppedResult.resolution).height}</span>
+                  </div>
                 </div>
 
                 {/* Insufficient Seeds Alert Banner */}
@@ -3334,9 +3784,15 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-stone-400">解像度:</span>
-                      <span className="font-mono text-stone-300">
+                      <span className="text-stone-400">判定解像度:</span>
+                      <span className="font-mono text-amber-300 font-semibold">
                         {croppedResult.width} × {croppedResult.height}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-stone-400">出力解像度:</span>
+                      <span className="font-mono text-stone-200 font-semibold">
+                        {getResolutionDims(croppedResult.resolution).width} × {getResolutionDims(croppedResult.resolution).height}
                       </span>
                     </div>
                   </div>
@@ -3381,7 +3837,7 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
         </div>
 
         {/* Modal: Confirm Apply to World Map */}
-        {showConfirmApply && (
+        {showConfirmApply && croppedResult && (
           <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
             <div className="w-full max-w-md bg-stone-900 border border-amber-600/50 rounded-2xl p-6 shadow-2xl space-y-4 text-stone-200">
               <div className="flex items-center gap-3 text-amber-400">
@@ -3390,32 +3846,105 @@ export const ImageToTerrainModal: React.FC<ImageToTerrainModalProps> = ({
                 </div>
                 <h3 className="text-base font-bold text-amber-200">世界マップへの反映確認</h3>
               </div>
-              <div className="space-y-2.5 text-xs text-stone-300 leading-relaxed bg-stone-950/60 p-3.5 rounded-xl border border-stone-800">
+
+              {/* Resolution & Memory Specs */}
+              {(() => {
+                const dstDims = getResolutionDims(croppedResult.resolution);
+                return (
+                  <div className="space-y-2 p-3 rounded-xl bg-stone-950/80 border border-stone-800 text-xs">
+                    <div className="font-bold text-stone-300 pb-1 border-b border-stone-800/80 flex items-center justify-between">
+                      <span>反映スペック</span>
+                      <span className="font-mono text-amber-400 font-bold">{croppedResult.resolution}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-y-1.5 text-[11px]">
+                      <span className="text-stone-400">出力解像度:</span>
+                      <span className="font-mono font-bold text-stone-200 text-right">
+                        {dstDims.width} × {dstDims.height}
+                      </span>
+                      <span className="text-stone-400">格子の大きさ:</span>
+                      <span className="font-mono text-stone-300 text-right">
+                        {dstDims.width} × {dstDims.height} セル
+                      </span>
+                      <span className="text-stone-400">メモリの目安:</span>
+                      <span className="font-mono text-emerald-400 font-bold text-right">
+                        標高格子: 約{dstDims.memMb}MB
+                      </span>
+                      <span className="text-stone-400">判定解像度:</span>
+                      <span className="font-mono text-amber-300/90 text-right">
+                        {croppedResult.width} × {croppedResult.height}
+                      </span>
+                    </div>
+
+                    {dstDims.width >= 4096 && (
+                      <div className="p-2 rounded-lg bg-amber-950/50 border border-amber-600/50 text-amber-300 text-[11px] font-medium flex items-center gap-1.5 mt-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>完了まで数十秒かかる場合があります</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div className="space-y-2 text-xs text-stone-300 leading-relaxed bg-stone-950/60 p-3.5 rounded-xl border border-stone-800">
                 <p className="font-bold text-rose-400">
                   ⚠️ 現在の世界マップ、地域マップ、シンボルは破棄されます。
                 </p>
-                <p className="text-stone-400">
-                  補正された陸海マスクを滑らかにぼかし（ガウス平滑化）、陸地は標高約 47、海洋は標高約 23 の平らな初期地形として世界マップを生成します。
-                </p>
-                <p className="text-stone-400">
-                  生成後は既存の標高ブラシやシンボル配置ツールで山脈や詳細な起伏を自由に作成できます。
+                <p className="text-stone-400 text-[11px]">
+                  判定解像度の陸海マスクをバイリニア補間と多重平滑化によって滑らかに出力解像度へ拡大し、陸地は約 47、海洋は約 23 の初期地形として世界マップを生成します。
                 </p>
               </div>
+
+              {/* In-progress indicator during upsampling */}
+              {isApplyingToWorld && (
+                <div className="p-3.5 rounded-xl bg-stone-950 border border-amber-500/60 space-y-2.5">
+                  <div className="flex items-center gap-2 text-amber-300 text-xs font-bold">
+                    <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
+                    <span>{applyProgress.step || '世界マップに反映中...'}</span>
+                    <span className="ml-auto font-mono text-amber-400">{applyProgress.percent}%</span>
+                  </div>
+                  <div className="w-full bg-stone-800 rounded-full h-2 overflow-hidden border border-stone-700">
+                    <div
+                      className="bg-gradient-to-r from-amber-500 to-amber-300 h-full transition-all duration-200"
+                      style={{ width: `${applyProgress.percent}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Error Alert */}
+              {applyError && (
+                <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-600 text-rose-200 text-xs flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>{applyError}</span>
+                </div>
+              )}
+
               <div className="flex justify-end gap-2.5 pt-2">
                 <button
                   type="button"
+                  disabled={isApplyingToWorld}
                   onClick={() => setShowConfirmApply(false)}
-                  className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold border border-stone-700 transition cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-semibold border border-stone-700 transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   キャンセル
                 </button>
                 <button
                   type="button"
+                  disabled={isApplyingToWorld}
                   onClick={handleConfirmApplyWorld}
-                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-stone-950 text-xs font-bold shadow-lg shadow-amber-950/50 transition flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-stone-950 text-xs font-bold shadow-lg shadow-amber-950/50 transition flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  <Globe className="w-4 h-4 font-bold" />
-                  <span>確定して反映する</span>
+                  {isApplyingToWorld ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-stone-950" />
+                      <span>拡大・反映中...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Globe className="w-4 h-4 font-bold" />
+                      <span>確定して反映する</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

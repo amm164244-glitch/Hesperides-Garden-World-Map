@@ -42,6 +42,7 @@ export interface RegionalBounds {
 export interface RegionalMapData {
   id: string;
   name: string;
+  kind?: 'region' | 'town'; // 'region' (default) or 'town' (compact site/settlement)
   bounds: RegionalBounds;
   zoomScale: 4 | 16;
   width: number;
@@ -57,6 +58,7 @@ export interface RegionalMapData {
   symbols?: import('./symbols').MapSymbolInstance[];
   biomeGrid?: Uint8Array;
   outline?: [number, number][]; // 親マップ座標系での境界多角形頂点列
+  townObjects?: import('./town').TownObject[];
 }
 
 export interface ShapeMaskConfig {
@@ -67,6 +69,7 @@ export interface ShapeMaskConfig {
 
 export interface ParentMapSource {
   id?: string | null;
+  kind?: 'region' | 'town';
   width: number;
   height: number;
   gridCols: number;
@@ -193,4 +196,8 @@ export interface HistoryRecord {
     prev: number;
     next: number;
   }[];
+  townChanges?: {
+    prevObjects: import('./town').TownObject[];
+    newObjects: import('./town').TownObject[];
+  };
 }

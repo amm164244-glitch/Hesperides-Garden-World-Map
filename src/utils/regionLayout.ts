@@ -57,16 +57,89 @@ export function computeRegionLayout(
   };
 }
 
+export { formatDistance } from './distanceFormat';
+
+export interface FitBoundsOptions {
+  minWidthRatio?: number;
+  minAbsolute?: number;
+}
+
+/**
+ * Computes non-distorted parent bounds for a compact Town Map (e.g. 100m to 5000m)
+ * centered at (centerX, centerY) on the parent map, respecting the given aspect ratio
+ * and staying fully contained within the parent map borders.
+ */
+export function computeTownBounds(
+  parent: { width: number; height: number; widthKm?: number; worldWidthKm?: number },
+  centerX: number,
+  centerY: number,
+  realWidthM: number,
+  aspect: number = 4 / 3
+): RegionalBounds {
+  const parentWidthKm = parent.widthKm ?? parent.worldWidthKm ?? 40000;
+  const safeWidthKm = Math.max(1e-4, parentWidthKm);
+  const realWidthKm = realWidthM / 1000;
+  // boundsW in parent coordinate space:
+  const boundsW = parent.width * (realWidthKm / safeWidthKm);
+  const safeAspect = Math.max(MIN_ASPECT_RATIO, Math.min(MAX_ASPECT_RATIO, aspect));
+  const boundsH = boundsW / safeAspect;
+
+  let minX = centerX - boundsW / 2;
+  let maxX = centerX + boundsW / 2;
+  let minY = centerY - boundsH / 2;
+  let maxY = centerY + boundsH / 2;
+
+  // If bounds exceeds parent size (unlikely for towns), uniformly scale down
+  if (boundsW > parent.width || boundsH > parent.height) {
+    const scaleFactor = Math.min(parent.width / boundsW, parent.height / boundsH);
+    const w = boundsW * scaleFactor;
+    const h = boundsH * scaleFactor;
+    minX = centerX - w / 2;
+    maxX = centerX + w / 2;
+    minY = centerY - h / 2;
+    maxY = centerY + h / 2;
+  }
+
+  // Translate into parent [0, parent.width] and [0, parent.height]
+  if (minX < 0) {
+    const shift = -minX;
+    minX += shift;
+    maxX += shift;
+  } else if (maxX > parent.width) {
+    const shift = maxX - parent.width;
+    minX -= shift;
+    maxX -= shift;
+  }
+
+  if (minY < 0) {
+    const shift = -minY;
+    minY += shift;
+    maxY += shift;
+  } else if (maxY > parent.height) {
+    const shift = maxY - parent.height;
+    minY -= shift;
+    maxY -= shift;
+  }
+
+  minX = Math.max(0, Math.min(parent.width, minX));
+  maxX = Math.max(0, Math.min(parent.width, maxX));
+  minY = Math.max(0, Math.min(parent.height, minY));
+  maxY = Math.max(0, Math.min(parent.height, maxY));
+
+  return { minX, minY, maxX, maxY };
+}
+
 /**
  * Clamps and normalizes a selected bounds rectangle so that:
  * 1. Aspect ratio is within [1/8, 8] by expanding the shorter edge around its center.
- * 2. Minimum dimension is respected (min width is 2% of parentWidth).
+ * 2. Minimum dimension is respected (default 2% of parentWidth, or custom options).
  * 3. Does not exceed parent dimensions (translates into bounds, then scales down uniformly if needed).
  */
 export function fitBoundsToLimits(
   rawBounds: RegionalBounds,
   parentWidth: number,
-  parentHeight: number
+  parentHeight: number,
+  options?: FitBoundsOptions
 ): FitBoundsResult {
   let minX = Math.min(rawBounds.minX, rawBounds.maxX);
   let maxX = Math.max(rawBounds.minX, rawBounds.maxX);
@@ -78,9 +151,11 @@ export function fitBoundsToLimits(
 
   let adjusted = false;
 
-  // 1. Minimum size: min width is 2% of parent width, height proportional
-  const minW = Math.max(10, parentWidth * 0.02);
-  const minH = Math.max(10, parentHeight * 0.02);
+  // 1. Minimum size: default min width is 2% of parent width, height proportional
+  const minRatio = options?.minWidthRatio ?? 0.02;
+  const minAbsolute = options?.minAbsolute ?? 10;
+  const minW = Math.max(minAbsolute, parentWidth * minRatio);
+  const minH = Math.max(minAbsolute, parentHeight * minRatio);
 
   if (w < minW) {
     const cx = (minX + maxX) / 2;

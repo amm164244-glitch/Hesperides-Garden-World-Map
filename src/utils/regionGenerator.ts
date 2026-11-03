@@ -1,11 +1,16 @@
 import { MapData, ParentMapSource, RegionalBounds, RegionalMapData, ShapeMaskConfig } from '../types/map';
 import { Noise2D } from './prng';
-import { computeRegionLayout } from './regionLayout';
+import { computeRegionLayout, formatDistance } from './regionLayout';
 import {
   rasterizePolygonMask,
   blurMask,
   applyShapeMaskElevation,
 } from './regionShape';
+
+export interface GenerateRegionOptions {
+  kind?: 'region' | 'town';
+  detailScale?: number;
+}
 
 /**
  * Converts MapData or RegionalMapData into a uniform ParentMapSource interface.
@@ -15,6 +20,7 @@ export function toParentMapSource(source: ParentMapSource | MapData | RegionalMa
     const world = source as MapData;
     return {
       id: null,
+      kind: 'region',
       width: world.width,
       height: world.height,
       gridCols: world.gridCols,
@@ -27,6 +33,7 @@ export function toParentMapSource(source: ParentMapSource | MapData | RegionalMa
   }
   return {
     id: source.id ?? null,
+    kind: (source as RegionalMapData).kind,
     width: source.width,
     height: source.height,
     gridCols: source.gridCols,
@@ -48,7 +55,8 @@ export function generateRegionalMap(
   bounds: RegionalBounds,
   zoomScale: 4 | 16 = 4,
   name?: string,
-  shapeMask?: ShapeMaskConfig
+  shapeMask?: ShapeMaskConfig,
+  options?: GenerateRegionOptions
 ): RegionalMapData {
   const parent = toParentMapSource(parentSource);
   const seed = parent.seed + Math.round(bounds.minX * 31 + bounds.minY * 97);
@@ -106,8 +114,14 @@ export function generateRegionalMap(
     return hermite(rows[0], rows[1], rows[2], rows[3], ty);
   };
 
+  const isTown = options?.kind === 'town';
+  const detailScale = typeof options?.detailScale === 'number'
+    ? options.detailScale
+    : (isTown ? 0.15 : 1.0);
+
   const noiseScale = zoomScale === 16 ? 0.03 : 0.012;
-  const detailAmp = zoomScale === 16 ? 4.5 : 2.8;
+  const baseDetailAmp = zoomScale === 16 ? 4.5 : 2.8;
+  const detailAmp = baseDetailAmp * detailScale;
 
   for (let r = 0; r < gridRows; r++) {
     const ty = r / (gridRows - 1);
@@ -151,13 +165,17 @@ export function generateRegionalMap(
     applyShapeMaskElevation(elevationGrid, finalMask, parent.seaLevel);
   }
 
-  const regionId = `region_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  const defaultName = name || `地域マップ (${zoomScale}x: ${Math.round(boundsW)}x${Math.round(boundsH)}km)`;
-  const widthKm = Math.round(parent.widthKm * (boundsW / parent.width));
+  const regionId = `${isTown ? 'town' : 'region'}_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+  const rawWidthKm = parent.widthKm * (boundsW / parent.width);
+  // Keep decimals up to 3 decimal places without rounding to integer
+  const widthKm = rawWidthKm < 1 ? Number(rawWidthKm.toFixed(3)) : Number(rawWidthKm.toFixed(2));
+  const formattedW = formatDistance(widthKm);
+  const defaultName = name || (isTown ? `町マップ (${formattedW})` : `地域マップ (${zoomScale}x: ${formattedW})`);
 
   return {
     id: regionId,
     name: defaultName,
+    kind: isTown ? 'town' : 'region',
     bounds,
     zoomScale,
     width: regionW,

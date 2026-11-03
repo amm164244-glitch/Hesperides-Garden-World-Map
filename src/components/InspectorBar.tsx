@@ -1,15 +1,18 @@
 import React from 'react';
 import { Compass, Mountain, MapPin } from 'lucide-react';
-import { MapCell, MapData, Viewport } from '../types/map';
+import { MapCell, MapData, RegionalMapData, Viewport } from '../types/map';
+import { formatDistance } from '../utils/regionLayout';
 
 interface InspectorBarProps {
   mapData: MapData;
+  activeRegionalMap?: RegionalMapData | null;
   hoveredCell: MapCell | null;
   viewport: Viewport;
 }
 
 const InspectorBarComponent: React.FC<InspectorBarProps> = ({
   mapData,
+  activeRegionalMap,
   hoveredCell,
   viewport,
 }) => {
@@ -81,6 +84,12 @@ const InspectorBarComponent: React.FC<InspectorBarProps> = ({
       {/* Right: Map general stats */}
       <div className="flex items-center gap-4 font-mono text-[11px] text-stone-400 flex-wrap">
         <div>
+          <span>実寸: </span>
+          <span className="text-amber-300 font-semibold">
+            {formatDistance(activeRegionalMap ? activeRegionalMap.widthKm : mapData.worldWidthKm || 40000)}
+          </span>
+        </div>
+        <div>
           <span>総セル数: </span>
           <span className="text-amber-400 font-semibold">{totalCells.toLocaleString()}</span>
         </div>
@@ -93,7 +102,7 @@ const InspectorBarComponent: React.FC<InspectorBarProps> = ({
         </div>
         <div>
           <span>シード: </span>
-          <span className="text-stone-300">{mapData.seed}</span>
+          <span className="text-stone-300">{activeRegionalMap ? activeRegionalMap.seed : mapData.seed}</span>
         </div>
         <div>
           <span>倍率: </span>

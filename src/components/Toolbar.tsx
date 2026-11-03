@@ -23,6 +23,7 @@ import {
   Paintbrush,
   PaintBucket,
   Eraser,
+  Home,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
 import { SymbolToolSettings } from '../types/symbols';
@@ -62,11 +63,11 @@ interface ToolbarProps {
   onOpenStorage: () => void;
   activeRegionName?: string;
   activeRegionalMap?: import('../types/map').RegionalMapData | null;
-  breadcrumbs?: { id: string | null; name: string }[];
+  breadcrumbs?: { id: string | null; name: string; kind?: 'region' | 'town' }[];
   onNavigateBreadcrumb?: (id: string | null) => void;
   onGoBackOneLevel?: () => void;
   onExitRegion?: () => void;
-  regionList?: { id: string; name: string }[];
+  regionList?: { id: string; name: string; kind?: 'region' | 'town' }[];
   onSelectRegionMap?: (id: string) => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -246,25 +247,32 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       {activeRegionalMap || activeRegionName ? (
         <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-950/80 border border-amber-600/70 rounded-lg px-2.5 py-1.5 text-xs">
           <div className="flex flex-wrap items-center gap-1.5 text-amber-200">
-            <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            {activeRegionalMap?.kind === 'town' ? (
+              <Home className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            ) : (
+              <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            )}
             {breadcrumbs && breadcrumbs.length > 0 ? (
               breadcrumbs.map((crumb, idx) => {
                 const isLast = idx === breadcrumbs.length - 1;
+                const isTownCrumb = crumb.kind === 'town';
                 return (
                   <React.Fragment key={crumb.id ?? 'world-root'}>
                     {idx > 0 && <span className="text-amber-500/70 text-[10px] select-none">&gt;</span>}
                     {isLast ? (
-                      <span className="font-bold text-amber-100 truncate max-w-[140px] sm:max-w-[200px]" title={crumb.name}>
-                        {crumb.name}
+                      <span className="font-bold text-amber-100 truncate max-w-[140px] sm:max-w-[200px] flex items-center gap-1" title={crumb.name}>
+                        {isTownCrumb && <Home className="w-3 h-3 text-amber-400 shrink-0" />}
+                        <span>{crumb.name}</span>
                       </span>
                     ) : (
                       <button
                         type="button"
                         onClick={() => onNavigateBreadcrumb?.(crumb.id)}
-                        className="hover:underline hover:text-amber-300 text-stone-300 truncate max-w-[100px] sm:max-w-[160px] cursor-pointer"
+                        className="hover:underline hover:text-amber-300 text-stone-300 truncate max-w-[100px] sm:max-w-[160px] cursor-pointer flex items-center gap-1"
                         title={`${crumb.name} へ移動`}
                       >
-                        {crumb.name}
+                        {isTownCrumb && <Home className="w-3 h-3 text-amber-400 shrink-0" />}
+                        <span>{crumb.name}</span>
                       </button>
                     )}
                   </React.Fragment>
@@ -287,7 +295,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="flex items-center justify-between bg-stone-950/70 border border-stone-800 rounded-lg px-2.5 py-1 text-xs">
           <span className="text-stone-400 text-[11px] flex items-center gap-1">
             <Layers className="w-3.5 h-3.5 text-stone-400" />
-            生成済み地域:
+            生成済み地域・町:
           </span>
           <select
             onChange={(e) => {
@@ -296,9 +304,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             defaultValue=""
             className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
           >
-            <option value="" disabled>地域マップを選択...</option>
+            <option value="" disabled>マップを選択...</option>
             {regionList.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
+              <option key={r.id} value={r.id}>
+                {r.kind === 'town' ? `[町] ${r.name}` : r.name}
+              </option>
             ))}
           </select>
         </div>
@@ -309,7 +319,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="flex items-center justify-between bg-stone-950/70 border border-stone-800/80 rounded-lg px-2.5 py-1 text-xs">
           <span className="text-stone-400 text-[11px] flex items-center gap-1">
             <Layers className="w-3 h-3 text-sky-400" />
-            配下の地域:
+            配下の地域・町:
           </span>
           <select
             onChange={(e) => {
@@ -318,9 +328,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             defaultValue=""
             className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
           >
-            <option value="" disabled>配下の地域マップを選択...</option>
+            <option value="" disabled>配下のマップを選択...</option>
             {regionList.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
+              <option key={r.id} value={r.id}>
+                {r.kind === 'town' ? `[町] ${r.name}` : r.name}
+              </option>
             ))}
           </select>
         </div>

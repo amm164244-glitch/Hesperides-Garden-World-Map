@@ -23,15 +23,17 @@ import { MapSymbolInstance, SymbolToolSettings, CustomMapAsset } from '../types/
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { buildBiomeColorTable } from '../utils/biomeTypes';
 import { paintBiomeCircle, floodFillBiome, BiomeBoundingBox } from '../utils/biomePainter';
-import { fitBoundsToLimits } from '../utils/regionLayout';
+import { fitBoundsToLimits, computeTownBounds } from '../utils/regionLayout';
 import { ScaleBar } from './ScaleBar';
-import { RegionShapeTools, RegionSelectMethod } from './RegionShapeTools';
+import { RegionShapeTools, RegionSelectMethod, TownConfig } from './RegionShapeTools';
 import {
   polygonBounds,
   pointInPolygon,
   simplifyPolyline,
   smoothPolygon,
 } from '../utils/regionShape';
+import { TownObject } from '../types/town';
+import { drawTownObjects } from '../utils/town/townRenderer';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -67,7 +69,8 @@ interface MapCanvasProps {
   onSelectRegionBounds?: (
     bounds: RegionalBounds,
     adjusted?: boolean,
-    shapePolygon?: [number, number][]
+    shapePolygon?: [number, number][],
+    options?: { kind?: 'region' | 'town'; name?: string; detailScale?: number }
   ) => void;
   onSelectRegionMap?: (regionId: string) => void;
   mapBackgroundUrl?: string | null;
@@ -75,6 +78,11 @@ interface MapCanvasProps {
   maxZoom?: number;
   onInteractingChange?: (isInteracting: boolean) => void;
   biomeTypes?: BiomeType[];
+  townObjects?: TownObject[];
+  showTownObjects?: boolean;
+  selectedTownObjectId?: string | null;
+  onSelectTownObjectId?: (id: string | null) => void;
+  onUpdateTownObjects?: (objects: TownObject[]) => void;
 }
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
@@ -100,6 +108,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onUpdateSymbols,
   selectedSymbolId = null,
   onSelectSymbolId,
+  townObjects = [],
+  showTownObjects = true,
+  selectedTownObjectId = null,
+  onSelectTownObjectId,
+  onUpdateTownObjects,
   biomeSettings,
   onCommitHistory,
   onHoverCell,
@@ -155,6 +168,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   } | null>(null);
   const freehandPointsRef = useRef<[number, number][]>([]);
   const [freehandPoints, setFreehandPoints] = useState<[number, number][]>([]);
+  const [townConfig, setTownConfig] = useState<TownConfig>({
+    name: '街道の宿場町',
+    realWidthM: 600,
+    aspect: 4 / 3,
+    detailScale: 0.15,
+  });
 
   // Active map properties (Regional vs World)
   const isRegion = activeRegionalMap !== null;
@@ -626,6 +645,79 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.restore();
     }
 
+    // 2.5 Town Map placement preview when in selectRegion mode with 'town' method
+    if (brushSettings.mode === 'selectRegion' && selectMethod === 'town') {
+      const curPos = cursorPosRef.current;
+      if (curPos) {
+        const tb = computeTownBounds(
+          { width: currentWidth, height: currentHeight, widthKm: effectiveWidthKm },
+          curPos.x,
+          curPos.y,
+          townConfig.realWidthM,
+          townConfig.aspect
+        );
+        const wScreen = (tb.maxX - tb.minX) * viewport.zoom;
+        const hScreen = (tb.maxY - tb.minY) * viewport.zoom;
+
+        ctx.save();
+        if (Math.max(wScreen, hScreen) >= 12) {
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.22)';
+          ctx.fillRect(tb.minX, tb.minY, tb.maxX - tb.minX, tb.maxY - tb.minY);
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1.8 / viewport.zoom;
+          ctx.setLineDash([6 / viewport.zoom, 4 / viewport.zoom]);
+          ctx.strokeRect(tb.minX, tb.minY, tb.maxX - tb.minX, tb.maxY - tb.minY);
+
+          // Center cross
+          ctx.setLineDash([]);
+          ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
+          ctx.lineWidth = 1.0 / viewport.zoom;
+          const cx = (tb.minX + tb.maxX) / 2;
+          const cy = (tb.minY + tb.maxY) / 2;
+          const crossLen = Math.max(2, Math.min(tb.maxX - tb.minX, tb.maxY - tb.minY) * 0.25);
+          ctx.beginPath();
+          ctx.moveTo(cx - crossLen, cy);
+          ctx.lineTo(cx + crossLen, cy);
+          ctx.moveTo(cx, cy - crossLen);
+          ctx.lineTo(cx, cy + crossLen);
+          ctx.stroke();
+
+          ctx.fillStyle = '#fef3c7';
+          ctx.font = `bold ${Math.max(10, 12 / viewport.zoom)}px sans-serif`;
+          ctx.fillText(
+            `${townConfig.name} (${townConfig.realWidthM}m)`,
+            tb.minX + 4 / viewport.zoom,
+            Math.max(14, tb.minY - 4 / viewport.zoom)
+          );
+        } else {
+          // Screen size < 12px fallback crosshair & indicator
+          const cx = (tb.minX + tb.maxX) / 2;
+          const cy = (tb.minY + tb.maxY) / 2;
+          const s = 10 / viewport.zoom;
+
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1.6 / viewport.zoom;
+          ctx.strokeRect(cx - s, cy - s, s * 2, s * 2);
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
+          ctx.fillRect(cx - s, cy - s, s * 2, s * 2);
+
+          ctx.beginPath();
+          ctx.moveTo(cx - s * 1.8, cy);
+          ctx.lineTo(cx + s * 1.8, cy);
+          ctx.moveTo(cx, cy - s * 1.8);
+          ctx.lineTo(cx, cy + s * 1.8);
+          ctx.stroke();
+
+          ctx.fillStyle = '#fbbf24';
+          ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText('クリックして配置', cx, cy + s + 12 / viewport.zoom);
+          ctx.textAlign = 'left';
+        }
+        ctx.restore();
+      }
+    }
+
     // 3. Child Regional Map outlines on the currently viewed map (World or Parent Region)
     if (mapData.regionalMaps) {
       const currentMapId = activeRegionalMap ? activeRegionalMap.id : null;
@@ -636,42 +728,120 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (childRegions.length > 0) {
         ctx.save();
         for (const reg of childRegions) {
-          if (reg.outline && reg.outline.length >= 3) {
+          const b = reg.bounds;
+          const screenW = (b.maxX - b.minX) * viewport.zoom;
+          const screenH = (b.maxY - b.minY) * viewport.zoom;
+          const maxScreenDim = Math.max(screenW, screenH);
+          const isTown = reg.kind === 'town';
+
+          if (isTown && maxScreenDim < 24) {
+            // Render house icon / town marker when small on screen
+            const cx = (b.minX + b.maxX) / 2;
+            const cy = (b.minY + b.maxY) / 2;
+            const s = 7 / viewport.zoom;
+
+            ctx.save();
+            ctx.translate(cx, cy);
+
+            // House roof (triangle)
             ctx.beginPath();
-            ctx.moveTo(reg.outline[0][0], reg.outline[0][1]);
-            for (let i = 1; i < reg.outline.length; i++) {
-              ctx.lineTo(reg.outline[i][0], reg.outline[i][1]);
-            }
+            ctx.moveTo(0, -s * 1.3);
+            ctx.lineTo(s * 1.2, -s * 0.2);
+            ctx.lineTo(-s * 1.2, -s * 0.2);
             ctx.closePath();
-            ctx.strokeStyle = 'rgba(70, 180, 240, 0.9)';
-            ctx.lineWidth = 1.8 / viewport.zoom;
-            ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+            ctx.fillStyle = '#d97706';
+            ctx.fill();
+            ctx.strokeStyle = '#292524';
+            ctx.lineWidth = 1.2 / viewport.zoom;
             ctx.stroke();
 
-            ctx.fillStyle = 'rgba(70, 180, 240, 0.12)';
-            ctx.fill();
+            // House body (square)
+            ctx.fillStyle = '#fbbf24';
+            ctx.fillRect(-s * 0.8, -s * 0.2, s * 1.6, s * 1.2);
+            ctx.strokeRect(-s * 0.8, -s * 0.2, s * 1.6, s * 1.2);
 
-            const b = reg.bounds;
-            ctx.fillStyle = '#93c5fd';
-            ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
-            ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+            // Door
+            ctx.fillStyle = '#78350f';
+            ctx.fillRect(-s * 0.25, s * 0.3, s * 0.5, s * 0.7);
+
+            // Name label
+            ctx.fillStyle = '#fef3c7';
+            ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(reg.name, 0, s + 3 / viewport.zoom);
+
+            ctx.restore();
           } else {
-            const b = reg.bounds;
-            ctx.strokeStyle = 'rgba(70, 180, 240, 0.8)';
-            ctx.lineWidth = 1.8 / viewport.zoom;
-            ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
-            ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+            // Screen size >= 24px (or non-town): dashed line + name
+            const strokeColor = isTown ? 'rgba(245, 158, 11, 0.9)' : 'rgba(70, 180, 240, 0.8)';
+            const fillColor = isTown ? 'rgba(245, 158, 11, 0.12)' : 'rgba(70, 180, 240, 0.1)';
+            const textColor = isTown ? '#fde68a' : '#93c5fd';
 
-            ctx.fillStyle = 'rgba(70, 180, 240, 0.1)';
-            ctx.fillRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+            if (reg.outline && reg.outline.length >= 3) {
+              ctx.beginPath();
+              ctx.moveTo(reg.outline[0][0], reg.outline[0][1]);
+              for (let i = 1; i < reg.outline.length; i++) {
+                ctx.lineTo(reg.outline[i][0], reg.outline[i][1]);
+              }
+              ctx.closePath();
+              ctx.strokeStyle = strokeColor;
+              ctx.lineWidth = 1.8 / viewport.zoom;
+              ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+              ctx.stroke();
 
-            ctx.fillStyle = '#93c5fd';
-            ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
-            ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+              ctx.fillStyle = fillColor;
+              ctx.fill();
+
+              ctx.fillStyle = textColor;
+              ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'alphabetic';
+              ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+            } else {
+              ctx.strokeStyle = strokeColor;
+              ctx.lineWidth = 1.8 / viewport.zoom;
+              ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+              ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+
+              ctx.fillStyle = fillColor;
+              ctx.fillRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+
+              ctx.fillStyle = textColor;
+              ctx.font = `${Math.max(10, 13 / viewport.zoom)}px sans-serif`;
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'alphabetic';
+              ctx.fillText(reg.name, b.minX + 4 / viewport.zoom, b.minY + 14 / viewport.zoom);
+            }
           }
         }
         ctx.restore();
       }
+    }
+
+    // 3.5. Town Objects (Districts, Roads, Piers, Buildings, Fortified Walls)
+    if (
+      showTownObjects &&
+      townObjects &&
+      townObjects.length > 0 &&
+      activeRegionalMap?.kind === 'town'
+    ) {
+      const containerW = glCanvasRef.current ? glCanvasRef.current.width / dpr : currentWidth;
+      const containerH = glCanvasRef.current ? glCanvasRef.current.height / dpr : currentHeight;
+      const viewBounds = {
+        minX: -viewport.x / viewport.zoom,
+        minY: -viewport.y / viewport.zoom,
+        maxX: (containerW - viewport.x) / viewport.zoom,
+        maxY: (containerH - viewport.y) / viewport.zoom,
+      };
+
+      const metersPerUnit = (effectiveWidthKm * 1000) / currentWidth;
+      drawTownObjects(ctx, townObjects, {
+        metersPerUnit,
+        zoomPx: viewport.zoom * dpr,
+        viewBounds,
+        selectedId: selectedTownObjectId,
+      });
     }
 
     // 4. Cartographic Tolkien-style Symbols (Mountains, Forests, Settlements, Maritime)
@@ -1251,6 +1421,31 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       return;
     }
 
+    // Direct click on child town marker or child region to open it
+    if (mapData.regionalMaps && (brushSettings.mode === 'pan' || brushSettings.mode === 'selectRegion')) {
+      const currentMapId = activeRegionalMap ? activeRegionalMap.id : null;
+      const childRegions = Object.values(mapData.regionalMaps).filter(
+        (reg) => (reg.parentId ?? null) === currentMapId
+      );
+      for (const child of childRegions) {
+        const b = child.bounds;
+        const screenW = (b.maxX - b.minX) * viewport.zoom;
+        const screenH = (b.maxY - b.minY) * viewport.zoom;
+        const maxScreenDim = Math.max(screenW, screenH);
+        const isTown = child.kind === 'town';
+
+        if (isTown && maxScreenDim < 24) {
+          const cx = (b.minX + b.maxX) / 2;
+          const cy = (b.minY + b.maxY) / 2;
+          const dist = Math.hypot(worldPos.x - cx, worldPos.y - cy) * viewport.zoom;
+          if (dist <= 16) {
+            onSelectRegionMap?.(child.id);
+            return;
+          }
+        }
+      }
+    }
+
     const isPanAction =
       brushSettings.mode === 'pan' ||
       isSpacePressed ||
@@ -1260,7 +1455,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (isPanAction) {
       isPanningRef.current = true;
     } else if (brushSettings.mode === 'selectRegion') {
-      if (selectMethod === 'rect') {
+      if (selectMethod === 'town') {
+        const townBounds = computeTownBounds(
+          { width: currentWidth, height: currentHeight, widthKm: effectiveWidthKm },
+          worldPos.x,
+          worldPos.y,
+          townConfig.realWidthM,
+          townConfig.aspect
+        );
+        onSelectRegionBounds?.(townBounds, false, undefined, {
+          kind: 'town',
+          name: townConfig.name,
+          detailScale: townConfig.detailScale,
+        });
+        return;
+      } else if (selectMethod === 'rect') {
         setConfirmedShape(null);
         isSelectingRef.current = true;
         setSelectionBox({
@@ -1757,6 +1966,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             setConfirmedShape(null);
             renderOverlay();
           }}
+          townConfig={townConfig}
+          onChangeTownConfig={(patch) => {
+            setTownConfig((prev) => ({ ...prev, ...patch }));
+            renderOverlay();
+          }}
+          parentWidthKm={effectiveWidthKm}
         />
       )}
 

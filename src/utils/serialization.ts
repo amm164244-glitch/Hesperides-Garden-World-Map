@@ -1,6 +1,21 @@
 import { MapData, RegionalMapData } from '../types/map';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
+import { TownObject } from '../types/town';
 import { biomeGridToBase64, base64ToBiomeGrid } from './biomePainter';
+
+export {
+  serializeMapDataToFwm,
+  deserializeMapDataFromFwm,
+  loadUnifiedMapFile,
+  isFwmBuffer,
+} from './binaryMapStorage';
+export type {
+  FwmSerializeOptions,
+  FwmSerializeResult,
+  FwmDeserializeOptions,
+  FwmDeserializeResult,
+  FwmBlockMeta,
+} from './binaryMapStorage';
 
 /**
  * Base64 encoding/decoding for Float32Array to keep JSON exports compact (<10MB)
@@ -68,6 +83,7 @@ export function serializeMapData(
         seed: reg.seed,
         widthKm: reg.widthKm,
         symbols: reg.symbols || [],
+        townObjects: reg.townObjects && reg.townObjects.length > 0 ? reg.townObjects : undefined,
         elevationGridBase64: float32ToBase64(reg.elevationGrid),
         biomeGridBase64: reg.biomeGrid ? biomeGridToBase64(reg.biomeGrid) : undefined,
         elevationGrid: undefined,
@@ -91,6 +107,49 @@ export function serializeMapData(
     biomeGrid: undefined,
     regionalMaps: regionalMapsSerialized,
   };
+}
+
+/**
+ * Validates and cleans raw townObjects array from serialization.
+ * Discards objects with unknown kind, empty points/polygons, or non-numeric coordinates with a warning.
+ */
+export function sanitizeTownObjects(raw: any): TownObject[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+  const validKinds = new Set(['district', 'road', 'building', 'wall', 'pier']);
+  const sanitized: TownObject[] = [];
+
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    if (!validKinds.has(item.kind)) {
+      console.warn(`[serialization] 未知の町部品 kind を除外しました:`, item.kind);
+      continue;
+    }
+
+    const checkPt = (p: any): p is [number, number] =>
+      Array.isArray(p) &&
+      p.length >= 2 &&
+      typeof p[0] === 'number' &&
+      !isNaN(p[0]) &&
+      typeof p[1] === 'number' &&
+      !isNaN(p[1]);
+
+    if (item.kind === 'district' || item.kind === 'building') {
+      if (!Array.isArray(item.polygon) || item.polygon.length < 3 || !item.polygon.every(checkPt)) {
+        console.warn(`[serialization] 不正な polygon を持つ町部品を除外しました:`, item.id);
+        continue;
+      }
+    } else if (item.kind === 'road' || item.kind === 'wall' || item.kind === 'pier') {
+      if (!Array.isArray(item.points) || item.points.length < 2 || !item.points.every(checkPt)) {
+        console.warn(`[serialization] 不正な points を持つ町部品を除外しました:`, item.id);
+        continue;
+      }
+    }
+
+    sanitized.push(item as TownObject);
+  }
+
+  return sanitized.length > 0 ? sanitized : undefined;
 }
 
 function sanitizeBiomeGrid(grid: Uint8Array | undefined, validSlots: Set<number>): Uint8Array | undefined {
@@ -151,15 +210,16 @@ export function deserializeMapData(raw: any): MapData {
       const worldW = raw.width || 2000;
       const worldWidthKm = raw.worldWidthKm || 40000;
       const widthKm = regRaw.widthKm !== undefined
-        ? regRaw.widthKm
-        : Math.round(worldWidthKm * (boundsW / worldW));
+        ? Number(regRaw.widthKm)
+        : Number((worldWidthKm * (boundsW / worldW)).toFixed(3));
 
       const { temperatureGrid: _t1, temperatureGridBase64: _tb1, ...cleanRegRaw } = regRaw;
 
       regionalMaps[id] = {
         ...cleanRegRaw,
         id: regRaw.id || id,
-        name: regRaw.name || '地域マップ',
+        name: regRaw.name || (regRaw.kind === 'town' ? '町マップ' : '地域マップ'),
+        kind: regRaw.kind === 'town' ? 'town' : 'region',
         bounds: regRaw.bounds,
         zoomScale: regRaw.zoomScale || 4,
         width: regRaw.width || 2000,
@@ -175,6 +235,7 @@ export function deserializeMapData(raw: any): MapData {
         symbols: Array.isArray(regRaw.symbols) ? regRaw.symbols : [],
         biomeGrid: regBiome,
         outline: Array.isArray(regRaw.outline) ? regRaw.outline : undefined,
+        townObjects: sanitizeTownObjects(regRaw.townObjects),
       };
     }
   }

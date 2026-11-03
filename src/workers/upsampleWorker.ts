@@ -44,7 +44,7 @@ self.onmessage = (e: MessageEvent<UpsampleWorkerRequest>) => {
     } catch (err: any) {
       self.postMessage({
         type: 'error',
-        error: err?.message || '解像度拡大処理中にエラーが発生しました',
+        error: 'メモリが足りません。解像度を下げてお試しください',
       });
     }
   }

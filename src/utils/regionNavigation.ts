@@ -98,7 +98,7 @@ export function findChildToEnter(
     const h = b.maxY - b.minY;
     if (w <= 0 || h <= 0 || child.width <= 0) continue;
 
-    // Check coverage: overlap area between visible rectangle and child bounds / visible rectangle area
+    // Check coverage: overlap area between visible rectangle and child bounds
     if (visArea > 0) {
       const ixMin = Math.max(visible.minX, b.minX);
       const ixMax = Math.min(visible.maxX, b.maxX);
@@ -107,8 +107,10 @@ export function findChildToEnter(
       const interW = Math.max(0, ixMax - ixMin);
       const interH = Math.max(0, iyMax - iyMin);
       const interArea = interW * interH;
-      const coverage = interArea / visArea;
-      if (coverage < AUTO_ENTER_MIN_COVERAGE) {
+      const childArea = w * h;
+      const screenCoverage = interArea / visArea;
+      const childCoverage = childArea > 0 ? interArea / childArea : 0;
+      if (screenCoverage < AUTO_ENTER_MIN_COVERAGE && childCoverage < 0.8) {
         continue;
       }
     }
@@ -152,6 +154,7 @@ export function shouldExitToParent(vp: Viewport): boolean {
 /**
  * Calculates the maximum allowed zoom for the current map, ensuring that
  * users can zoom in far enough to reach the auto-entry threshold of any uniform child.
+ * For town maps with extremely small geographical bounds ratio k, allows up to 500x zoom.
  */
 export function getMaxZoomForMap(
   children: RegionalMapData[],
@@ -163,5 +166,6 @@ export function getMaxZoomForMap(
   const minK = Math.min(...uniformChildren.map((c) => (c.bounds.maxX - c.bounds.minX) / c.width));
   if (minK <= 0) return 12.0;
 
-  return Math.max(12.0, (ENTER_MIN_ZOOM / minK) * 1.1);
+  const calculated = (ENTER_MIN_ZOOM / minK) * 1.1;
+  return Math.min(500.0, Math.max(12.0, calculated));
 }

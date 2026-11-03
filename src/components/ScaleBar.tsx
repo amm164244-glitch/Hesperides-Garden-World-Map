@@ -11,9 +11,9 @@ export const ScaleBar: React.FC<ScaleBarProps> = ({ worldWidthKm, mapWidth, view
   // Screen pixels per kilometer
   const screenPixelsPerKm = (mapWidth * viewport.zoom) / worldWidthKm;
 
-  // Nice round numbers for scale bar in km (supports world, regions, and town scale)
+  // Nice round numbers for scale bar in km (supports world, regions, and town scale down to 10m)
   const candidateKm = [
-    0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000,
+    0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000,
   ];
 
   // Target scale bar width between 75px and 200px
