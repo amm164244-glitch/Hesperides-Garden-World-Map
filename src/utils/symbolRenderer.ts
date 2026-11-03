@@ -50,11 +50,19 @@ export let GOLD_ACCENT = '#c99e38';
 
 // In-memory Image Cache for Custom Assets
 const customAssetImageCache = new Map<string, HTMLImageElement>();
+let onImageLoadedCallback: (() => void) | null = null;
+
+export function setCustomImageLoadedCallback(cb: (() => void) | null) {
+  onImageLoadedCallback = cb;
+}
 
 export function getCachedCustomImage(asset: CustomMapAsset): HTMLImageElement | null {
   let img = customAssetImageCache.get(asset.id);
   if (!img) {
     img = new Image();
+    img.onload = () => {
+      onImageLoadedCallback?.();
+    };
     img.src = asset.dataUrl;
     customAssetImageCache.set(asset.id, img);
   }
@@ -277,7 +285,7 @@ export function drawSortedSymbols(
   ctx.imageSmoothingQuality = 'high';
 
   // 1. Sort by Y-coordinate (North to South, cached if array unchanged)
-  if (symbols !== lastSymbolsInputRef) {
+  if (symbols !== lastSymbolsInputRef || symbols.length !== cachedSortedArray.length) {
     lastSymbolsInputRef = symbols;
     cachedSortedArray = [...symbols].sort((a, b) => a.y - b.y);
   }

@@ -307,6 +307,58 @@ export function generateTectonicWorld(
     }
   }
 
+  // 4.5. RIA COASTLINE & SERRATED SHORELINE SYNTHESIS (リアス式海岸・ギザギザ海岸線の自動生成)
+  // Real coastlines feature dendritic drowned valleys (rias), rocky jagged headlands,
+  // narrow fjords, and chains of coastal barrier islets.
+  onProgress?.(68, 'リアス海岸・複雑な海岸線フラクタルを刻み込み中...');
+  const riaNoise = new Noise2D(seed + 8819);
+  const riaDetailNoise = new Noise2D(seed + 4127);
+  const riaComplexity = config.coastlineComplexity !== undefined ? config.coastlineComplexity : 7;
+  const riaIntensity = Math.max(0.1, Math.min(1.0, riaComplexity / 10.0));
+
+  for (let r = 0; r < gridRows; r++) {
+    const wy = r * cellH;
+    const rowOffset = r * gridCols;
+
+    for (let c = 0; c < gridCols; c++) {
+      const idx = rowOffset + c;
+      const curElev = elevationGrid[idx];
+      const dCoast = Math.abs(curElev - STANDARD_SEA_LEVEL);
+
+      // Apply ria fractal displacement specifically along coastal transition margin
+      if (dCoast < 16.0) {
+        const wx = c * cellW;
+        // Peak influence right at sea level (dCoast = 0), fading out inland and to deep sea
+        const coastWeight = Math.pow(Math.max(0.0, 1.0 - dCoast / 16.0), 1.25);
+
+        // 1. Meso bays and rugged peninsulas
+        const bayNoise = riaNoise.fbm(wx * 0.0055, wy * 0.0055, 3, 0.52, 2.05);
+
+        // 2. Dendritic ria fjords (drowned valleys) and protruding mountain spurs
+        const fjordRidge = riaNoise.ridged(wx * 0.0145, wy * 0.0145, 3, 0.55, 2.15);
+
+        // 3. High-frequency fractal serrations (rocky headlands and serrated shores)
+        const fineSerration =
+          riaDetailNoise.sample(wx * 0.038, wy * 0.038) * 0.65 +
+          riaDetailNoise.sample(wx * 0.082, wy * 0.082) * 0.35;
+
+        // 4. Chains of coastal islets / skerries hugging jagged capes
+        const skerryNoise = riaDetailNoise.sample(wx * 0.022, wy * 0.022);
+        const skerryBoost = (skerryNoise > 0.62 && curElev < STANDARD_SEA_LEVEL && curElev > STANDARD_SEA_LEVEL - 7.0) ? 6.5 : 0.0;
+
+        // Combined ria perturbation:
+        // Negative values carve deep saltwater coves & flooded river inlets inland;
+        // Positive values push rugged peninsulas and rocky barrier capes into the sea.
+        const riaDelta =
+          (bayNoise * 7.5 + (fjordRidge - 0.44) * 8.5 + fineSerration * 4.2 + skerryBoost) *
+          coastWeight *
+          riaIntensity;
+
+        elevationGrid[idx] = Math.max(0.0, Math.min(100.0, curElev + riaDelta));
+      }
+    }
+  }
+
   // 5. Geomorphic Erosion Simulation (熱侵食＋単純な水による侵食)
   const erosionIterations = config.erosionIterations !== undefined ? config.erosionIterations : 20;
   const erosionStrength = (config.erosionStrength !== undefined ? config.erosionStrength : 5) / 10.0;
@@ -367,10 +419,36 @@ export function generateTectonicWorld(
           }
         }
 
-        // Submerge islands smaller than minIslandArea
+        // Submerge islands smaller than minIslandArea, UNLESS they are coastal archipelago skerries
         if (tail < minArea) {
-          for (let i = 0; i < tail; i++) {
-            elevationGrid[queue[i]] = STANDARD_SEA_LEVEL - 1.8;
+          // Check if this tiny island is a coastal skerry (adjacent to shallow coastal water)
+          let isCoastalSkerry = false;
+          if (tail >= 2) {
+            for (let i = 0; i < tail; i++) {
+              const qIdx = queue[i];
+              const qx = qIdx % gridCols;
+              const qy = Math.floor(qIdx / gridCols);
+              const testNeighbors = [
+                qy > 0 ? (qy - 1) * gridCols + qx : -1,
+                qy < gridRows - 1 ? (qy + 1) * gridCols + qx : -1,
+                (qx > 0 ? qx - 1 : gridCols - 1) + qy * gridCols,
+                (qx < gridCols - 1 ? qx + 1 : 0) + qy * gridCols,
+              ];
+              for (const n of testNeighbors) {
+                if (n >= 0 && elevationGrid[n] > STANDARD_SEA_LEVEL - 7.0 && elevationGrid[n] <= STANDARD_SEA_LEVEL) {
+                  isCoastalSkerry = true;
+                  break;
+                }
+              }
+              if (isCoastalSkerry) break;
+            }
+          }
+
+          // If not a coastal skerry, or tiny 1-cell speck, submerge it
+          if (!isCoastalSkerry || tail < 2) {
+            for (let i = 0; i < tail; i++) {
+              elevationGrid[queue[i]] = STANDARD_SEA_LEVEL - 1.8;
+            }
           }
         }
       }

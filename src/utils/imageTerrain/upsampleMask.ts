@@ -1,9 +1,12 @@
 import { STANDARD_SEA_LEVEL } from '../tectonicGenerator';
 import { maskToElevationGrid } from './maskEditor';
+import { Noise2D } from '../prng';
 
 export interface UpsampleOptions {
   blurRadius?: number; // Base blur radius at source resolution (default: 2.5)
   seaLevel?: number; // Sea level threshold (default: STANDARD_SEA_LEVEL = 18.0)
+  riaRoughness?: number; // 0 to 10 (Ria coastline fractal irregularity, default: 7)
+  seed?: number; // Deterministic PRNG seed for fractal rias
   onProgress?: (percent: number, step: string) => void;
 }
 
@@ -166,10 +169,18 @@ export function buildElevationFromMask(
   const onProgress = options.onProgress;
   const baseRadius = options.blurRadius ?? 2.5;
 
-  // Step 1: If source and destination resolutions are identical, use direct blur to ensure 100% equivalence
+  // Step 1: If source and destination resolutions are identical, use direct blur with ria synthesis
   if (srcWidth === dstWidth && srcHeight === dstHeight) {
-    onProgress?.(10, '標高を作成中...');
-    const result = maskToElevationGrid(sourceMask, srcWidth, srcHeight, seaLevel, baseRadius);
+    onProgress?.(10, 'リアス海岸標高を作成中...');
+    const result = maskToElevationGrid(
+      sourceMask,
+      srcWidth,
+      srcHeight,
+      seaLevel,
+      baseRadius,
+      options.riaRoughness ?? 7,
+      options.seed ?? 88913
+    );
     onProgress?.(100, '標高を作成完了');
     return result;
   }
@@ -262,14 +273,65 @@ export function buildElevationFromMask(
   // Free temporary destination buffer immediately
   temp = null;
 
-  // Step 5: Map continuous values to elevation [seaLevel - 12, seaLevel + 12]
-  onProgress?.(92, '標高を作成中');
-  const minElev = seaLevel - 12.0;
-  const range = 24.0;
+  // Step 5: Map continuous values to elevation with authentic Ria Coastline fractal synthesis
+  onProgress?.(92, 'リアス海岸・ギザギザ海岸線を合成中...');
+  const riaRoughness = options.riaRoughness ?? 7;
+  const intensity = Math.max(0.0, Math.min(1.0, riaRoughness / 10.0));
+  const seed = options.seed ?? 88913;
+  const riaNoise = new Noise2D(seed + 9821);
+  const riaDetail = new Noise2D(seed + 4019);
 
-  for (let i = 0; i < dstSize; i++) {
-    const m = Math.max(0.0, Math.min(1.0, elevationGrid[i]));
-    elevationGrid[i] = minElev + m * range;
+  for (let y = 0; y < dstHeight; y++) {
+    const rowOffset = y * dstWidth;
+    const ny = y / dstHeight;
+
+    for (let x = 0; x < dstWidth; x++) {
+      const idx = rowOffset + x;
+      const m = Math.max(0.0, Math.min(1.0, elevationGrid[idx]));
+
+      if (intensity <= 0) {
+        elevationGrid[idx] = (seaLevel - 12.0) + m * 24.0;
+        continue;
+      }
+
+      // Coastal envelope factor: 1.0 at coast (m = 0.5), tapering to 0 at deep ocean/interior
+      const coastWeight = 4.0 * m * (1.0 - m);
+      const nx = x / dstWidth;
+
+      // Multi-scale ria perturbation:
+      // 1. Meso bays and rugged peninsulas
+      const bayNoise = riaNoise.fbm(nx * 28.0, ny * 28.0, 3, 0.52, 2.1);
+      // 2. Dendritic ria fjords (drowned river valleys) and rocky spurs
+      const fjordRidge = riaNoise.ridged(nx * 75.0, ny * 75.0, 3, 0.55, 2.15);
+      // 3. High-frequency serrated shoreline crinkles
+      const fineSerration =
+        riaDetail.sample(nx * 190.0, ny * 190.0) * 0.65 +
+        riaDetail.sample(nx * 380.0, ny * 380.0) * 0.35;
+      // 4. Coastal barrier skerries
+      const skerryNoise = riaDetail.sample(nx * 110.0, ny * 110.0);
+      const skerryBoost = (skerryNoise > 0.60 && m < 0.5 && m > 0.30) ? 0.22 : 0.0;
+
+      const riaPerturbation =
+        (bayNoise * 0.28 + (fjordRidge - 0.44) * 0.32 + fineSerration * 0.18 + skerryBoost) *
+        coastWeight *
+        intensity;
+
+      const perturbedM = Math.max(0.0, Math.min(1.0, m + riaPerturbation));
+
+      if (perturbedM > 0.5) {
+        // Land: smooth rise towards interior hills/highlands
+        const landFactor = (perturbedM - 0.5) / 0.5;
+        const inlandHills =
+          (riaNoise.fbm(nx * 18.0, ny * 18.0, 3) * 0.5 + 0.5) *
+          Math.pow(landFactor, 0.8) *
+          14.0;
+        elevationGrid[idx] = seaLevel + landFactor * 12.0 + inlandHills;
+      } else {
+        // Ocean: shelf sloping down into deeper ocean
+        const oceanFactor = (0.5 - perturbedM) / 0.5;
+        elevationGrid[idx] = seaLevel - oceanFactor * 14.0;
+      }
+    }
   }
 
   onProgress?.(100, '標高を作成完了');

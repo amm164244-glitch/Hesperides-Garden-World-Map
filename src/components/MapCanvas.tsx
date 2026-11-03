@@ -17,8 +17,12 @@ import {
   drawDecorativeBorder,
   drawAntiqueScaleBar,
 } from '../utils/cartographyRenderer';
-import { drawSortedSymbols } from '../utils/symbolRenderer';
-import { scatterSymbolsUnderBrush } from '../utils/symbolGenerator';
+import { drawSortedSymbols, setCustomImageLoadedCallback } from '../utils/symbolRenderer';
+import {
+  scatterSymbolsUnderBrush,
+  scatterSymbolsForBiomeStroke,
+  populateSymbolsForBiomeFill,
+} from '../utils/symbolGenerator';
 import { MapSymbolInstance, SymbolToolSettings, CustomMapAsset } from '../types/symbols';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { buildBiomeColorTable } from '../utils/biomeTypes';
@@ -235,6 +239,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const isDraggingSymbolRef = useRef<boolean>(false);
   const draggedSymbolOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const symbolStrokeSnapshotRef = useRef<MapSymbolInstance[]>([]);
+  const activeStrokeSymbolsRef = useRef<MapSymbolInstance[]>([]);
+  const isSymbolStrokeActiveRef = useRef<boolean>(false);
+  const lastSymbolWorldPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const lastWorldPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const activeStrokeChangesRef = useRef<Map<number, { prev: number; curr: number }>>(new Map());
@@ -845,7 +852,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
 
     // 4. Cartographic Tolkien-style Symbols (Mountains, Forests, Settlements, Maritime)
-    if (showSymbols && symbols && symbols.length > 0) {
+    const effectiveSymbols = isSymbolStrokeActiveRef.current
+      ? activeStrokeSymbolsRef.current
+      : (symbols || []);
+    if (showSymbols && effectiveSymbols.length > 0) {
       const containerW = glCanvasRef.current ? glCanvasRef.current.width / dpr : currentWidth;
       const containerH = glCanvasRef.current ? glCanvasRef.current.height / dpr : currentHeight;
       const viewBounds = {
@@ -856,7 +866,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       };
       drawSortedSymbols(
         ctx,
-        symbols,
+        effectiveSymbols,
         viewport.zoom * dpr,
         viewBounds,
         selectedSymbolId,
@@ -992,6 +1002,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   useEffect(() => {
     redraw();
   }, [redraw]);
+
+  // Redraw overlay whenever a newly referenced custom pixel asset finishes loading
+  useEffect(() => {
+    setCustomImageLoadedCallback(() => {
+      renderOverlay();
+    });
+    return () => {
+      setCustomImageLoadedCallback(null);
+    };
+  }, [renderOverlay]);
 
   // Handle Resize & Canvas Initialization
   useEffect(() => {
@@ -1303,8 +1323,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
 
     if (brushSettings.mode === 'symbolBrush') {
-      const symList = [...(symbols || [])];
-      symbolStrokeSnapshotRef.current = symList;
+      isSymbolStrokeActiveRef.current = true;
+      activeStrokeSymbolsRef.current = [...(symbols || [])];
+      symbolStrokeSnapshotRef.current = [...activeStrokeSymbolsRef.current];
+      const symList = activeStrokeSymbolsRef.current;
       const isCustom = symbolToolSettings?.selectedType === 'custom' || !!symbolToolSettings?.selectedCustomAssetId;
       const type = isCustom ? 'custom' : (symbolToolSettings?.selectedType || 'tree_pine_cluster');
       const customAssetId = isCustom ? (symbolToolSettings?.selectedCustomAssetId || customAssets?.[0]?.id) : undefined;
@@ -1326,19 +1348,23 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         terrainContext
       );
       if (added.length > 0) {
-        onUpdateSymbols?.(symList);
+        onUpdateSymbols?.([...symList]);
       }
+      renderOverlay();
       return;
     }
 
     if (brushSettings.mode === 'symbolEraser') {
-      const symList = symbols || [];
-      symbolStrokeSnapshotRef.current = [...symList];
+      isSymbolStrokeActiveRef.current = true;
+      activeStrokeSymbolsRef.current = [...(symbols || [])];
+      symbolStrokeSnapshotRef.current = [...activeStrokeSymbolsRef.current];
       const rad = symbolToolSettings?.scatterRadius ?? brushSettings.radius;
-      const remaining = symList.filter((s) => Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > rad);
-      if (remaining.length !== symList.length) {
+      const remaining = activeStrokeSymbolsRef.current.filter((s) => Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > rad);
+      if (remaining.length !== activeStrokeSymbolsRef.current.length) {
+        activeStrokeSymbolsRef.current = remaining;
         onUpdateSymbols?.(remaining);
       }
+      renderOverlay();
       return;
     }
 
@@ -1370,13 +1396,48 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       if (result.changes.length > 0) {
         updateBiomeSubRegion(result.changes, result.bounds);
-        renderOverlay();
+
         const activeList = biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES;
-        const bName = activeList.find((b) => b.slot === biomeId)?.name || '';
+        const activeBiome = activeList.find((b) => b.slot === biomeId);
+        const bName = activeBiome?.name || '';
+
+        let nextSymbols = symbols || [];
+        let symbolChanges: { prevSymbols: MapSymbolInstance[]; newSymbols: MapSymbolInstance[] } | undefined = undefined;
+
+        if (activeBiome && activeBiome.symbols && activeBiome.symbols.length > 0 && (activeBiome.density ?? 50) > 0) {
+          const prevSymbols = [...nextSymbols];
+          const workingSymbols = [...nextSymbols];
+          const changedIndices = result.changes.map((ch) => ch.gridIndex);
+          const added = populateSymbolsForBiomeFill(
+            changedIndices,
+            activeBiome,
+            workingSymbols,
+            currentCols,
+            currentRows,
+            currentWidth,
+            currentHeight,
+            currentElevation,
+            currentSeaLevel,
+            options.landOnly,
+            customAssets
+          );
+          if (added.length > 0) {
+            nextSymbols = workingSymbols;
+            onUpdateSymbols?.(nextSymbols);
+            symbolChanges = {
+              prevSymbols,
+              newSymbols: nextSymbols,
+            };
+          }
+        }
+
+        renderOverlay();
+
         onCommitHistory({
           description: `地形タイプ塗りつぶし (${bName})`,
           timestamp: Date.now(),
           biomeChanges: result.changes,
+          symbolChanges,
         });
       }
       return;
@@ -1386,6 +1447,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (brushSettings.mode === 'biomePaint' || brushSettings.mode === 'biomeErase') {
       const grid = getOrCreateBiomeGrid();
       activeBiomeStrokeRef.current.clear();
+      isSymbolStrokeActiveRef.current = true;
+      activeStrokeSymbolsRef.current = [...(symbols || [])];
+      symbolStrokeSnapshotRef.current = [...activeStrokeSymbolsRef.current];
+      lastSymbolWorldPosRef.current = worldPos;
+      lastWorldPosRef.current = worldPos;
+
       const isErase = brushSettings.mode === 'biomeErase';
       const biomeId = isErase ? 0 : (biomeSettings?.selectedBiomeId ?? 1);
       const softness = isErase ? 0 : (biomeSettings?.softness ?? 40);
@@ -1416,8 +1483,45 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       if (result.changes.length > 0) {
         updateBiomeSubRegion(result.changes, result.bounds);
-        renderOverlay();
       }
+
+      const activeList = biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES;
+      const activeBiome = activeList.find((b) => b.slot === biomeId);
+
+      if (!isErase && activeBiome && activeBiome.symbols && activeBiome.symbols.length > 0 && (activeBiome.density ?? 50) > 0) {
+        const added = scatterSymbolsForBiomeStroke(
+          worldPos.x,
+          worldPos.y,
+          brushSettings.radius,
+          activeBiome,
+          activeStrokeSymbolsRef.current,
+          grid,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          currentElevation,
+          currentSeaLevel,
+          options.landOnly,
+          customAssets
+        );
+        if (added.length > 0) {
+          onUpdateSymbols?.([...activeStrokeSymbolsRef.current]);
+        }
+      } else if (isErase && activeStrokeSymbolsRef.current.length > 0) {
+        const filtered = activeStrokeSymbolsRef.current.filter((s) => {
+          if (s.autoBiomeSlot !== undefined) {
+            return Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > brushSettings.radius;
+          }
+          return true;
+        });
+        if (filtered.length !== activeStrokeSymbolsRef.current.length) {
+          activeStrokeSymbolsRef.current = filtered;
+          onUpdateSymbols?.(filtered);
+        }
+      }
+
+      renderOverlay();
       return;
     }
 
@@ -1680,7 +1784,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       const scatterRadius = symbolToolSettings?.scatterRadius ?? 60;
       const minStep = Math.max(8, Math.min(24, scatterRadius * 0.25));
       if (Math.hypot(worldPos.x - lastWorldPosRef.current.x, worldPos.y - lastWorldPosRef.current.y) >= minStep) {
-        const symList = [...(symbols || [])];
+        const symList = activeStrokeSymbolsRef.current;
         const isCustom = symbolToolSettings?.selectedType === 'custom' || !!symbolToolSettings?.selectedCustomAssetId;
         const type = isCustom ? 'custom' : (symbolToolSettings?.selectedType || 'tree_pine_cluster');
         const customAssetId = isCustom ? (symbolToolSettings?.selectedCustomAssetId || customAssets?.[0]?.id) : undefined;
@@ -1700,16 +1804,17 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           terrainContext
         );
         if (added.length > 0) {
-          onUpdateSymbols?.(symList);
+          onUpdateSymbols?.([...symList]);
         }
         lastWorldPosRef.current = worldPos;
       }
       renderOverlay();
     } else if (brushSettings.mode === 'symbolEraser') {
-      const symList = symbols || [];
+      const symList = activeStrokeSymbolsRef.current;
       const rad = symbolToolSettings?.scatterRadius ?? brushSettings.radius;
       const remaining = symList.filter((s) => Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > rad);
       if (remaining.length !== symList.length) {
+        activeStrokeSymbolsRef.current = remaining;
         onUpdateSymbols?.(remaining);
       }
       renderOverlay();
@@ -1751,8 +1856,50 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       if (result.changes.length > 0) {
         updateBiomeSubRegion(result.changes, result.bounds);
-        renderOverlay();
       }
+
+      const activeList = biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES;
+      const activeBiome = activeList.find((b) => b.slot === biomeId);
+
+      if (!isErase && activeBiome && activeBiome.symbols && activeBiome.symbols.length > 0 && (activeBiome.density ?? 50) > 0) {
+        const minDist = Math.max(2, activeBiome.minDistance ?? 8);
+        const minStep = Math.max(6, Math.min(24, minDist * 0.75));
+        if (Math.hypot(worldPos.x - lastSymbolWorldPosRef.current.x, worldPos.y - lastSymbolWorldPosRef.current.y) >= minStep) {
+          const added = scatterSymbolsForBiomeStroke(
+            worldPos.x,
+            worldPos.y,
+            brushSettings.radius,
+            activeBiome,
+            activeStrokeSymbolsRef.current,
+            grid,
+            currentCols,
+            currentRows,
+            currentWidth,
+            currentHeight,
+            currentElevation,
+            currentSeaLevel,
+            options.landOnly,
+            customAssets
+          );
+          if (added.length > 0) {
+            onUpdateSymbols?.([...activeStrokeSymbolsRef.current]);
+          }
+          lastSymbolWorldPosRef.current = worldPos;
+        }
+      } else if (isErase && activeStrokeSymbolsRef.current.length > 0) {
+        const filtered = activeStrokeSymbolsRef.current.filter((s) => {
+          if (s.autoBiomeSlot !== undefined) {
+            return Math.hypot(s.x - worldPos.x, s.y - worldPos.y) > brushSettings.radius;
+          }
+          return true;
+        });
+        if (filtered.length !== activeStrokeSymbolsRef.current.length) {
+          activeStrokeSymbolsRef.current = filtered;
+          onUpdateSymbols?.(filtered);
+        }
+      }
+
+      renderOverlay();
       lastWorldPosRef.current = worldPos;
     } else if (brushSettings.mode === 'biomeFill') {
       // Flood fill is triggered on click (mouseDown)
@@ -1789,37 +1936,64 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
     if (brushSettings.mode === 'symbolBrush' || brushSettings.mode === 'symbolEraser') {
       if (symbolStrokeSnapshotRef.current.length > 0) {
+        const committedSymbols = activeStrokeSymbolsRef.current.length > 0
+          ? activeStrokeSymbolsRef.current
+          : (symbols || []);
         onCommitHistory({
           description: brushSettings.mode === 'symbolBrush' ? 'シンボル散布ペイント' : 'シンボル消去',
           timestamp: Date.now(),
           symbolChanges: {
             prevSymbols: symbolStrokeSnapshotRef.current,
-            newSymbols: symbols || [],
+            newSymbols: committedSymbols,
           },
         });
       }
       symbolStrokeSnapshotRef.current = [];
+      isSymbolStrokeActiveRef.current = false;
+      activeStrokeSymbolsRef.current = [];
     }
 
-    // Commit active biome stroke
-    if (activeBiomeStrokeRef.current.size > 0) {
+    // Commit active biome stroke & auto-scattered symbols
+    if (brushSettings.mode === 'biomePaint' || brushSettings.mode === 'biomeErase') {
       const biomeChanges: { gridIndex: number; prev: number; next: number }[] = [];
-      for (const [gridIndex, { prev, next }] of activeBiomeStrokeRef.current.entries()) {
-        if (prev !== next) {
-          biomeChanges.push({ gridIndex, prev, next });
+      if (activeBiomeStrokeRef.current.size > 0) {
+        for (const [gridIndex, { prev, next }] of activeBiomeStrokeRef.current.entries()) {
+          if (prev !== next) {
+            biomeChanges.push({ gridIndex, prev, next });
+          }
         }
       }
-      if (biomeChanges.length > 0) {
+
+      let symbolChanges: { prevSymbols: MapSymbolInstance[]; newSymbols: MapSymbolInstance[] } | undefined = undefined;
+      if (symbolStrokeSnapshotRef.current.length > 0) {
+        const prevSyms = symbolStrokeSnapshotRef.current;
+        const currSyms = activeStrokeSymbolsRef.current.length > 0
+          ? activeStrokeSymbolsRef.current
+          : (symbols || []);
+        if (prevSyms.length !== currSyms.length || prevSyms.some((s, idx) => s !== currSyms[idx])) {
+          symbolChanges = {
+            prevSymbols: prevSyms,
+            newSymbols: currSyms,
+          };
+        }
+      }
+
+      if (biomeChanges.length > 0 || symbolChanges) {
         const isErase = brushSettings.mode === 'biomeErase';
         const activeList = biomeTypes || mapData.biomeTypes || DEFAULT_BIOME_TYPES;
         const bName = activeList.find((b) => b.slot === (biomeSettings?.selectedBiomeId ?? 1))?.name || '';
         onCommitHistory({
           description: isErase ? '地形タイプ消去' : `地形タイプ塗り (${bName})`,
           timestamp: Date.now(),
-          biomeChanges,
+          biomeChanges: biomeChanges.length > 0 ? biomeChanges : undefined,
+          symbolChanges,
         });
       }
+
       activeBiomeStrokeRef.current.clear();
+      isSymbolStrokeActiveRef.current = false;
+      symbolStrokeSnapshotRef.current = [];
+      activeStrokeSymbolsRef.current = [];
     }
 
     if (!isMouseDownRef.current) return;
@@ -1882,6 +2056,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
     isPanningRef.current = false;
     activeStrokeChangesRef.current.clear();
+    isSymbolStrokeActiveRef.current = false;
+    activeStrokeSymbolsRef.current = [];
+    symbolStrokeSnapshotRef.current = [];
     redraw();
   };
 

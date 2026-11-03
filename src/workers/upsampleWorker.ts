@@ -8,6 +8,8 @@ export interface UpsampleWorkerRequest {
   dstWidth: number;
   dstHeight: number;
   seaLevel: number;
+  riaRoughness?: number;
+  seed?: number;
 }
 
 export type UpsampleWorkerResponse =
@@ -16,7 +18,7 @@ export type UpsampleWorkerResponse =
   | { type: 'error'; error: string };
 
 self.onmessage = (e: MessageEvent<UpsampleWorkerRequest>) => {
-  const { type, sourceMask, srcWidth, srcHeight, dstWidth, dstHeight, seaLevel } = e.data;
+  const { type, sourceMask, srcWidth, srcHeight, dstWidth, dstHeight, seaLevel, riaRoughness, seed } = e.data;
 
   if (type === 'upsample') {
     try {
@@ -28,6 +30,8 @@ self.onmessage = (e: MessageEvent<UpsampleWorkerRequest>) => {
         dstHeight,
         seaLevel,
         {
+          riaRoughness,
+          seed,
           onProgress: (percent, step) => {
             self.postMessage({ type: 'progress', percent, step });
           },

@@ -1,5 +1,6 @@
 import { GeneratorConfig, MapCell, MapData } from '../../types/map';
 import { STANDARD_SEA_LEVEL } from '../tectonicGenerator';
+import { Noise2D } from '../prng';
 
 export interface MaskPatch {
   minX: number;
@@ -12,15 +13,18 @@ export interface MaskPatch {
 
 /**
  * Converts a binary land/sea mask (1 = land, 0 = sea) into an elevation grid
- * using a separable Gaussian blur so land interior is ~seaLevel+12, sea interior is ~seaLevel-12,
- * and the coast smoothly transitions across the boundary.
+ * with authentic Ria Coastline fractal irregularity (リアス式海岸・ギザギザ海岸線).
+ * Uses a separable Gaussian blur combined with multi-scale fractal domain perturbation,
+ * dendritic ria fjords/drowned valleys, jagged rocky capes, and coastal archipelago skerries.
  */
 export function maskToElevationGrid(
   mask: Uint8Array,
   width: number,
   height: number,
   seaLevel: number = STANDARD_SEA_LEVEL,
-  blurRadius: number = 2.5
+  blurRadius: number = 2.5,
+  riaRoughness: number = 7,
+  seed: number = 88913
 ): Float32Array {
   const size = width * height;
   const elevationGrid = new Float32Array(size);
@@ -63,18 +67,66 @@ export function maskToElevationGrid(
     }
   }
 
-  // Pass 2: Vertical Gaussian blur (clamp y at north/south poles)
+  // Pass 2: Vertical Gaussian blur & Rias Coastline Fractal Synthesis
+  const riaNoise = new Noise2D(seed + 9821);
+  const riaDetail = new Noise2D(seed + 4019);
+  const intensity = Math.max(0.0, Math.min(1.0, (riaRoughness ?? 7) / 10.0));
+
   for (let y = 0; y < height; y++) {
     const rowOffset = y * width;
+    const ny = y / height;
+
     for (let x = 0; x < width; x++) {
       let sum = 0;
       for (let k = -r; k <= r; k++) {
-        const ny = Math.max(0, Math.min(height - 1, y + k));
-        sum += temp[ny * width + x] * weights[k + r];
+        const py = Math.max(0, Math.min(height - 1, y + k));
+        sum += temp[py * width + x] * weights[k + r];
       }
       const m = Math.max(0.0, Math.min(1.0, sum));
-      // Lerp seaLevel - 12 to seaLevel + 12
-      elevationGrid[rowOffset + x] = (seaLevel - 12.0) + m * 24.0;
+
+      if (intensity <= 0) {
+        // Fallback: smooth linear gradient without ria fractal
+        elevationGrid[rowOffset + x] = (seaLevel - 12.0) + m * 24.0;
+        continue;
+      }
+
+      // Coastal envelope factor: 1.0 at coast (m = 0.5), tapering to 0 at deep ocean/interior
+      const coastWeight = 4.0 * m * (1.0 - m);
+      const nx = x / width;
+
+      // Multi-scale ria perturbation:
+      // 1. Meso bays and rugged peninsulas
+      const bayNoise = riaNoise.fbm(nx * 28.0, ny * 28.0, 3, 0.52, 2.1);
+      // 2. Dendritic ria fjords (drowned river valleys) and rocky spurs
+      const fjordRidge = riaNoise.ridged(nx * 75.0, ny * 75.0, 3, 0.55, 2.15);
+      // 3. High-frequency serrated shoreline crinkles
+      const fineSerration =
+        riaDetail.sample(nx * 190.0, ny * 190.0) * 0.65 +
+        riaDetail.sample(nx * 380.0, ny * 380.0) * 0.35;
+      // 4. Coastal barrier skerries
+      const skerryNoise = riaDetail.sample(nx * 110.0, ny * 110.0);
+      const skerryBoost = (skerryNoise > 0.60 && m < 0.5 && m > 0.30) ? 0.22 : 0.0;
+
+      const riaPerturbation =
+        (bayNoise * 0.28 + (fjordRidge - 0.44) * 0.32 + fineSerration * 0.18 + skerryBoost) *
+        coastWeight *
+        intensity;
+
+      const perturbedM = Math.max(0.0, Math.min(1.0, m + riaPerturbation));
+
+      if (perturbedM > 0.5) {
+        // Land: smooth rise towards interior hills/highlands
+        const landFactor = (perturbedM - 0.5) / 0.5;
+        const inlandHills =
+          (riaNoise.fbm(nx * 18.0, ny * 18.0, 3) * 0.5 + 0.5) *
+          Math.pow(landFactor, 0.8) *
+          14.0;
+        elevationGrid[rowOffset + x] = seaLevel + landFactor * 12.0 + inlandHills;
+      } else {
+        // Ocean: shelf sloping down into deeper ocean
+        const oceanFactor = (0.5 - perturbedM) / 0.5;
+        elevationGrid[rowOffset + x] = seaLevel - oceanFactor * 14.0;
+      }
     }
   }
 
@@ -432,8 +484,11 @@ export function createMapDataFromMask(
   const height = 1000;
   const seaLevel = STANDARD_SEA_LEVEL;
 
-  // 1. Generate smoothed elevation grid (or reuse provided high-res grid)
-  const elevationGrid = existingElevationGrid || maskToElevationGrid(mask, gridCols, gridRows, seaLevel, 2.5);
+  // 1. Generate smoothed elevation grid with ria coastline synthesis (or reuse provided high-res grid)
+  const riaRoughness = (config as any).riaRoughness ?? config.coastlineComplexity ?? 7;
+  const elevationGrid =
+    existingElevationGrid ||
+    maskToElevationGrid(mask, gridCols, gridRows, seaLevel, 2.5, riaRoughness, config.seed ?? 88913);
 
   // 2. Sample cells for inspector telemetry (100x50 cells)
   const sampleCols = 100;
