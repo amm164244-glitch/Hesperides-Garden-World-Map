@@ -15,6 +15,9 @@ import {
   TownRoad,
   TownWall,
 } from '../../types/town';
+import { RiverData, LakeData } from '../../types/water';
+import { pointInLake } from '../waterGenerator';
+import { distanceToRiver } from '../waterRenderer';
 import { makeRng } from '../penSymbols';
 import { metersToUnits, pointInPolygon, polygonCentroid } from './townGeometry';
 
@@ -31,7 +34,7 @@ export type SampleTownResult = TownObject[] & { stats: SampleTownStats };
 
 /**
  * Creates a smooth bilinear terrain water sampler from an elevation grid.
- * Any coordinate with elevation < seaLevel is identified as water.
+ * Any coordinate with elevation < seaLevel, inside a lake, or inside a river is identified as water.
  */
 export function createTerrainWaterSampler(
   elevationGrid: Float32Array,
@@ -39,10 +42,33 @@ export function createTerrainWaterSampler(
   gridRows: number,
   width: number,
   height: number,
-  seaLevel: number
+  seaLevel: number,
+  rivers?: RiverData[],
+  lakes?: LakeData[]
 ): TerrainWaterSampler {
   return {
     isWater: (x: number, y: number): boolean => {
+      // 1. Check Lake polygons
+      if (lakes && lakes.length > 0) {
+        for (const lake of lakes) {
+          if (lake.polygon && lake.polygon.length >= 3 && pointInLake(x, y, lake.polygon)) {
+            return true;
+          }
+        }
+      }
+
+      // 2. Check River polylines
+      if (rivers && rivers.length > 0) {
+        for (const river of rivers) {
+          if (river.points && river.points.length >= 2) {
+            const hit = distanceToRiver(x, y, river);
+            if (hit.distance <= 0) {
+              return true;
+            }
+          }
+        }
+      }
+
       if (gridCols <= 1 || gridRows <= 1 || width <= 0 || height <= 0) {
         return false;
       }

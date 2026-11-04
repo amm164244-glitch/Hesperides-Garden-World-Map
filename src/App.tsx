@@ -61,6 +61,8 @@ import {
   persistCustomCategories,
   exportSymbolLibraryToJson,
 } from './utils/assetStorage';
+import { RiverData, LakeData, WaterToolSettings, DEFAULT_WATER_TOOL_SETTINGS } from './types/water';
+import { generateRiversAndLakes } from './utils/waterGenerator';
 
 // Global Planetary 2:1 Aspect Ratio
 export const getResolutionDimensions = (gridRes: string) => {
@@ -277,6 +279,144 @@ export default function App() {
     },
     [activeRegionId]
   );
+
+  // Water Bodies (Rivers & Lakes) state & selection
+  const [waterSettings, setWaterSettings] = useState<WaterToolSettings>(DEFAULT_WATER_TOOL_SETTINGS);
+  const [selectedWaterId, setSelectedWaterId] = useState<string | null>(null);
+  const [selectedWaterType, setSelectedWaterType] = useState<'river' | 'lake' | null>(null);
+
+  // Current active map rivers and lakes (derived from active regional map or world map)
+  const currentRivers = useMemo(() => {
+    if (activeRegionId && mapData.regionalMaps[activeRegionId]) {
+      return mapData.regionalMaps[activeRegionId].rivers || [];
+    }
+    return mapData.rivers || [];
+  }, [activeRegionId, mapData.regionalMaps, mapData.rivers]);
+
+  const currentLakes = useMemo(() => {
+    if (activeRegionId && mapData.regionalMaps[activeRegionId]) {
+      return mapData.regionalMaps[activeRegionId].lakes || [];
+    }
+    return mapData.lakes || [];
+  }, [activeRegionId, mapData.regionalMaps, mapData.lakes]);
+
+  // Update rivers for the currently active map (World or Regional)
+  const handleUpdateRivers = useCallback(
+    (nextRivers: RiverData[]) => {
+      setMapData((prev) => {
+        if (activeRegionId && prev.regionalMaps[activeRegionId]) {
+          return {
+            ...prev,
+            regionalMaps: {
+              ...prev.regionalMaps,
+              [activeRegionId]: {
+                ...prev.regionalMaps[activeRegionId],
+                rivers: nextRivers,
+              },
+            },
+          };
+        }
+        return {
+          ...prev,
+          rivers: nextRivers,
+        };
+      });
+    },
+    [activeRegionId]
+  );
+
+  // Update lakes for the currently active map (World or Regional)
+  const handleUpdateLakes = useCallback(
+    (nextLakes: LakeData[]) => {
+      setMapData((prev) => {
+        if (activeRegionId && prev.regionalMaps[activeRegionId]) {
+          return {
+            ...prev,
+            regionalMaps: {
+              ...prev.regionalMaps,
+              [activeRegionId]: {
+                ...prev.regionalMaps[activeRegionId],
+                lakes: nextLakes,
+              },
+            },
+          };
+        }
+        return {
+          ...prev,
+          lakes: nextLakes,
+        };
+      });
+    },
+    [activeRegionId]
+  );
+
+  // Auto-generate rivers and lakes for the current map
+  const handleAutoGenerateWater = useCallback(
+    (riverCount: number, lakeCount: number) => {
+      const activeMap = activeRegionalMap || mapData;
+      const seed = activeMap.seed;
+      const { rivers: genRivers, lakes: genLakes } = generateRiversAndLakes(
+        activeMap.elevationGrid,
+        activeMap.gridCols,
+        activeMap.gridRows,
+        activeMap.width,
+        activeMap.height,
+        activeMap.seaLevel,
+        seed,
+        {
+          riverCount,
+          lakeCount,
+          enableRivers: riverCount > 0,
+          enableLakes: lakeCount > 0,
+          worldWidthKm: (activeMap as any).widthKm ?? (activeMap as any).worldWidthKm ?? 40000,
+        }
+      );
+
+      setUndoStack((prev) => [
+        ...prev,
+        {
+          description: '川と湖を自動生成',
+          timestamp: Date.now(),
+          waterChanges: {
+            prevRivers: currentRivers,
+            newRivers: genRivers,
+            prevLakes: currentLakes,
+            newLakes: genLakes,
+          },
+        },
+      ]);
+      setRedoStack([]);
+
+      handleUpdateRivers(genRivers);
+      handleUpdateLakes(genLakes);
+      setSelectedWaterId(null);
+      setSelectedWaterType(null);
+    },
+    [activeRegionalMap, mapData, currentRivers, currentLakes, handleUpdateRivers, handleUpdateLakes]
+  );
+
+  // Clear all rivers and lakes for current map
+  const handleClearAllWater = useCallback(() => {
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        description: 'すべての水域を消去',
+        timestamp: Date.now(),
+        waterChanges: {
+          prevRivers: currentRivers,
+          newRivers: [],
+          prevLakes: currentLakes,
+          newLakes: [],
+        },
+      },
+    ]);
+    setRedoStack([]);
+
+    handleUpdateRivers([]);
+    handleUpdateLakes([]);
+    setSelectedWaterId(null);
+    setSelectedWaterType(null);
+  }, [currentRivers, currentLakes, handleUpdateRivers, handleUpdateLakes]);
 
   // Pending Region Selection Bounds for modal prompt
   const [pendingRegionInfo, setPendingRegionInfo] = useState<{
@@ -1000,10 +1140,21 @@ export default function App() {
       setSelectedTownObjectId(null);
     }
 
+    if (lastRecord.waterChanges) {
+      if (lastRecord.waterChanges.prevRivers !== undefined) {
+        handleUpdateRivers(lastRecord.waterChanges.prevRivers);
+      }
+      if (lastRecord.waterChanges.prevLakes !== undefined) {
+        handleUpdateLakes(lastRecord.waterChanges.prevLakes);
+      }
+      setSelectedWaterId(null);
+      setSelectedWaterType(null);
+    }
+
     setUndoStack((prev) => prev.slice(0, prev.length - 1));
     setRedoStack((prev) => [...prev, lastRecord]);
     setMapData((prev) => ({ ...prev }));
-  }, [undoStack, activeRegionalMap, mapData, handleUpdateSymbols, handleUpdateTownObjects]);
+  }, [undoStack, activeRegionalMap, mapData, handleUpdateSymbols, handleUpdateTownObjects, handleUpdateRivers, handleUpdateLakes]);
 
   // Redo
   const handleRedo = useCallback(() => {
@@ -1043,10 +1194,21 @@ export default function App() {
       setSelectedTownObjectId(null);
     }
 
+    if (nextRecord.waterChanges) {
+      if (nextRecord.waterChanges.newRivers !== undefined) {
+        handleUpdateRivers(nextRecord.waterChanges.newRivers);
+      }
+      if (nextRecord.waterChanges.newLakes !== undefined) {
+        handleUpdateLakes(nextRecord.waterChanges.newLakes);
+      }
+      setSelectedWaterId(null);
+      setSelectedWaterType(null);
+    }
+
     setRedoStack((prev) => prev.slice(0, prev.length - 1));
     setUndoStack((prev) => [...prev, nextRecord]);
     setMapData((prev) => ({ ...prev }));
-  }, [redoStack, activeRegionalMap, mapData, handleUpdateSymbols, handleUpdateTownObjects]);
+  }, [redoStack, activeRegionalMap, mapData, handleUpdateSymbols, handleUpdateTownObjects, handleUpdateRivers, handleUpdateLakes]);
 
   // Clear all biome grid data
   const handleClearBiomeGrid = useCallback(() => {
@@ -1364,6 +1526,21 @@ export default function App() {
           onInteractingChange={(interacting) => {
             isInteractingRef.current = interacting;
           }}
+          rivers={currentRivers}
+          lakes={currentLakes}
+          onUpdateRivers={handleUpdateRivers}
+          onUpdateLakes={handleUpdateLakes}
+          selectedWaterId={selectedWaterId}
+          selectedWaterType={selectedWaterType}
+          onSelectWater={(id, type) => {
+            setSelectedWaterId(id);
+            setSelectedWaterType(type);
+          }}
+          waterSettings={waterSettings}
+          onChangeWaterSettings={(patch) => setWaterSettings((prev) => ({ ...prev, ...patch }))}
+          onAutoGenerateWater={handleAutoGenerateWater}
+          onClearAllWater={handleClearAllWater}
+          onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
         />
 
         {/* Floating Toolbar (Top Left) */}
@@ -1613,6 +1790,8 @@ export default function App() {
               seaLevel={activeRegionalMap.seaLevel}
               roofTheme={activeRegionalMap.townStyle?.roofTheme ?? 'terracotta'}
               onChangeRoofTheme={handleChangeRoofTheme}
+              rivers={currentRivers}
+              lakes={currentLakes}
             />
           </div>
         )}

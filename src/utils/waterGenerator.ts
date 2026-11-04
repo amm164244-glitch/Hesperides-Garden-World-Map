@@ -1,7 +1,8 @@
 /**
  * Procedural Hydrological Water Generator (Rivers & Lakes)
  * Simulates realistic drainage basins, mountain spring sources, downhill flow,
- * meanders, tributary confluence, and natural organic lake basins.
+ * meanders, tributary confluence, natural lake-to-lake drainage chains,
+ * and seamless ocean estuaries.
  */
 
 import { RiverData, LakeData } from '../types/water';
@@ -28,6 +29,10 @@ const FANTASY_RIVER_NAMES = [
   '月影河',
   '白樺川',
   '黄金河',
+  '青龍川',
+  '星雫川',
+  '双子河',
+  '黎明川',
 ];
 
 const FANTASY_LAKE_NAMES = [
@@ -47,6 +52,10 @@ const FANTASY_LAKE_NAMES = [
   '薄明の湖',
   '白銀湖',
   '竜眠湖',
+  '月詠湖',
+  '碧水湖',
+  '静謐湖',
+  '精霊湖',
 ];
 
 export interface WaterGenOptions {
@@ -54,12 +63,13 @@ export interface WaterGenOptions {
   lakeCount?: number;
   enableRivers?: boolean;
   enableLakes?: boolean;
+  worldWidthKm?: number;
 }
 
 /**
  * Bilinear elevation sample from Float32Array grid.
  */
-function sampleElev(
+export function sampleElev(
   grid: Float32Array,
   cols: number,
   rows: number,
@@ -74,8 +84,8 @@ function sampleElev(
   const r0 = Math.max(0, Math.min(rows - 1, Math.floor(gy)));
   const c1 = Math.min(cols - 1, c0 + 1);
   const r1 = Math.min(rows - 1, r0 + 1);
-  const tx = gx - c0;
-  const ty = gy - r0;
+  const tx = Math.max(0, Math.min(1, gx - c0));
+  const ty = Math.max(0, Math.min(1, gy - r0));
 
   const e00 = grid[r0 * cols + c0];
   const e10 = grid[r0 * cols + c1];
@@ -90,7 +100,7 @@ function sampleElev(
 /**
  * Computes elevation gradient vector (dE/dx, dE/dy) using central differences.
  */
-function sampleGradient(
+export function sampleGradient(
   grid: Float32Array,
   cols: number,
   rows: number,
@@ -115,6 +125,7 @@ function sampleGradient(
 
 /**
  * Creates an organic closed lake polygon deformed by multi-octave noise.
+ * Includes gentle elongation along a valley angle for natural geography.
  */
 export function createOrganicLake(
   cx: number,
@@ -124,7 +135,14 @@ export function createOrganicLake(
   numPoints: number = 24
 ): [number, number][] {
   const noise = new Noise2D(seed);
+  const rng = new Mulberry32(seed + 314);
   const poly: [number, number][] = [];
+
+  // Natural valley elongation (1.1 ~ 1.5 aspect ratio)
+  const valleyAngle = rng.next() * Math.PI;
+  const elongation = 1.15 + rng.next() * 0.35;
+  const cosV = Math.cos(valleyAngle);
+  const sinV = Math.sin(valleyAngle);
 
   for (let i = 0; i < numPoints; i++) {
     const angle = (i / numPoints) * Math.PI * 2;
@@ -132,11 +150,17 @@ export function createOrganicLake(
     const ny = Math.sin(angle);
 
     // Multi-frequency radial deformation for natural bays and coves
-    const warp1 = noise.sample(nx * 1.6 + 12.3, ny * 1.6 + 45.6) * 0.28;
-    const warp2 = noise.sample(nx * 3.8 + 78.9, ny * 3.8 + 23.4) * 0.12;
-    const r = radius * (1.0 + warp1 + warp2);
+    const warp1 = noise.sample(nx * 1.5 + 12.3, ny * 1.5 + 45.6) * 0.22;
+    const warp2 = noise.sample(nx * 3.2 + 78.9, ny * 3.2 + 23.4) * 0.09;
+    let r = radius * (1.0 + warp1 + warp2);
 
-    poly.push([cx + nx * r, cy + ny * r]);
+    // Apply valley axis elongation (aspect ratio 1.1 ~ 1.35)
+    const alongValley = nx * cosV + ny * sinV;
+    const acrossValley = -nx * sinV + ny * cosV;
+    const shapeScale = Math.hypot(alongValley * elongation, acrossValley / elongation);
+    const clampedR = Math.min(radius * 1.22, r * shapeScale);
+
+    poly.push([cx + nx * clampedR, cy + ny * clampedR]);
   }
 
   // Smooth polygon with Catmull-Rom
@@ -242,8 +266,11 @@ export function smoothRiverPath(points: [number, number][], subdivisions: number
 
 /**
  * Main Procedural River & Lake Generator.
- * Given an elevation field, automatically identifies natural lake basins and
- * mountain springs, then traces realistic downhill drainage river courses.
+ * Given an elevation field:
+ * 1. Places inland lake basins strictly clear of the ocean coast, scaled to realistic geographical dimensions
+ *    (preventing oversized >100km blobs).
+ * 2. Connects higher lakes down to lower lakes via natural outflow rivers.
+ * 3. Traces downhill river paths that flare cleanly into ocean estuaries or enter lakes without border crossbars.
  */
 export function generateRiversAndLakes(
   elevationGrid: Float32Array,
@@ -259,6 +286,7 @@ export function generateRiversAndLakes(
   const enableLakes = options.enableLakes ?? true;
   const targetRiverCount = options.riverCount ?? 14;
   const targetLakeCount = options.lakeCount ?? 6;
+  const worldWidthKm = options.worldWidthKm || 40000;
 
   if (!enableRivers && !enableLakes) {
     return { rivers: [], lakes: [] };
@@ -267,6 +295,8 @@ export function generateRiversAndLakes(
   const rng = new Mulberry32(seed + 8819);
   const meanderNoise = new Noise2D(seed + 4417);
 
+  const kmPerUnit = Math.max(0.001, worldWidthKm / mapWidth);
+
   const lakes: LakeData[] = [];
   const rivers: RiverData[] = [];
 
@@ -274,9 +304,9 @@ export function generateRiversAndLakes(
   // 1. Procedural Lake Generation (Inland Basins)
   // ==========================================
   if (enableLakes && targetLakeCount > 0) {
-    const candidateBasins: { x: number; y: number; depth: number }[] = [];
-    const stepC = Math.max(2, Math.floor(cols / 80));
-    const stepR = Math.max(2, Math.floor(rows / 40));
+    const candidateBasins: { x: number; y: number; depth: number; elev: number }[] = [];
+    const stepC = Math.max(2, Math.floor(cols / 70));
+    const stepR = Math.max(2, Math.floor(rows / 35));
 
     for (let r = stepR * 2; r < rows - stepR * 2; r += stepR) {
       const wy = (r / (rows - 1)) * mapHeight;
@@ -284,10 +314,10 @@ export function generateRiversAndLakes(
         const wx = (c / (cols - 1)) * mapWidth;
         const elev = elevationGrid[r * cols + c];
 
-        // Only on land and comfortably above sea level
-        if (elev < seaLevel + 2.0 || elev > 75.0) continue;
+        // Only on land and comfortably above sea level (must not be directly on coast)
+        if (elev < seaLevel + 3.5 || elev > 80.0) continue;
 
-        // Check surrounding 8 neighbors for local depression
+        // Check surrounding 8 neighbors for local valley / depression
         let isLocalBasin = true;
         let avgSurrounding = 0;
         let neighborCount = 0;
@@ -298,7 +328,7 @@ export function generateRiversAndLakes(
             const nr = r + dr;
             const nc = c + dc;
             const ne = elevationGrid[nr * cols + nc];
-            if (ne <= elev) {
+            if (ne < elev - 0.5) {
               isLocalBasin = false;
               break;
             }
@@ -310,77 +340,150 @@ export function generateRiversAndLakes(
 
         if (isLocalBasin && neighborCount > 0) {
           const depth = avgSurrounding / neighborCount - elev;
-          candidateBasins.push({ x: wx, y: wy, depth });
+          candidateBasins.push({ x: wx, y: wy, depth, elev });
         }
       }
     }
 
-    // Sort basins by depression depth
+    // Sort basins by depression depth and elevation
     candidateBasins.sort((a, b) => b.depth - a.depth);
 
-    // Pick well-spaced basins
-    const minLakeDistance = Math.min(mapWidth, mapHeight) * 0.12;
     for (const basin of candidateBasins) {
       if (lakes.length >= targetLakeCount) break;
 
+      // Realistic Geographic Lake Sizing:
+      // Real-world lake diameter: mostly 18 km to 48 km (radius 9 to 24 km).
+      // Max diameter strictly capped to avoid >100km monsters as requested.
+      const targetDiameterKm = 18 + rng.next() * 26; // 18 km to 44 km
+      const targetRadiusKm = targetDiameterKm * 0.5;
+      let baseRadius = targetRadiusKm / kmPerUnit;
+
+      // On planetary world map, ensure baseRadius is at least 1.4 units for visibility
+      baseRadius = Math.max(1.4, Math.min(mapWidth * 0.012, baseRadius));
+      if (baseRadius * 1.25 * kmPerUnit > 36) {
+        baseRadius = 28.8 / kmPerUnit;
+      }
+
+      // Strict Coastline Clearance:
+      // Verify that NO part of the lake will touch or overlap the ocean.
+      // Check 12 radial points around the basin at 0.8 * R, 1.2 * R, and 1.8 * R.
+      let touchesCoast = false;
+      const testRadius = baseRadius * 1.8;
+      for (let a = 0; a < 12; a++) {
+        const rad = (a / 12) * Math.PI * 2;
+        const tx = basin.x + Math.cos(rad) * testRadius;
+        const ty = basin.y + Math.sin(rad) * testRadius;
+        if (tx < 10 || tx > mapWidth - 10 || ty < 10 || ty > mapHeight - 10) {
+          touchesCoast = true;
+          break;
+        }
+        const samp = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, tx, ty);
+        if (samp <= seaLevel + 1.8) {
+          touchesCoast = true;
+          break;
+        }
+      }
+      if (touchesCoast) continue;
+
+      // Minimum spacing between lakes to prevent awkward clustering
+      const minLakeDist = Math.max(25, baseRadius * 3.2);
       const tooClose = lakes.some((lake) => {
         const [lx, ly] = lake.polygon[0];
-        return Math.hypot(basin.x - lx, basin.y - ly) < minLakeDistance;
+        return Math.hypot(basin.x - lx, basin.y - ly) < minLakeDist;
       });
+      if (tooClose) continue;
 
-      if (!tooClose) {
-        const baseRadius = (mapWidth * 0.012) * (1.2 + rng.next() * 1.4);
-        const lakeId = `lake_${lakes.length + 1}_${Math.floor(rng.next() * 10000)}`;
-        const name = FANTASY_LAKE_NAMES[lakes.length % FANTASY_LAKE_NAMES.length];
-        const polygon = createOrganicLake(basin.x, basin.y, baseRadius, seed + lakes.length * 101);
+      const lakeId = `lake_${lakes.length + 1}_${Math.floor(rng.next() * 10000)}`;
+      const name = FANTASY_LAKE_NAMES[lakes.length % FANTASY_LAKE_NAMES.length];
+      const polygon = createOrganicLake(basin.x, basin.y, baseRadius, seed + lakes.length * 101);
 
-        lakes.push({
-          id: lakeId,
-          name,
-          polygon,
-        });
-      }
+      // Verify every vertex of polygon is strictly inland
+      const allLand = polygon.every(([px, py]) => {
+        const e = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, px, py);
+        return e > seaLevel + 1.0;
+      });
+      if (!allLand) continue;
+
+      lakes.push({
+        id: lakeId,
+        name,
+        polygon,
+        elevation: basin.elev,
+        depth: Math.round(basin.depth * 80 + 30),
+      });
     }
   }
 
   // ==========================================
-  // 2. Procedural River Generation (Downhill Flow)
+  // 2. Procedural River Generation & Lake Connections
   // ==========================================
   if (enableRivers && targetRiverCount > 0) {
-    const candidateSources: { x: number; y: number; elevation: number }[] = [];
+    const stepSize = Math.max(3.0, (mapWidth / cols) * 1.8);
+    const maxSteps = 400;
 
-    // Lakes as high-priority river outflows
-    for (const lake of lakes) {
-      // Find lowest elevation point along the lake shore as outflow source
-      let lowestP = lake.polygon[0];
+    // A. Lake-to-Lake and Lake-to-Sea Drainage Connections (Outflows)
+    // Sort lakes by elevation descending (highest lakes first)
+    const sortedLakes = [...lakes].sort((a, b) => (b.elevation || 0) - (a.elevation || 0));
+
+    for (const sourceLake of sortedLakes) {
+      if (rivers.length >= targetRiverCount) break;
+
+      // Find lowest shoreline point on this lake as the natural outflow spillway
+      let lowestP = sourceLake.polygon[0];
       let lowestE = Infinity;
-      for (const p of lake.polygon) {
+      for (const p of sourceLake.polygon) {
         const e = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, p[0], p[1]);
         if (e < lowestE) {
           lowestE = e;
           lowestP = p;
         }
       }
-      candidateSources.push({ x: lowestP[0], y: lowestP[1], elevation: lowestE });
+
+      // Trace downhill from this lake outlet
+      const outflowRiver = traceDownhillPath({
+        startX: lowestP[0],
+        startY: lowestP[1],
+        sourceType: 'lake',
+        sourceLakeId: sourceLake.id,
+        elevationGrid,
+        cols,
+        rows,
+        mapWidth,
+        mapHeight,
+        seaLevel,
+        stepSize,
+        maxSteps,
+        lakes,
+        existingRivers: rivers,
+        meanderNoise,
+        rng,
+        kmPerUnit,
+      });
+
+      if (outflowRiver) {
+        rivers.push(outflowRiver);
+      }
     }
 
-    // Mountain and highland springs
-    const stepC = Math.max(3, Math.floor(cols / 60));
-    const stepR = Math.max(3, Math.floor(rows / 30));
+    // B. Mountain Springs and Highland Sources
+    const candidateSources: { x: number; y: number; elevation: number }[] = [];
+    const stepC = Math.max(3, Math.floor(cols / 55));
+    const stepR = Math.max(3, Math.floor(rows / 28));
+
     for (let r = stepR * 2; r < rows - stepR * 2; r += stepR) {
       const wy = (r / (rows - 1)) * mapHeight;
       for (let c = stepC * 2; c < cols - stepC * 2; c += stepC) {
         const wx = (c / (cols - 1)) * mapWidth;
         const elev = elevationGrid[r * cols + c];
 
-        // Highlands & mountain ridges (elevation 48 ~ 85)
-        if (elev >= seaLevel + 14.0 && elev <= 88.0) {
+        // Highlands & mountain ridges (elevation seaLevel + 12 ~ 88)
+        if (elev >= seaLevel + 12.0 && elev <= 88.0) {
           candidateSources.push({ x: wx, y: wy, elevation: elev });
         }
       }
     }
 
-    // Shuffle and pick well-distributed sources
+    // Shuffle mountain sources
     for (let i = candidateSources.length - 1; i > 0; i--) {
       const j = Math.floor(rng.next() * (i + 1));
       const temp = candidateSources[i];
@@ -388,143 +491,251 @@ export function generateRiversAndLakes(
       candidateSources[j] = temp;
     }
 
-    const minSourceDist = Math.min(mapWidth, mapHeight) * 0.08;
-    const usedSources: [number, number][] = [];
-
-    const stepSize = Math.max(4.0, (mapWidth / cols) * 2.2);
-    const maxSteps = 450;
+    const minSourceDist = Math.min(mapWidth, mapHeight) * 0.07;
 
     for (const src of candidateSources) {
       if (rivers.length >= targetRiverCount) break;
 
-      const isTooClose = usedSources.some(([ux, uy]) => Math.hypot(src.x - ux, src.y - uy) < minSourceDist);
+      const isTooClose = rivers.some((r) => {
+        const sp = r.points[0];
+        return Math.hypot(src.x - sp[0], src.y - sp[1]) < minSourceDist;
+      });
       if (isTooClose) continue;
 
-      let curX = src.x;
-      let curY = src.y;
-      const rawPoints: [number, number][] = [[curX, curY]];
-      let prevDirX = 0;
-      let prevDirY = 0;
-      let reachedWater = false;
-      let connectedRiverId: string | null = null;
+      const mountainRiver = traceDownhillPath({
+        startX: src.x,
+        startY: src.y,
+        sourceType: 'spring',
+        elevationGrid,
+        cols,
+        rows,
+        mapWidth,
+        mapHeight,
+        seaLevel,
+        stepSize,
+        maxSteps,
+        lakes,
+        existingRivers: rivers,
+        meanderNoise,
+        rng,
+        kmPerUnit,
+      });
 
-      for (let step = 0; step < maxSteps; step++) {
-        const elev = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, curX, curY);
-
-        // Reached ocean!
-        if (elev <= seaLevel) {
-          // Push 1-2 points slightly into the ocean for river mouth estuary
-          if (prevDirX !== 0 || prevDirY !== 0) {
-            rawPoints.push([curX + prevDirX * stepSize * 0.6, curY + prevDirY * stepSize * 0.6]);
-          }
-          reachedWater = true;
-          break;
-        }
-
-        // Reached a lake!
-        const hitLake = lakes.find((l) => pointInLake(curX, curY, l.polygon));
-        if (hitLake && step > 5) {
-          reachedWater = true;
-          break;
-        }
-
-        // Check if merged into an existing river (tributary)
-        let merged = false;
-        if (step > 8) {
-          for (const otherRiver of rivers) {
-            for (let pi = 0; pi < otherRiver.points.length; pi++) {
-              const op = otherRiver.points[pi];
-              const dist = Math.hypot(curX - op[0], curY - op[1]);
-              if (dist < stepSize * 1.5) {
-                rawPoints.push([op[0], op[1]]);
-                connectedRiverId = otherRiver.id;
-                merged = true;
-                break;
-              }
-            }
-            if (merged) break;
-          }
-        }
-        if (merged) {
-          reachedWater = true;
-          break;
-        }
-
-        // Compute downhill gradient
-        const grad = sampleGradient(elevationGrid, cols, rows, mapWidth, mapHeight, curX, curY);
-        let dirX = -grad.gx;
-        let dirY = -grad.gy;
-        const gradLen = Math.hypot(dirX, dirY);
-
-        if (gradLen > 1e-5) {
-          dirX /= gradLen;
-          dirY /= gradLen;
-        } else if (prevDirX !== 0 || prevDirY !== 0) {
-          dirX = prevDirX;
-          dirY = prevDirY;
-        } else {
-          dirX = (rng.next() - 0.5) * 2;
-          dirY = (rng.next() - 0.5) * 2;
-          const dlen = Math.hypot(dirX, dirY) || 1;
-          dirX /= dlen;
-          dirY /= dlen;
-        }
-
-        // Natural meandering: subtle low-frequency organic curvature
-        const meanderScale = 0.0035;
-        const meanderAngle = meanderNoise.sample(curX * meanderScale, curY * meanderScale) * 0.75;
-        const cosM = Math.cos(meanderAngle);
-        const sinM = Math.sin(meanderAngle);
-        const rotDirX = dirX * cosM - dirY * sinM;
-        const rotDirY = dirX * sinM + dirY * cosM;
-
-        // Smooth with previous direction for momentum (inertia)
-        const inertia = 0.65;
-        const nextDirX = prevDirX === 0 ? rotDirX : prevDirX * inertia + rotDirX * (1 - inertia);
-        const nextDirY = prevDirY === 0 ? rotDirY : prevDirY * inertia + rotDirY * (1 - inertia);
-        const nextLen = Math.hypot(nextDirX, nextDirY) || 1;
-        const finalDirX = nextDirX / nextLen;
-        const finalDirY = nextDirY / nextLen;
-
-        prevDirX = finalDirX;
-        prevDirY = finalDirY;
-
-        curX += finalDirX * stepSize;
-        curY += finalDirY * stepSize;
-
-        // Boundary safety
-        if (curX <= 5 || curX >= mapWidth - 5 || curY <= 5 || curY >= mapHeight - 5) {
-          reachedWater = true;
-          break;
-        }
-
-        rawPoints.push([curX, curY]);
-      }
-
-      // Keep substantial rivers (at least 7 points and reached water or traveled good distance)
-      if (rawPoints.length >= 7 && (reachedWater || rawPoints.length > 25)) {
-        usedSources.push([src.x, src.y]);
-        const smoothed = smoothRiverPath(rawPoints, 2);
-
-        // River width scales from source to river mouth
-        const riverLen = smoothed.length;
-        const isTributary = !!connectedRiverId;
-        const widthStart = isTributary ? 2.0 : 2.5 + rng.next() * 1.5;
-        const widthEnd = isTributary ? 5.5 + rng.next() * 3.0 : Math.min(18.0, 7.0 + (riverLen / 40) * 4.0);
-
-        const riverId = `river_${rivers.length + 1}_${Math.floor(rng.next() * 10000)}`;
-        const name = FANTASY_RIVER_NAMES[rivers.length % FANTASY_RIVER_NAMES.length];
-
-        rivers.push({
-          id: riverId,
-          name,
-          points: smoothed,
-          widthStart,
-          widthEnd,
-        });
+      if (mountainRiver) {
+        rivers.push(mountainRiver);
       }
     }
   }
 
   return { rivers, lakes };
+}
+
+interface TraceOptions {
+  startX: number;
+  startY: number;
+  sourceType: 'spring' | 'lake';
+  sourceLakeId?: string;
+  elevationGrid: Float32Array;
+  cols: number;
+  rows: number;
+  mapWidth: number;
+  mapHeight: number;
+  seaLevel: number;
+  stepSize: number;
+  maxSteps: number;
+  lakes: LakeData[];
+  existingRivers: RiverData[];
+  meanderNoise: Noise2D;
+  rng: Mulberry32;
+  kmPerUnit: number;
+}
+
+/**
+ * Traces a downhill hydrological river path following elevation gradients.
+ * Detects confluence with other lakes, oceans, or parent rivers.
+ */
+function traceDownhillPath(opt: TraceOptions): RiverData | null {
+  const {
+    startX,
+    startY,
+    sourceType,
+    sourceLakeId,
+    elevationGrid,
+    cols,
+    rows,
+    mapWidth,
+    mapHeight,
+    seaLevel,
+    stepSize,
+    maxSteps,
+    lakes,
+    existingRivers,
+    meanderNoise,
+    rng,
+    kmPerUnit,
+  } = opt;
+
+  let curX = startX;
+  let curY = startY;
+  const rawPoints: [number, number][] = [[curX, curY]];
+  let prevDirX = 0;
+  let prevDirY = 0;
+
+  let terminatesAt: 'ocean' | 'lake' | 'river' | 'inland' = 'inland';
+  let targetLakeId: string | undefined = undefined;
+  let connectedRiverId: string | undefined = undefined;
+  let reachedWater = false;
+
+  for (let step = 0; step < maxSteps; step++) {
+    const elev = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, curX, curY);
+
+    // 1. Reached Ocean! Seamless Estuary Intersection
+    if (elev <= seaLevel) {
+      if (rawPoints.length >= 2) {
+        const prevP = rawPoints[rawPoints.length - 2];
+        const prevE = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, prevP[0], prevP[1]);
+        // Linear interpolation to find precise coastline crossing point
+        const tCross = prevE > seaLevel && elev !== prevE ? (prevE - seaLevel) / (prevE - elev) : 0.5;
+        const coastX = prevP[0] + (curX - prevP[0]) * Math.max(0, Math.min(1, tCross));
+        const coastY = prevP[1] + (curY - prevP[1]) * Math.max(0, Math.min(1, tCross));
+        // Push exact coastline crossing plus subtle 0.3-step estuary point
+        rawPoints[rawPoints.length - 1] = [coastX, coastY];
+        if (prevDirX !== 0 || prevDirY !== 0) {
+          rawPoints.push([coastX + prevDirX * stepSize * 0.3, coastY + prevDirY * stepSize * 0.3]);
+        }
+      }
+      terminatesAt = 'ocean';
+      reachedWater = true;
+      break;
+    }
+
+    // 2. Reached a Lake (other than source lake) -> Natural lake connection!
+    if (step > 4) {
+      const hitLake = lakes.find((l) => l.id !== sourceLakeId && pointInLake(curX, curY, l.polygon));
+      if (hitLake) {
+        targetLakeId = hitLake.id;
+        terminatesAt = 'lake';
+        reachedWater = true;
+        break;
+      }
+    }
+
+    // 3. Merged into an existing river (tributary confluence)
+    let merged = false;
+    if (step > 6) {
+      for (const otherRiver of existingRivers) {
+        for (let pi = 0; pi < otherRiver.points.length; pi++) {
+          const op = otherRiver.points[pi];
+          const dist = Math.hypot(curX - op[0], curY - op[1]);
+          if (dist < stepSize * 1.4) {
+            rawPoints.push([op[0], op[1]]);
+            connectedRiverId = otherRiver.id;
+            terminatesAt = 'river';
+            merged = true;
+            break;
+          }
+        }
+        if (merged) break;
+      }
+    }
+    if (merged) {
+      reachedWater = true;
+      break;
+    }
+
+    // Downhill elevation gradient
+    const grad = sampleGradient(elevationGrid, cols, rows, mapWidth, mapHeight, curX, curY);
+    let dirX = -grad.gx;
+    let dirY = -grad.gy;
+    const gradLen = Math.hypot(dirX, dirY);
+
+    if (gradLen > 1e-5) {
+      dirX /= gradLen;
+      dirY /= gradLen;
+    } else if (prevDirX !== 0 || prevDirY !== 0) {
+      dirX = prevDirX;
+      dirY = prevDirY;
+    } else {
+      dirX = (rng.next() - 0.5) * 2;
+      dirY = (rng.next() - 0.5) * 2;
+      const dlen = Math.hypot(dirX, dirY) || 1;
+      dirX /= dlen;
+      dirY /= dlen;
+    }
+
+    // Natural meandering: subtle low-frequency organic curvature
+    const meanderScale = 0.0035;
+    const meanderAngle = meanderNoise.sample(curX * meanderScale, curY * meanderScale) * 0.7;
+    const cosM = Math.cos(meanderAngle);
+    const sinM = Math.sin(meanderAngle);
+    const rotDirX = dirX * cosM - dirY * sinM;
+    const rotDirY = dirX * sinM + dirY * cosM;
+
+    // Momentum / inertia
+    const inertia = 0.68;
+    const nextDirX = prevDirX === 0 ? rotDirX : prevDirX * inertia + rotDirX * (1 - inertia);
+    const nextDirY = prevDirY === 0 ? rotDirY : prevDirY * inertia + rotDirY * (1 - inertia);
+    const nextLen = Math.hypot(nextDirX, nextDirY) || 1;
+    const finalDirX = nextDirX / nextLen;
+    const finalDirY = nextDirY / nextLen;
+
+    prevDirX = finalDirX;
+    prevDirY = finalDirY;
+
+    curX += finalDirX * stepSize;
+    curY += finalDirY * stepSize;
+
+    // Map boundary safety
+    if (curX <= 6 || curX >= mapWidth - 6 || curY <= 6 || curY >= mapHeight - 6) {
+      reachedWater = true;
+      terminatesAt = 'ocean';
+      break;
+    }
+
+    rawPoints.push([curX, curY]);
+  }
+
+  // Filter out tiny stagnant stubs
+  if (rawPoints.length < 6 || (!reachedWater && rawPoints.length < 24)) {
+    return null;
+  }
+
+  const smoothed = smoothRiverPath(rawPoints, 2);
+
+  // Calibrate river widths based on scale and hierarchy:
+  // On world map: widthStart ~0.8 to 1.3, widthEnd ~2.2 to 4.5
+  // On regional map: widthStart ~1.2 to 1.8, widthEnd ~3.5 to 6.5
+  const isScaleGlobal = kmPerUnit >= 3.0;
+  const isTributary = terminatesAt === 'river';
+
+  let widthStart: number;
+  let widthEnd: number;
+
+  if (isScaleGlobal) {
+    widthStart = isTributary ? 0.75 : sourceType === 'lake' ? 1.4 : 0.9 + rng.next() * 0.4;
+    widthEnd = isTributary
+      ? 1.6 + rng.next() * 0.6
+      : Math.min(4.5, 2.2 + (smoothed.length / 50) * 1.5);
+  } else {
+    widthStart = isTributary ? 1.2 : sourceType === 'lake' ? 2.2 : 1.4 + rng.next() * 0.6;
+    widthEnd = isTributary
+      ? 2.8 + rng.next() * 1.2
+      : Math.min(6.5, 3.5 + (smoothed.length / 40) * 1.8);
+  }
+
+  const riverId = `river_${Date.now()}_${Math.floor(rng.next() * 100000)}`;
+  const name = FANTASY_RIVER_NAMES[Math.floor(rng.next() * FANTASY_RIVER_NAMES.length)];
+
+  return {
+    id: riverId,
+    name,
+    points: smoothed,
+    widthStart,
+    widthEnd,
+    sourceType,
+    sourceLakeId,
+    terminatesAt,
+    targetLakeId,
+    connectedRiverId,
+  };
 }

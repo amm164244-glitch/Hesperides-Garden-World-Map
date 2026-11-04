@@ -175,21 +175,20 @@ export function generateRegionalMap(
   const formattedW = formatDistance(widthKm);
   const defaultName = name || (isTown ? `町マップ (${formattedW})` : `地域マップ (${zoomScale}x: ${formattedW})`);
 
-  const { rivers, lakes } = isTown
-    ? { rivers: [], lakes: [] }
-    : generateRiversAndLakes(
-        elevationGrid,
-        gridCols,
-        gridRows,
-        regionW,
-        regionH,
-        parent.seaLevel,
-        seed,
-        {
-          riverCount: Math.max(2, Math.round(6 / (zoomScale === 16 ? 2 : 1))),
-          lakeCount: Math.max(1, Math.round(3 / (zoomScale === 16 ? 2 : 1))),
-        }
-      );
+  const { rivers, lakes } = generateRiversAndLakes(
+    elevationGrid,
+    gridCols,
+    gridRows,
+    regionW,
+    regionH,
+    parent.seaLevel,
+    seed,
+    {
+      riverCount: isTown ? 1 : Math.max(2, Math.round(6 / (zoomScale === 16 ? 2 : 1))),
+      lakeCount: isTown ? 1 : Math.max(1, Math.round(3 / (zoomScale === 16 ? 2 : 1))),
+      worldWidthKm: widthKm,
+    }
+  );
 
   return {
     id: regionId,

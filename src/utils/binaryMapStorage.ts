@@ -779,6 +779,8 @@ export async function deserializeMapDataFromFwm(
       outline: Array.isArray(regMeta.outline) ? regMeta.outline : undefined,
       townObjects: sanitizeTownObjects(regMeta.townObjects),
       townStyle: sanitizeTownStyle(regMeta.townStyle, regMeta.kind),
+      rivers: Array.isArray(regMeta.rivers) ? regMeta.rivers : undefined,
+      lakes: Array.isArray(regMeta.lakes) ? regMeta.lakes : undefined,
     };
   }
 
@@ -862,6 +864,8 @@ export async function deserializeMapDataFromFwm(
     biomeGrid: worldBiomeGrid,
     biomeTypes,
     symbols: Array.isArray(header.symbols) ? header.symbols : [],
+    rivers: Array.isArray(header.rivers) ? header.rivers : undefined,
+    lakes: Array.isArray(header.lakes) ? header.lakes : undefined,
     plates: header.plates,
     cells: Array.isArray(header.cells) ? header.cells : [],
     coastlines: header.coastlines,

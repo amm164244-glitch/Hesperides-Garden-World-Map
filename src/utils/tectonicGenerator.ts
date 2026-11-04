@@ -526,6 +526,7 @@ export function generateTectonicWorld(
       lakeCount: config.lakeCount ?? 6,
       enableRivers: config.enableRivers ?? true,
       enableLakes: config.enableLakes ?? true,
+      worldWidthKm: config.worldWidthKm || 40000,
     }
   );
 

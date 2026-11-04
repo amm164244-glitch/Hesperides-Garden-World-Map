@@ -1,7 +1,7 @@
 /**
  * Cartographic Water Renderer (Rivers & Lakes)
  * Renders variable-width rivers with natural bank outlines, organic lake shorelines,
- * antique fantasy water fill, and interactive selection handles.
+ * seamless lake-to-lake and ocean connections, antique fantasy water fills, and interactive vector handles.
  */
 
 import { RiverData, LakeData } from '../types/water';
@@ -18,8 +18,8 @@ export interface DrawWaterOptions {
 
 export const WATER_STYLE = {
   // Rich antique fantasy teal matching planetary shallows
-  waterFill: '#2d636e',
-  waterShallow: '#68b5b5',
+  waterFill: '#2a5b67',
+  waterShallow: '#6db8b8',
   // Dark drawing ink border
   ink: '#192422',
   selectedGlow: '#f59e0b',
@@ -28,12 +28,13 @@ export const WATER_STYLE = {
 };
 
 /**
- * Computes normal offsets for variable-width polyline.
+ * Computes normal offsets for variable-width polyline with estuary flare support.
  */
 function computeVariableWidthPolyline(
   points: [number, number][],
   widthStart: number,
-  widthEnd: number
+  widthEnd: number,
+  isEstuary: boolean = false
 ): { left: [number, number][]; right: [number, number][] } {
   const n = points.length;
   if (n < 2) return { left: points, right: points };
@@ -43,7 +44,13 @@ function computeVariableWidthPolyline(
 
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
-    const halfW = (widthStart + (widthEnd - widthStart) * t) * 0.5;
+    let halfW = (widthStart + (widthEnd - widthStart) * t) * 0.5;
+
+    // Gracefully flare estuary at river mouth
+    if (isEstuary && i >= n - 3) {
+      const mouthT = (i - (n - 3)) / 2; // 0 to 1
+      halfW *= 1.0 + mouthT * 0.35;
+    }
 
     let dx = 0;
     let dy = 0;
@@ -71,8 +78,46 @@ function computeVariableWidthPolyline(
   return { left, right };
 }
 
+interface LakeRiverJunction {
+  pt: [number, number];
+  width: number;
+}
+
 /**
- * Renders all rivers and lakes onto a 2D canvas context.
+ * Finds all river junctions (inflow and outflow) connected to a lake.
+ */
+function getLakeJunctions(lake: LakeData, rivers: RiverData[]): LakeRiverJunction[] {
+  const junctions: LakeRiverJunction[] = [];
+
+  for (const r of rivers) {
+    if (!r.points || r.points.length < 2) continue;
+
+    // Check outflow (river starts at or near this lake)
+    const isOutflow = r.sourceLakeId === lake.id || pointInLake(r.points[0][0], r.points[0][1], lake.polygon);
+    if (isOutflow) {
+      junctions.push({
+        pt: r.points[0],
+        width: r.widthStart || 2.0,
+      });
+      continue;
+    }
+
+    // Check inflow (river ends at or near this lake)
+    const lastP = r.points[r.points.length - 1];
+    const isInflow = r.targetLakeId === lake.id || pointInLake(lastP[0], lastP[1], lake.polygon);
+    if (isInflow) {
+      junctions.push({
+        pt: lastP,
+        width: r.widthEnd || 4.0,
+      });
+    }
+  }
+
+  return junctions;
+}
+
+/**
+ * Renders all rivers and lakes onto a 2D canvas context with seamless connections.
  */
 export function drawWaterBodies(
   ctx: CanvasRenderingContext2D,
@@ -80,111 +125,42 @@ export function drawWaterBodies(
   lakes: LakeData[] = [],
   options: DrawWaterOptions
 ): void {
-  const zoom = options.zoom || 1;
-  const zoomPx = zoom * (options.dpr || 1);
+  const zoomPx = options.zoom || 1;
   const selectedId = options.selectedId;
   const hoveredId = options.hoveredId;
 
   ctx.save();
 
   // ==========================================
-  // 1. Draw Lakes
+  // 1. Water Body Fills (Seamless shared water surface)
   // ==========================================
+
+  // A. Lakes Fill
   for (const lake of lakes) {
     const poly = lake.polygon;
     if (!poly || poly.length < 3) continue;
 
-    const isSelected = selectedId === lake.id;
-    const isHovered = hoveredId === lake.id;
-
-    // Lake body fill
     ctx.beginPath();
     ctx.moveTo(poly[0][0], poly[0][1]);
     for (let i = 1; i < poly.length; i++) {
       ctx.lineTo(poly[i][0], poly[i][1]);
     }
     ctx.closePath();
-
     ctx.fillStyle = lake.color || WATER_STYLE.waterFill;
     ctx.fill();
-
-    // Subtle inner shallows glow / ripple contour
-    ctx.strokeStyle = WATER_STYLE.waterShallow;
-    ctx.lineWidth = 2.0 / zoomPx;
-    ctx.globalAlpha = 0.35;
-    ctx.stroke();
-    ctx.globalAlpha = 1.0;
-
-    // Crisp ink shoreline
-    ctx.strokeStyle = lake.borderColor || WATER_STYLE.ink;
-    ctx.lineWidth = 1.6 / zoomPx;
-    ctx.stroke();
-
-    // Selection highlight
-    if (isSelected || isHovered) {
-      ctx.save();
-      ctx.strokeStyle = isSelected ? WATER_STYLE.selectedGlow : WATER_STYLE.hoverGlow;
-      ctx.lineWidth = (isSelected ? 2.8 : 2.0) / zoomPx;
-      ctx.setLineDash([4 / zoomPx, 3 / zoomPx]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-
-      // Vertex handles if selected
-      if (isSelected) {
-        for (let i = 0; i < poly.length; i++) {
-          const pt = poly[i];
-          const isAct = options.selectedVertexIndex === i;
-          ctx.beginPath();
-          ctx.arc(pt[0], pt[1], (isAct ? 6 : 4) / zoomPx, 0, Math.PI * 2);
-          ctx.fillStyle = isAct ? '#ec4899' : WATER_STYLE.vertexHandle;
-          ctx.fill();
-          ctx.strokeStyle = '#18181b';
-          ctx.lineWidth = 1.2 / zoomPx;
-          ctx.stroke();
-        }
-      }
-    }
-
-    // Lake label
-    if (options.showLabels && lake.name) {
-      let cx = 0;
-      let cy = 0;
-      for (const p of poly) {
-        cx += p[0];
-        cy += p[1];
-      }
-      cx /= poly.length;
-      cy /= poly.length;
-
-      ctx.save();
-      ctx.font = `italic bold ${Math.max(10, 11 / zoom)}px "Palatino Linotype", "Book Antiqua", serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#fef3c7';
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-      ctx.shadowBlur = 4 / zoom;
-      ctx.fillText(lake.name, cx, cy);
-      ctx.restore();
-    }
   }
 
-  // ==========================================
-  // 2. Draw Rivers
-  // ==========================================
+  // B. Rivers Fill
   for (const river of rivers) {
     const pts = river.points;
     if (!pts || pts.length < 2) continue;
 
-    const isSelected = selectedId === river.id;
-    const isHovered = hoveredId === river.id;
+    const wStart = river.widthStart ?? 1.5;
+    const wEnd = river.widthEnd ?? 4.5;
+    const isEstuary = river.terminatesAt === 'ocean';
 
-    const wStart = river.widthStart ?? 2.5;
-    const wEnd = river.widthEnd ?? 8.0;
+    const { left, right } = computeVariableWidthPolyline(pts, wStart, wEnd, isEstuary);
 
-    const { left, right } = computeVariableWidthPolyline(pts, wStart, wEnd);
-
-    // Build closed river boundary polygon: left forwards, then right backwards
     ctx.beginPath();
     ctx.moveTo(left[0][0], left[0][1]);
     for (let i = 1; i < left.length; i++) {
@@ -195,17 +171,41 @@ export function drawWaterBodies(
     }
     ctx.closePath();
 
-    // River water fill
     ctx.fillStyle = river.color || WATER_STYLE.waterFill;
     ctx.fill();
 
-    // River banks ink stroke
+    // Spring source cap (only if purely inland spring, not from a lake)
+    if (river.sourceType !== 'lake') {
+      ctx.beginPath();
+      ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = river.color || WATER_STYLE.waterFill;
+      ctx.fill();
+    }
+  }
+
+  // ==========================================
+  // 2. Ink Shorelines and River Banks Strokes
+  // ==========================================
+
+  // A. River Banks
+  for (const river of rivers) {
+    const pts = river.points;
+    if (!pts || pts.length < 2) continue;
+
+    const isSelected = selectedId === river.id;
+    const isHovered = hoveredId === river.id;
+    const wStart = river.widthStart ?? 1.5;
+    const wEnd = river.widthEnd ?? 4.5;
+    const isEstuary = river.terminatesAt === 'ocean';
+
+    const { left, right } = computeVariableWidthPolyline(pts, wStart, wEnd, isEstuary);
+
     ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
-    ctx.lineWidth = 1.2 / zoomPx;
+    ctx.lineWidth = 1.1 / zoomPx;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
-    // Left bank
+    // Left bank stroke
     ctx.beginPath();
     ctx.moveTo(left[0][0], left[0][1]);
     for (let i = 1; i < left.length; i++) {
@@ -213,7 +213,7 @@ export function drawWaterBodies(
     }
     ctx.stroke();
 
-    // Right bank
+    // Right bank stroke
     ctx.beginPath();
     ctx.moveTo(right[0][0], right[0][1]);
     for (let i = 1; i < right.length; i++) {
@@ -221,13 +221,14 @@ export function drawWaterBodies(
     }
     ctx.stroke();
 
-    // Source spring cap
-    ctx.beginPath();
-    ctx.arc(pts[0][0], pts[0][1], (wStart * 0.5), 0, Math.PI * 2);
-    ctx.fillStyle = river.color || WATER_STYLE.waterFill;
-    ctx.fill();
-    ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
-    ctx.stroke();
+    // Mountain Spring source cap stroke (if not lake outlet)
+    if (river.sourceType !== 'lake') {
+      ctx.beginPath();
+      ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+      ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
+      ctx.lineWidth = 1.0 / zoomPx;
+      ctx.stroke();
+    }
 
     // Selection or hover highlight
     if (isSelected || isHovered) {
@@ -238,7 +239,7 @@ export function drawWaterBodies(
         ctx.lineTo(pts[i][0], pts[i][1]);
       }
       ctx.strokeStyle = isSelected ? WATER_STYLE.selectedGlow : WATER_STYLE.hoverGlow;
-      ctx.lineWidth = (isSelected ? 2.5 : 1.8) / zoomPx;
+      ctx.lineWidth = (isSelected ? 2.4 : 1.8) / zoomPx;
       ctx.setLineDash([4 / zoomPx, 3 / zoomPx]);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -253,7 +254,7 @@ export function drawWaterBodies(
           const isAct = options.selectedVertexIndex === i;
 
           ctx.beginPath();
-          ctx.arc(pt[0], pt[1], (isAct ? 6 : isSource || isMouth ? 5 : 3.5) / zoomPx, 0, Math.PI * 2);
+          ctx.arc(pt[0], pt[1], (isAct ? 5.5 : isSource || isMouth ? 4.5 : 3.0) / zoomPx, 0, Math.PI * 2);
           ctx.fillStyle = isAct ? '#ec4899' : isSource ? '#34d399' : isMouth ? '#38bdf8' : WATER_STYLE.vertexHandle;
           ctx.fill();
           ctx.strokeStyle = '#18181b';
@@ -262,26 +263,155 @@ export function drawWaterBodies(
         }
       }
     }
+  }
 
-    // River label along midpoint
-    if (options.showLabels && river.name && pts.length >= 4) {
+  // B. Lake Shorelines (with open gateways at river junctions)
+  for (const lake of lakes) {
+    const poly = lake.polygon;
+    if (!poly || poly.length < 3) continue;
+
+    const isSelected = selectedId === lake.id;
+    const isHovered = hoveredId === lake.id;
+    const junctions = getLakeJunctions(lake, rivers);
+
+    // Subtle inner shallows glow
+    ctx.strokeStyle = WATER_STYLE.waterShallow;
+    ctx.lineWidth = 1.8 / zoomPx;
+    ctx.globalAlpha = 0.28;
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0], poly[i][1]);
+    }
+    ctx.closePath();
+    ctx.stroke();
+    ctx.globalAlpha = 1.0;
+
+    // Crisp ink shoreline:
+    // If there are river junctions, skip stroking across river mouth openings
+    ctx.strokeStyle = lake.borderColor || WATER_STYLE.ink;
+    ctx.lineWidth = 1.4 / zoomPx;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (junctions.length === 0) {
+      ctx.beginPath();
+      ctx.moveTo(poly[0][0], poly[0][1]);
+      for (let i = 1; i < poly.length; i++) {
+        ctx.lineTo(poly[i][0], poly[i][1]);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      // Stroke segments, skipping vertices within junction radius
+      const isNearJunction = (p: [number, number]): boolean => {
+        return junctions.some((j) => Math.hypot(p[0] - j.pt[0], p[1] - j.pt[1]) < Math.max(4.0, j.width * 0.85));
+      };
+
+      ctx.beginPath();
+      let isDrawing = false;
+      const n = poly.length;
+
+      for (let i = 0; i <= n; i++) {
+        const pt = poly[i % n];
+        const nextPt = poly[(i + 1) % n];
+        const mid: [number, number] = [(pt[0] + nextPt[0]) * 0.5, (pt[1] + nextPt[1]) * 0.5];
+
+        if (isNearJunction(mid) || isNearJunction(pt)) {
+          isDrawing = false;
+        } else {
+          if (!isDrawing) {
+            ctx.moveTo(pt[0], pt[1]);
+            isDrawing = true;
+          }
+          ctx.lineTo(nextPt[0], nextPt[1]);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // Selection highlight
+    if (isSelected || isHovered) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(poly[0][0], poly[0][1]);
+      for (let i = 1; i < poly.length; i++) {
+        ctx.lineTo(poly[i][0], poly[i][1]);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = isSelected ? WATER_STYLE.selectedGlow : WATER_STYLE.hoverGlow;
+      ctx.lineWidth = (isSelected ? 2.5 : 1.8) / zoomPx;
+      ctx.setLineDash([4 / zoomPx, 3 / zoomPx]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Vertex handles if selected
+      if (isSelected) {
+        for (let i = 0; i < poly.length; i++) {
+          const pt = poly[i];
+          const isAct = options.selectedVertexIndex === i;
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], (isAct ? 5.5 : 3.5) / zoomPx, 0, Math.PI * 2);
+          ctx.fillStyle = isAct ? '#ec4899' : WATER_STYLE.vertexHandle;
+          ctx.fill();
+          ctx.strokeStyle = '#18181b';
+          ctx.lineWidth = 1.0 / zoomPx;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  // ==========================================
+  // 3. Cartographic Typography Labels
+  // ==========================================
+  if (options.showLabels) {
+    // Lakes Labels
+    for (const lake of lakes) {
+      if (!lake.name || !lake.polygon || lake.polygon.length < 3) continue;
+
+      let cx = 0;
+      let cy = 0;
+      for (const p of lake.polygon) {
+        cx += p[0];
+        cy += p[1];
+      }
+      cx /= lake.polygon.length;
+      cy /= lake.polygon.length;
+
+      ctx.save();
+      ctx.font = `italic 600 ${Math.max(9, Math.min(13, 11 / (zoomPx / (options.dpr || 1))))}px "Palatino Linotype", "Book Antiqua", Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fef3c7';
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+      ctx.shadowBlur = 3 / zoomPx;
+      ctx.fillText(lake.name, cx, cy);
+      ctx.restore();
+    }
+
+    // Rivers Labels
+    for (const river of rivers) {
+      const pts = river.points;
+      if (!river.name || !pts || pts.length < 5) continue;
+
       const midIdx = Math.floor(pts.length / 2);
       const midPt = pts[midIdx];
       const nextPt = pts[Math.min(pts.length - 1, midIdx + 1)];
       const angle = Math.atan2(nextPt[1] - midPt[1], nextPt[0] - midPt[0]);
-      // Normalize angle so text is never upside down
       const normAngle = angle > Math.PI / 2 || angle < -Math.PI / 2 ? angle + Math.PI : angle;
 
       ctx.save();
       ctx.translate(midPt[0], midPt[1]);
       ctx.rotate(normAngle);
-      ctx.font = `italic bold ${Math.max(9, 10 / zoom)}px "Palatino Linotype", "Book Antiqua", serif`;
+      ctx.font = `italic 600 ${Math.max(8.5, Math.min(12, 10 / (zoomPx / (options.dpr || 1))))}px "Palatino Linotype", "Book Antiqua", Georgia, serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
       ctx.fillStyle = '#fef3c7';
       ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
-      ctx.shadowBlur = 4 / zoom;
-      ctx.fillText(river.name, 0, -4 / zoom);
+      ctx.shadowBlur = 3 / zoomPx;
+      ctx.fillText(river.name, 0, -3 / zoomPx);
       ctx.restore();
     }
   }
@@ -320,9 +450,8 @@ export function distanceToRiver(
     const projY = y1 + t * dy;
     const d = Math.hypot(px - projX, py - projY);
 
-    // Factor in variable river width at this segment
     const segFrac = (i + t) / (pts.length - 1);
-    const riverW = (river.widthStart ?? 2.5) + ((river.widthEnd ?? 8.0) - (river.widthStart ?? 2.5)) * segFrac;
+    const riverW = (river.widthStart ?? 1.5) + ((river.widthEnd ?? 4.5) - (river.widthStart ?? 1.5)) * segFrac;
     const effectiveDist = Math.max(0, d - riverW * 0.5);
 
     if (effectiveDist < minDist) {
@@ -381,12 +510,11 @@ export function findWaterAtPoint(
   lakes: LakeData[],
   tolerance: number
 ): { type: 'river' | 'lake'; id: string } | null {
-  // Check lakes first (polygon contains or near edge)
+  // Check lakes first
   for (const lake of lakes) {
     if (pointInLake(px, py, lake.polygon)) {
       return { type: 'lake', id: lake.id };
     }
-    // Check near boundary
     for (const [lx, ly] of lake.polygon) {
       if (Math.hypot(px - lx, py - ly) <= tolerance) {
         return { type: 'lake', id: lake.id };

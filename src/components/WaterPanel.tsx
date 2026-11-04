@@ -181,9 +181,9 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
               </div>
               <input
                 type="range"
-                min={1}
-                max={15}
-                step={0.5}
+                min={0.5}
+                max={6}
+                step={0.25}
                 value={waterSettings.riverWidthStart}
                 onChange={(e) => onChangeWaterSettings({ riverWidthStart: Number(e.target.value) })}
                 className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
@@ -197,9 +197,9 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
               </div>
               <input
                 type="range"
-                min={2}
-                max={35}
-                step={0.5}
+                min={1}
+                max={12}
+                step={0.25}
                 value={waterSettings.riverWidthEnd}
                 onChange={(e) => onChangeWaterSettings({ riverWidthEnd: Number(e.target.value) })}
                 className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
@@ -251,9 +251,9 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
               </div>
               <input
                 type="range"
-                min={10}
-                max={150}
-                step={2}
+                min={5}
+                max={60}
+                step={1}
                 value={waterSettings.lakeRadius}
                 onChange={(e) => onChangeWaterSettings({ lakeRadius: Number(e.target.value) })}
                 className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"

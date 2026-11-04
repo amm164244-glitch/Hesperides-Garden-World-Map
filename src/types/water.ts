@@ -8,10 +8,15 @@ export interface RiverData {
   id: string;
   name?: string;
   points: [number, number][]; // Map space coordinates [x, y]
-  widthStart: number;         // Width in map units at river source / spring (e.g. 2 - 4)
-  widthEnd: number;           // Width in map units at mouth / confluence (e.g. 6 - 16)
+  widthStart: number;         // Width in map units at river source / spring
+  widthEnd: number;           // Width in map units at mouth / confluence
   color?: string;             // Optional custom water fill color
   borderColor?: string;       // Optional custom ink border color
+  sourceType?: 'spring' | 'lake'; // Where the river starts
+  sourceLakeId?: string;          // If started from a lake outlet
+  terminatesAt?: 'ocean' | 'lake' | 'river' | 'inland'; // Where the river ends
+  targetLakeId?: string;          // If empties into a lower lake
+  connectedRiverId?: string;      // If tributary of another river
 }
 
 export interface LakeData {
@@ -21,6 +26,7 @@ export interface LakeData {
   color?: string;              // Optional custom water fill color
   borderColor?: string;       // Optional custom ink border color
   depth?: number;             // Approximate depth in meters or units
+  elevation?: number;         // Average surface elevation
 }
 
 export interface WaterToolSettings {
@@ -34,11 +40,12 @@ export interface WaterToolSettings {
 }
 
 export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
-  riverWidthStart: 2.5,
-  riverWidthEnd: 8.0,
-  lakeRadius: 35,
+  riverWidthStart: 1.5,
+  riverWidthEnd: 4.5,
+  lakeRadius: 18,
   lakeMode: 'drag',
   autoRiverCount: 14,
   autoLakeCount: 6,
   showWater: true,
 };
+

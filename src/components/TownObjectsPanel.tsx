@@ -77,6 +77,8 @@ interface TownObjectsPanelProps {
   seaLevel?: number;
   roofTheme?: TownRoofTheme;
   onChangeRoofTheme?: (theme: TownRoofTheme) => void;
+  rivers?: import('../types/water').RiverData[];
+  lakes?: import('../types/water').LakeData[];
 
   // Town tool editing additions
   activeTool?: BrushMode;
@@ -103,6 +105,8 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
   seaLevel,
   roofTheme = 'terracotta',
   onChangeRoofTheme,
+  rivers,
+  lakes,
   activeTool,
   selectedTownObjectIds = [],
   onSelectTownObjectIds,
@@ -159,7 +163,9 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
             gridRows,
             mapWidth,
             mapHeight,
-            seaLevel
+            seaLevel,
+            rivers,
+            lakes
           )
         : undefined;
 
