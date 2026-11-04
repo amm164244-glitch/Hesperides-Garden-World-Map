@@ -24,6 +24,8 @@ import {
   PaintBucket,
   Eraser,
   Home,
+  EyeOff,
+  Trash2,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
 import { SymbolToolSettings } from '../types/symbols';
@@ -69,10 +71,14 @@ interface ToolbarProps {
   onExitRegion?: () => void;
   regionList?: { id: string; name: string; kind?: 'region' | 'town' }[];
   onSelectRegionMap?: (id: string) => void;
+  onDeleteCurrentRegion?: () => void;
+  onOpenRegionManager?: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   autoRegionSwitch?: boolean;
   onToggleAutoRegionSwitch?: () => void;
+  dimOutsideRegion?: boolean;
+  onToggleDimOutsideRegion?: () => void;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -116,10 +122,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onExitRegion,
   regionList,
   onSelectRegionMap,
+  onDeleteCurrentRegion,
+  onOpenRegionManager,
   isCollapsed,
   onToggleCollapse,
   autoRegionSwitch = true,
   onToggleAutoRegionSwitch,
+  dimOutsideRegion = true,
+  onToggleDimOutsideRegion,
 }) => {
   const tools: { id: BrushMode; label: string; icon: React.ReactNode; desc: string }[] = [
     { id: 'pan', label: '視点移動', icon: <Hand className="w-4 h-4" />, desc: '地図をドラッグして移動 (Spaceキーでも可能)' },
@@ -182,6 +192,49 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               aria-label="階層ズーム自動切替"
             >
               <Layers className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Dim outside region toggle in collapsed mode */}
+          {activeRegionalMap?.outline && activeRegionalMap.outline.length >= 3 && onToggleDimOutsideRegion && (
+            <button
+              type="button"
+              onClick={onToggleDimOutsideRegion}
+              className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition shadow ${
+                dimOutsideRegion
+                  ? 'bg-amber-900/80 text-amber-200 border border-amber-500'
+                  : 'bg-stone-800 hover:bg-stone-700 text-stone-500'
+              }`}
+              title={`地域枠外暗転: ${dimOutsideRegion ? 'ON' : 'OFF'}`}
+              aria-label="地域枠外暗転"
+            >
+              {dimOutsideRegion ? <Eye className="w-4 h-4 text-amber-400" /> : <EyeOff className="w-4 h-4" />}
+            </button>
+          )}
+
+          {/* Open region manager in collapsed mode */}
+          {onOpenRegionManager && (
+            <button
+              type="button"
+              onClick={onOpenRegionManager}
+              className="p-1.5 rounded-lg text-xs flex items-center justify-center transition shadow bg-stone-800 hover:bg-stone-700 text-sky-400 hover:text-sky-300"
+              title="地域・町マップの一覧管理"
+              aria-label="地域マップ一覧管理"
+            >
+              <Layers className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Delete active region in collapsed mode */}
+          {activeRegionalMap && onDeleteCurrentRegion && (
+            <button
+              type="button"
+              onClick={onDeleteCurrentRegion}
+              className="p-1.5 rounded-lg text-xs flex items-center justify-center transition shadow bg-red-950/70 hover:bg-red-900/90 text-red-400 hover:text-red-200 border border-red-800/60"
+              title={`この${activeRegionalMap.kind === 'town' ? '町' : '地域'}マップを削除`}
+              aria-label="地域マップを削除"
+            >
+              <Trash2 className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -282,14 +335,42 @@ export const Toolbar: React.FC<ToolbarProps> = ({
               <span className="font-semibold truncate max-w-[200px]">{activeRegionName}</span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onGoBackOneLevel || onExitRegion}
-            className="px-2.5 py-0.5 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded text-[11px] transition shadow shrink-0 flex items-center gap-1 cursor-pointer"
-            title="1つ上の親マップ階層へ戻る"
-          >
-            <span>1つ上の階層へ戻る</span>
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {activeRegionalMap?.outline && activeRegionalMap.outline.length >= 3 && onToggleDimOutsideRegion && (
+              <button
+                type="button"
+                onClick={onToggleDimOutsideRegion}
+                className={`px-2 py-0.5 rounded text-[11px] transition flex items-center gap-1 border cursor-pointer ${
+                  dimOutsideRegion
+                    ? 'bg-amber-900/90 text-amber-200 border-amber-500 font-semibold shadow-sm'
+                    : 'bg-stone-800 text-stone-400 border-stone-700 hover:text-stone-200'
+                }`}
+                title="地域マップ外（周囲の地形）を暗くマスク表示するかの切り替え"
+              >
+                {dimOutsideRegion ? <Eye className="w-3 h-3 text-amber-400" /> : <EyeOff className="w-3 h-3 text-stone-400" />}
+                <span>{dimOutsideRegion ? '枠外暗転: ON' : '枠外暗転: OFF'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onGoBackOneLevel || onExitRegion}
+              className="px-2.5 py-0.5 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded text-[11px] transition shadow flex items-center gap-1 cursor-pointer"
+              title="1つ上の親マップ階層へ戻る"
+            >
+              <span>1つ上の階層へ戻る</span>
+            </button>
+            {onDeleteCurrentRegion && (
+              <button
+                type="button"
+                onClick={onDeleteCurrentRegion}
+                className="px-2 py-0.5 bg-red-950/70 hover:bg-red-900/90 text-red-300 hover:text-red-100 border border-red-800/80 hover:border-red-600 rounded text-[11px] font-semibold transition shadow flex items-center gap-1 cursor-pointer"
+                title={`この${activeRegionalMap?.kind === 'town' ? '町' : '地域'}マップを削除`}
+              >
+                <Trash2 className="w-3 h-3 text-red-400" />
+                <span>削除</span>
+              </button>
+            )}
+          </div>
         </div>
       ) : regionList && regionList.length > 0 ? (
         <div className="flex items-center justify-between bg-stone-950/70 border border-stone-800 rounded-lg px-2.5 py-1 text-xs">
@@ -297,20 +378,33 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <Layers className="w-3.5 h-3.5 text-stone-400" />
             生成済み地域・町:
           </span>
-          <select
-            onChange={(e) => {
-              if (e.target.value) onSelectRegionMap?.(e.target.value);
-            }}
-            defaultValue=""
-            className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
-          >
-            <option value="" disabled>マップを選択...</option>
-            {regionList.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.kind === 'town' ? `[町] ${r.name}` : r.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1.5">
+            <select
+              onChange={(e) => {
+                if (e.target.value) onSelectRegionMap?.(e.target.value);
+              }}
+              defaultValue=""
+              className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
+            >
+              <option value="" disabled>マップを選択...</option>
+              {regionList.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.kind === 'town' ? `[町] ${r.name}` : r.name}
+                </option>
+              ))}
+            </select>
+            {onOpenRegionManager && (
+              <button
+                type="button"
+                onClick={onOpenRegionManager}
+                className="px-2 py-0.5 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 border border-stone-700 rounded text-[11px] transition flex items-center gap-1 shrink-0 cursor-pointer"
+                title="地域・町マップの一覧管理・削除"
+              >
+                <Layers className="w-3 h-3 text-sky-400" />
+                <span>管理</span>
+              </button>
+            )}
+          </div>
         </div>
       ) : null}
 
@@ -321,20 +415,33 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             <Layers className="w-3 h-3 text-sky-400" />
             配下の地域・町:
           </span>
-          <select
-            onChange={(e) => {
-              if (e.target.value) onSelectRegionMap?.(e.target.value);
-            }}
-            defaultValue=""
-            className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
-          >
-            <option value="" disabled>配下のマップを選択...</option>
-            {regionList.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.kind === 'town' ? `[町] ${r.name}` : r.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-1.5">
+            <select
+              onChange={(e) => {
+                if (e.target.value) onSelectRegionMap?.(e.target.value);
+              }}
+              defaultValue=""
+              className="bg-stone-800 text-stone-200 text-xs border border-stone-700 rounded px-2 py-0.5 focus:outline-none"
+            >
+              <option value="" disabled>配下のマップを選択...</option>
+              {regionList.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.kind === 'town' ? `[町] ${r.name}` : r.name}
+                </option>
+              ))}
+            </select>
+            {onOpenRegionManager && (
+              <button
+                type="button"
+                onClick={onOpenRegionManager}
+                className="px-2 py-0.5 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 border border-stone-700 rounded text-[11px] transition flex items-center gap-1 shrink-0 cursor-pointer"
+                title="地域・町マップの一覧管理・削除"
+              >
+                <Layers className="w-3 h-3 text-sky-400" />
+                <span>管理</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -770,6 +877,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             >
               <Layers className="w-3.5 h-3.5" />
               <span>階層ズーム</span>
+            </button>
+          )}
+
+          {activeRegionalMap?.outline && activeRegionalMap.outline.length >= 3 && onToggleDimOutsideRegion && (
+            <button
+              type="button"
+              onClick={onToggleDimOutsideRegion}
+              className={`px-2 py-1 rounded text-xs flex items-center gap-1 transition-all ${
+                dimOutsideRegion
+                  ? 'bg-amber-900/60 text-amber-300 border border-amber-600/60'
+                  : 'bg-stone-800 text-stone-500'
+              }`}
+              title="地域マップ外の周囲の地形を暗くマスク表示するかの切り替え"
+            >
+              {dimOutsideRegion ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              <span>枠外暗転</span>
             </button>
           )}
         </div>

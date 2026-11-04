@@ -190,6 +190,7 @@ export function generateRegionalMap(
     widthKm,
     symbols: [],
     outline: shapeMask?.polygon ? [...shapeMask.polygon] : undefined,
+    outsideSea: shapeMask ? shapeMask.outsideSea : undefined,
   };
 }
 

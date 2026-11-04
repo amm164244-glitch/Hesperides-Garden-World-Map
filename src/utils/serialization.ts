@@ -235,6 +235,7 @@ export function deserializeMapData(raw: any): MapData {
         symbols: Array.isArray(regRaw.symbols) ? regRaw.symbols : [],
         biomeGrid: regBiome,
         outline: Array.isArray(regRaw.outline) ? regRaw.outline : undefined,
+        outsideSea: typeof regRaw.outsideSea === 'boolean' ? regRaw.outsideSea : undefined,
         townObjects: sanitizeTownObjects(regRaw.townObjects),
       };
     }

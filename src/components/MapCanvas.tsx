@@ -93,6 +93,7 @@ interface MapCanvasProps {
   selectedTownObjectId?: string | null;
   onSelectTownObjectId?: (id: string | null) => void;
   onUpdateTownObjects?: (objects: TownObject[]) => void;
+  dimOutsideRegion?: boolean;
 }
 
 export const MapCanvas: React.FC<MapCanvasProps> = ({
@@ -123,6 +124,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   selectedTownObjectId = null,
   onSelectTownObjectId,
   onUpdateTownObjects,
+  dimOutsideRegion = true,
   biomeSettings,
   onCommitHistory,
   onHoverCell,
@@ -185,7 +187,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     detailScale: 0.15,
   });
   const [snapCoastline, setSnapCoastline] = useState<boolean>(true);
-  const [followCoastline, setFollowCoastline] = useState<boolean>(true);
+  const [followCoastline, setFollowCoastline] = useState<boolean>(false);
   const [isAutoSelectingIsland, setIsAutoSelectingIsland] = useState<boolean>(false);
   const snappedCoastRef = useRef<CoastlineSnapResult | null>(null);
 
@@ -532,6 +534,105 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.globalAlpha = (biomeSettings?.opacity ?? 55) / 100;
       ctx.drawImage(biomeCanvasRef.current, 0, 0, currentWidth, currentHeight);
       ctx.restore();
+    }
+
+    // 0.8. Regional Map Boundary Outline & Outer Context Dimming
+    // When viewing a regional map generated from a shape (especially with "親のまま生成"),
+    // darken the terrain outside the shape polygon and stroke a prominent cartographic boundary.
+    if (activeRegionalMap && activeRegionalMap.outline && activeRegionalMap.outline.length >= 3) {
+      const b = activeRegionalMap.bounds;
+      const bw = b.maxX - b.minX;
+      const bh = b.maxY - b.minY;
+      if (bw > 0 && bh > 0) {
+        const regPoly: [number, number][] = activeRegionalMap.outline.map(([px, py]) => [
+          ((px - b.minX) / bw) * currentWidth,
+          ((py - b.minY) / bh) * currentHeight,
+        ]);
+
+        ctx.save();
+
+        // 1. Darken outer surrounding context (even-odd fill of entire canvas excluding polygon)
+        if (dimOutsideRegion) {
+          ctx.beginPath();
+          ctx.rect(0, 0, currentWidth, currentHeight);
+          ctx.moveTo(regPoly[0][0], regPoly[0][1]);
+          for (let i = 1; i < regPoly.length; i++) {
+            ctx.lineTo(regPoly[i][0], regPoly[i][1]);
+          }
+          ctx.closePath();
+          // Elegant dark parchment tint that dims the outer context while keeping it readable
+          ctx.fillStyle = 'rgba(12, 10, 9, 0.52)';
+          ctx.fill('evenodd');
+
+          // Soft outer shadow/glow around the boundary to give depth
+          ctx.beginPath();
+          ctx.moveTo(regPoly[0][0], regPoly[0][1]);
+          for (let i = 1; i < regPoly.length; i++) {
+            ctx.lineTo(regPoly[i][0], regPoly[i][1]);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+          ctx.lineWidth = 6.0 / viewport.zoom;
+          ctx.setLineDash([]);
+          ctx.stroke();
+        }
+
+        // 2. Crisp, cartographic glowing boundary line along the region edge
+        ctx.beginPath();
+        ctx.moveTo(regPoly[0][0], regPoly[0][1]);
+        for (let i = 1; i < regPoly.length; i++) {
+          ctx.lineTo(regPoly[i][0], regPoly[i][1]);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = '#d97706'; // Rich amber
+        ctx.lineWidth = 2.4 / viewport.zoom;
+        ctx.setLineDash([]);
+        ctx.stroke();
+
+        // Inner dashed highlight line for antique map cartography feel
+        ctx.strokeStyle = '#fef3c7'; // Light ivory/gold
+        ctx.lineWidth = 1.2 / viewport.zoom;
+        ctx.setLineDash([6 / viewport.zoom, 4 / viewport.zoom]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 3. Elegant floating badge tag at top-most point of boundary
+        let topPt = regPoly[0];
+        for (let i = 1; i < regPoly.length; i++) {
+          if (regPoly[i][1] < topPt[1]) {
+            topPt = regPoly[i];
+          }
+        }
+
+        const tagText = `📍 地域範囲: ${activeRegionalMap.name}`;
+        ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+        const textMetrics = ctx.measureText(tagText);
+        const tagPadX = 7 / viewport.zoom;
+        const tagPadY = 3.5 / viewport.zoom;
+        const tagW = textMetrics.width + tagPadX * 2;
+        const tagH = 17 / viewport.zoom;
+        const tagX = Math.max(8, Math.min(currentWidth - tagW - 8, topPt[0] - tagW / 2));
+        const tagY = Math.max(8, topPt[1] - tagH - 5 / viewport.zoom);
+
+        ctx.fillStyle = 'rgba(28, 25, 23, 0.92)';
+        ctx.strokeStyle = '#d97706';
+        ctx.lineWidth = 1.0 / viewport.zoom;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(tagX, tagY, tagW, tagH, 3.5 / viewport.zoom);
+        } else {
+          ctx.rect(tagX, tagY, tagW, tagH);
+        }
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = '#fef3c7';
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'left';
+        ctx.fillText(tagText, tagX + tagPadX, tagY + tagH / 2);
+
+        ctx.restore();
+      }
     }
 
     // 1. Nautical Navigation Rhumb Lines (Loxodromes)
@@ -1070,6 +1171,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     biomeSettings?.showBiome,
     biomeSettings?.opacity,
     currentBiomeGrid,
+    dimOutsideRegion,
   ]);
 
   // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
@@ -1785,7 +1887,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         });
       } else if (selectMethod === 'rect2') {
         setConfirmedShape(null);
-        const clickPt: [number, number] = ((snapCoastline || followCoastline) && snappedCoastRef.current)
+        const clickPt: [number, number] = (followCoastline && snappedCoastRef.current)
           ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
           : [worldPos.x, worldPos.y];
 
@@ -1851,7 +1953,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
       } else if (selectMethod === 'polygon') {
         setConfirmedShape(null);
-        const clickPt: [number, number] = ((snapCoastline || followCoastline) && snappedCoastRef.current)
+        const clickPt: [number, number] = (followCoastline && snappedCoastRef.current)
           ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
           : [worldPos.x, worldPos.y];
 
@@ -1923,9 +2025,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
     const isCoastlineAssisted = (
       brushSettings.mode === 'selectRegion' && (
-        snapCoastline ||
+        isAutoSelectingIsland ||
         ((selectMethod === 'rect2' || selectMethod === 'polygon') && followCoastline) ||
-        isAutoSelectingIsland
+        (selectMethod === 'freehand' && snapCoastline)
       )
     );
 
@@ -2394,8 +2496,24 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         renderCursorOverlay();
       }}
       onDoubleClick={() => {
-        if (brushSettings.mode === 'selectRegion' && (selectMethod === 'polygon' || selectMethod === 'coastline') && polygonPoints.length >= 3) {
-          commitShapeSelection(polygonPoints);
+        if (brushSettings.mode === 'selectRegion' && selectMethod === 'polygon' && polygonPoints.length >= 3) {
+          const p0 = polygonPoints[0];
+          const lastPt = polygonPoints[polygonPoints.length - 1];
+          const closingTrace = followCoastline
+            ? traceCoastlinePath(
+                lastPt,
+                p0,
+                currentElevation,
+                currentCols,
+                currentRows,
+                currentWidth,
+                currentHeight,
+                currentSeaLevel,
+                40 / viewport.zoom
+              )
+            : [];
+          const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;
+          commitShapeSelection(fullLoop);
         }
       }}
       onContextMenu={(e) => e.preventDefault()}
@@ -2419,6 +2537,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             setIsAutoSelectingIsland(false);
             renderOverlay();
           }}
+          followCoastline={followCoastline}
+          onToggleFollowCoastline={(f) => {
+            setFollowCoastline(f);
+            setRect2Start(null);
+            setSelectionBox(null);
+            setPolygonPoints([]);
+            renderOverlay();
+          }}
+          isRect2Active={!!rect2Start}
           snapCoastline={snapCoastline}
           onToggleSnapCoastline={setSnapCoastline}
           isAutoSelectingIsland={isAutoSelectingIsland}
@@ -2444,7 +2571,23 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           polygonPointCount={polygonPoints.length}
           onFinishPolygon={() => {
             if (polygonPoints.length >= 3) {
-              commitShapeSelection(polygonPoints);
+              const p0 = polygonPoints[0];
+              const lastPt = polygonPoints[polygonPoints.length - 1];
+              const closingTrace = followCoastline
+                ? traceCoastlinePath(
+                    lastPt,
+                    p0,
+                    currentElevation,
+                    currentCols,
+                    currentRows,
+                    currentWidth,
+                    currentHeight,
+                    currentSeaLevel,
+                    40 / viewport.zoom
+                  )
+                : [];
+              const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;
+              commitShapeSelection(fullLoop);
             }
           }}
           onCancelPolygon={() => {

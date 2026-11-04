@@ -58,6 +58,7 @@ export interface RegionalMapData {
   symbols?: import('./symbols').MapSymbolInstance[];
   biomeGrid?: Uint8Array;
   outline?: [number, number][]; // 親マップ座標系での境界多角形頂点列
+  outsideSea?: boolean;         // 外側を海にしたか (false の場合は親のまま生成)
   townObjects?: import('./town').TownObject[];
 }
 

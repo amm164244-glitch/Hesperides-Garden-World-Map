@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Compass, Sparkles, Map as MapIcon, Sliders, Globe, Layers } from 'lucide-react';
+import { Compass, Sparkles, Map as MapIcon, Sliders, Globe, Layers, Trash2, AlertTriangle } from 'lucide-react';
 import {
   BrushMode,
   BrushSettings,
@@ -31,6 +31,7 @@ import { InspectorBar } from './components/InspectorBar';
 import { TownObjectsPanel } from './components/TownObjectsPanel';
 import { TownObject } from './types/town';
 import { MapStorageModal } from './components/MapStorageModal';
+import { RegionManagerModal } from './components/RegionManagerModal';
 import { RegionSelector } from './components/RegionSelector';
 import { SymbolPalette } from './components/SymbolPalette';
 import { BiomePalette } from './components/BiomePalette';
@@ -305,6 +306,7 @@ export default function App() {
   const [showRipples, setShowRipples] = useState<boolean>(true);
   const [showCompass, setShowCompass] = useState<boolean>(true);
   const [showBorder, setShowBorder] = useState<boolean>(true);
+  const [dimOutsideRegion, setDimOutsideRegion] = useState<boolean>(true);
   const [compassPos, setCompassPos] = useState<{ x: number; y: number }>({ x: 280, y: 320 });
 
   // Placed Map Symbols display settings and selection
@@ -497,6 +499,8 @@ export default function App() {
     () => typeof window !== 'undefined' && window.innerWidth >= 1024
   );
   const [isStorageOpen, setIsStorageOpen] = useState<boolean>(false);
+  const [isRegionManagerOpen, setIsRegionManagerOpen] = useState<boolean>(false);
+  const [confirmDeleteTargetId, setConfirmDeleteTargetId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [generationProgress, setGenerationProgress] = useState<{ progress: number; message: string }>({
     progress: 0,
@@ -1140,6 +1144,82 @@ export default function App() {
       }));
   }, [activeRegionalMap, mapData.regionalMaps]);
 
+  // Delete a regional map and all its recursive descendants safely
+  const handleDeleteRegion = useCallback(
+    (targetRegionId: string) => {
+      const targetMap = mapData.regionalMaps[targetRegionId];
+      if (!targetMap) return;
+
+      // 1. Collect target and all recursive descendants
+      const toDeleteIds = new Set<string>();
+      const queue: string[] = [targetRegionId];
+      toDeleteIds.add(targetRegionId);
+
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        for (const [id, reg] of Object.entries(mapData.regionalMaps)) {
+          if (reg.parentId === curr && !toDeleteIds.has(id)) {
+            toDeleteIds.add(id);
+            queue.push(id);
+          }
+        }
+      }
+
+      // 2. Safe parent fallback
+      const safeParentId = targetMap.parentId ?? null;
+
+      // 3. If currently viewing target or any deleted descendant, navigate up to safe parent
+      if (activeRegionId && toDeleteIds.has(activeRegionId)) {
+        setActiveRegionId(safeParentId);
+        setSelectedSymbolId(null);
+        setSelectedTownObjectId(null);
+        setUndoStack([]);
+        setRedoStack([]);
+        setTimeout(() => {
+          handleResetView();
+        }, 40);
+      } else {
+        setUndoStack([]);
+        setRedoStack([]);
+      }
+
+      // 4. Update mapData.regionalMaps
+      setMapData((prev) => {
+        const nextRegional = { ...prev.regionalMaps };
+        for (const id of toDeleteIds) {
+          delete nextRegional[id];
+        }
+        return {
+          ...prev,
+          regionalMaps: nextRegional,
+        };
+      });
+
+      // Clear any pending delete target confirmation
+      setConfirmDeleteTargetId(null);
+    },
+    [activeRegionId, mapData.regionalMaps, handleResetView]
+  );
+
+  const confirmDeleteTarget = confirmDeleteTargetId ? mapData.regionalMaps[confirmDeleteTargetId] : null;
+  const confirmDeleteDescendants = useMemo(() => {
+    if (!confirmDeleteTargetId) return [];
+    const list: RegionalMapData[] = [];
+    const queue = [confirmDeleteTargetId];
+    const visited = new Set<string>([confirmDeleteTargetId]);
+    while (queue.length > 0) {
+      const parentId = queue.shift()!;
+      for (const [id, reg] of Object.entries(mapData.regionalMaps)) {
+        if (reg.parentId === parentId && !visited.has(id)) {
+          visited.add(id);
+          list.push(reg);
+          queue.push(id);
+        }
+      }
+    }
+    return list;
+  }, [confirmDeleteTargetId, mapData.regionalMaps]);
+
   return (
     <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-[#08111c] text-stone-100 font-sans">
       {/* Top Header */}
@@ -1164,6 +1244,17 @@ export default function App() {
               ? `地域解像度: ${activeRegionalMap.gridCols}×${activeRegionalMap.gridRows}`
               : `世界解像度: ${mapData.gridCols}×${mapData.gridRows} (${config.worldWidthKm?.toLocaleString()} km)`}
           </span>
+          {Object.keys(mapData.regionalMaps || {}).length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsRegionManagerOpen(true)}
+              className="px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-sky-300 hover:text-sky-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 border border-stone-700 transition shadow-sm cursor-pointer"
+              title="地域・町マップの一覧管理・削除"
+            >
+              <Layers className="w-3.5 h-3.5 text-sky-400" />
+              <span>地域管理 ({Object.keys(mapData.regionalMaps || {}).length})</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setIsStorageOpen(true)}
@@ -1216,6 +1307,7 @@ export default function App() {
           mapBackgroundUrl={mapBackgroundUrl}
           onClearMapBackground={() => setMapBackgroundUrl(null)}
           maxZoom={maxZoom}
+          dimOutsideRegion={dimOutsideRegion}
           onInteractingChange={(interacting) => {
             isInteractingRef.current = interacting;
           }}
@@ -1269,10 +1361,14 @@ export default function App() {
             onExitRegion={handleGoBackOneLevel}
             regionList={regionList}
             onSelectRegionMap={handleNavigateToRegion}
+            onDeleteCurrentRegion={() => activeRegionId && setConfirmDeleteTargetId(activeRegionId)}
+            onOpenRegionManager={() => setIsRegionManagerOpen(true)}
             isCollapsed={isToolbarCollapsed}
             onToggleCollapse={handleToggleCollapse}
             autoRegionSwitch={autoRegionSwitch}
             onToggleAutoRegionSwitch={() => setAutoRegionSwitch((v) => !v)}
+            dimOutsideRegion={dimOutsideRegion}
+            onToggleDimOutsideRegion={() => setDimOutsideRegion((v) => !v)}
           />
         </div>
 
@@ -1513,6 +1609,91 @@ export default function App() {
           handleResetView();
         }}
         onImportSymbols={handleImportSymbols}
+      />
+
+      {/* Quick Delete Confirmation Dialog */}
+      {confirmDeleteTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+        >
+          <div className="bg-stone-900 border border-red-500/50 rounded-2xl p-6 shadow-2xl max-w-md w-full text-stone-200">
+            <div className="flex items-center gap-3 text-red-400 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-red-950/80 border border-red-600/60 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-red-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-stone-100">
+                  地域マップの削除確認
+                </h3>
+                <p className="text-xs text-stone-400">
+                  この操作を実行するとデータは完全に削除され、復元できません。
+                </p>
+              </div>
+            </div>
+
+            <div className="my-4 p-3 bg-stone-950/80 rounded-xl border border-stone-800 text-xs space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-stone-400">削除対象:</span>
+                <span className="font-bold text-stone-100">
+                  {confirmDeleteTarget.kind === 'town' ? `[町] ${confirmDeleteTarget.name}` : confirmDeleteTarget.name}
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-stone-800 text-stone-400">
+                  {confirmDeleteTarget.gridCols}×{confirmDeleteTarget.gridRows}
+                </span>
+              </div>
+
+              {confirmDeleteDescendants.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-stone-800 text-amber-300">
+                  <p className="font-semibold flex items-center gap-1 mb-1">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                    配下のマップ ({confirmDeleteDescendants.length} 件) も同時に削除されます:
+                  </p>
+                  <ul className="pl-4 space-y-0.5 list-disc text-stone-300 max-h-28 overflow-y-auto font-mono text-[11px]">
+                    {confirmDeleteDescendants.map((d) => (
+                      <li key={d.id}>
+                        {d.kind === 'town' ? `[町] ${d.name}` : d.name} ({d.gridCols}×{d.gridRows})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 mt-5">
+              <button
+                type="button"
+                onClick={() => setConfirmDeleteTargetId(null)}
+                className="px-4 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmDeleteTargetId) {
+                    handleDeleteRegion(confirmDeleteTargetId);
+                  }
+                }}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg shadow-red-950/50 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>マップを削除</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Region Manager Modal */}
+      <RegionManagerModal
+        isOpen={isRegionManagerOpen}
+        onClose={() => setIsRegionManagerOpen(false)}
+        regionalMaps={mapData.regionalMaps}
+        activeRegionId={activeRegionId}
+        onSelectRegion={handleNavigateToRegion}
+        onDeleteRegion={handleDeleteRegion}
       />
     </div>
   );

@@ -170,14 +170,21 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
         {method === 'rect2' && (
           <div className="flex items-center gap-2.5 ml-2 border-l border-stone-700/80 pl-2.5 flex-wrap">
             {onToggleFollowCoastline && (
-              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300 bg-stone-950/70 border border-stone-800 hover:border-cyan-700/80 px-2 py-0.5 rounded-md transition">
+              <label
+                className={`flex items-center gap-1.5 cursor-pointer text-[11px] select-none px-2 py-0.5 rounded-md transition border ${
+                  followCoastline
+                    ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500/80 font-bold shadow-sm'
+                    : 'bg-stone-950/70 text-stone-400 border-stone-800 hover:text-stone-200 hover:border-stone-700'
+                }`}
+                title="海岸線沿いオプション: 海岸線に沿って自動追従・抽出します"
+              >
                 <input
                   type="checkbox"
                   checked={followCoastline}
                   onChange={(e) => onToggleFollowCoastline(e.target.checked)}
                   className="rounded accent-cyan-500 cursor-pointer"
                 />
-                <Waves className="w-3.5 h-3.5 text-cyan-400" />
+                <Waves className={`w-3.5 h-3.5 ${followCoastline ? 'text-cyan-400' : 'text-stone-500'}`} />
                 <span className={followCoastline ? 'text-cyan-300 font-bold' : ''}>海岸線沿い</span>
               </label>
             )}
@@ -272,19 +279,26 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
         {method === 'polygon' && (
           <div className="flex items-center gap-2.5 ml-2 border-l border-stone-700/80 pl-2.5 flex-wrap">
             {onToggleFollowCoastline && (
-              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300 bg-stone-950/70 border border-stone-800 hover:border-cyan-700/80 px-2 py-0.5 rounded-md transition">
+              <label
+                className={`flex items-center gap-1.5 cursor-pointer text-[11px] select-none px-2 py-0.5 rounded-md transition border ${
+                  followCoastline
+                    ? 'bg-cyan-950/80 text-cyan-300 border-cyan-500/80 font-bold shadow-sm'
+                    : 'bg-stone-950/70 text-stone-400 border-stone-800 hover:text-stone-200 hover:border-stone-700'
+                }`}
+                title="海岸線沿いオプション: 海岸線に沿って自動追従・抽出します"
+              >
                 <input
                   type="checkbox"
                   checked={followCoastline}
                   onChange={(e) => onToggleFollowCoastline(e.target.checked)}
                   className="rounded accent-cyan-500 cursor-pointer"
                 />
-                <Waves className="w-3.5 h-3.5 text-cyan-400" />
+                <Waves className={`w-3.5 h-3.5 ${followCoastline ? 'text-cyan-400' : 'text-stone-500'}`} />
                 <span className={followCoastline ? 'text-cyan-300 font-bold' : ''}>海岸線沿い</span>
               </label>
             )}
 
-            {onToggleSnapCoastline && (
+            {followCoastline && onToggleSnapCoastline && (
               <label className="flex items-center gap-1.5 cursor-pointer text-[11px] select-none text-stone-300 hover:text-cyan-300">
                 <input
                   type="checkbox"
@@ -297,7 +311,7 @@ export const RegionShapeTools: React.FC<RegionShapeToolsProps> = ({
               </label>
             )}
 
-            {onAutoSelectIsland && (
+            {followCoastline && onAutoSelectIsland && (
               <button
                 type="button"
                 onClick={onAutoSelectIsland}

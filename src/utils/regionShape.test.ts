@@ -185,11 +185,11 @@ test('generateRegionalMap: outsideSea=true lowers elevation outside polygon to <
     'Center of shape should retain identical elevation between outsideSea true and false'
   );
 
-  // Outline should be preserved
-  assert.ok(regionSea.outline && regionSea.outline.length === 3);
+  assert.equal(regionSea.outsideSea, true);
+  assert.equal(regionNoSea.outsideSea, false);
 });
 
-test('serialization: preserves outline field and backward compatibility when outline is missing', () => {
+test('serialization: preserves outline and outsideSea fields and backward compatibility when outline is missing', () => {
   const config: GeneratorConfig = {
     seed: 777,
     gridResolution: '1024x512',
@@ -207,7 +207,7 @@ test('serialization: preserves outline field and backward compatibility when out
   const polygon: [number, number][] = [[100, 100], [300, 100], [200, 300]];
   const regionWithOutline = generateRegionalMap(worldMap, { minX: 50, minY: 50, maxX: 350, maxY: 350 }, 4, '形状地域', {
     polygon,
-    outsideSea: true,
+    outsideSea: false, // 親のまま生成
     featherRatio: 0.03,
   });
 
@@ -216,11 +216,13 @@ test('serialization: preserves outline field and backward compatibility when out
   const serialized = serializeMapData(worldMap);
   assert.ok(Array.isArray(serialized.regionalMaps[regionWithOutline.id].outline));
   assert.equal(serialized.regionalMaps[regionWithOutline.id].outline.length, 3);
+  assert.equal(serialized.regionalMaps[regionWithOutline.id].outsideSea, false);
 
   const restored = deserializeMapData(serialized);
   const restoredRegion = restored.regionalMaps[regionWithOutline.id];
   assert.ok(restoredRegion.outline);
   assert.deepEqual(restoredRegion.outline, polygon);
+  assert.equal(restoredRegion.outsideSea, false);
 
   // Backward compatibility test: raw region without outline
   const legacyRaw = {
