@@ -30,6 +30,10 @@ export interface GeneratorConfig {
   erosionStrength?: number; // 1 - 10 (侵食強度)
   cellCount?: number;
   coastlineComplexity?: number; // 1 - 10 (海岸線の複雑さ・湾曲度、標準: 4)
+  riverCount?: number;          // 0 - 30 (川の自動生成数、標準: 14)
+  lakeCount?: number;           // 0 - 15 (湖の自動生成数、標準: 6)
+  enableRivers?: boolean;       // 川の生成有効/無効
+  enableLakes?: boolean;        // 湖の生成有効/無効
 }
 
 export interface RegionalBounds {
@@ -61,6 +65,8 @@ export interface RegionalMapData {
   outsideSea?: boolean;         // 外側を海にしたか (false の場合は親のまま生成)
   townObjects?: import('./town').TownObject[];
   townStyle?: import('./town').TownStyle;
+  rivers?: import('./water').RiverData[];
+  lakes?: import('./water').LakeData[];
 }
 
 export interface ShapeMaskConfig {
@@ -136,6 +142,10 @@ export interface MapData {
   // Registered custom pixel art symbols and categories saved with the map
   customAssets?: import('./symbols').CustomMapAsset[];
   customCategories?: import('./symbols').CustomSymbolCategory[];
+
+  // Rivers and Lakes (Hydrological vector water network)
+  rivers?: import('./water').RiverData[];
+  lakes?: import('./water').LakeData[];
 }
 
 export interface SupabaseMapRecord {
@@ -162,6 +172,9 @@ export type BrushMode =
   | 'biomeFill'    // 地形タイプバケツ塗りつぶし
   | 'biomeErase'   // 地形タイプ消しゴム
   | 'selectRegion' // 地域範囲選択
+  | 'river'        // 川描画 (水源から河口へ)
+  | 'lake'         // 湖描画 (ドラッグ配置または多角形)
+  | 'waterEdit'    // 川・湖の選択・編集
   | 'townSelect'   // 町部品選択・編集
   | 'townRoad'     // 道描画
   | 'townWall'     // 城壁描画
@@ -208,4 +221,12 @@ export interface HistoryRecord {
     prevObjects: import('./town').TownObject[];
     newObjects: import('./town').TownObject[];
   };
+  waterChanges?: {
+    prevRivers?: import('./water').RiverData[];
+    newRivers?: import('./water').RiverData[];
+    prevLakes?: import('./water').LakeData[];
+    newLakes?: import('./water').LakeData[];
+  };
 }
+
+export * from './water';

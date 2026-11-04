@@ -31,6 +31,8 @@ import {
   Anchor,
   Building2,
   Landmark,
+  Droplets,
+  CircleDot,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
 import { SymbolToolSettings } from '../types/symbols';
@@ -144,6 +146,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     { id: 'biomePaint', label: '地形タイプ塗り', icon: <Paintbrush className="w-4 h-4" />, desc: '地形タイプ（森林・草原・砂漠など）をブラシで塗る' },
     { id: 'biomeFill', label: '地形タイプ塗りつぶし', icon: <PaintBucket className="w-4 h-4" />, desc: '同種の地形タイプ領域を一括塗りつぶし' },
     { id: 'biomeErase', label: '地形タイプ消去', icon: <Eraser className="w-4 h-4" />, desc: '地形タイプの塗りを消去して透明に戻す' },
+    { id: 'river', label: '川描画', icon: <Droplets className="w-4 h-4 text-cyan-400" />, desc: '水源から河口へ川を描画 (クリックで頂点配置、Enterで確定)' },
+    { id: 'lake', label: '湖描画', icon: <CircleDot className="w-4 h-4 text-cyan-400" />, desc: '自然な湖を配置 (ドラッグまたは多角形クリック)' },
+    { id: 'waterEdit', label: '水域編集', icon: <MousePointer className="w-4 h-4 text-cyan-400" />, desc: '川や湖をクリックして選択、頂点をドラッグして変形・削除' },
     { id: 'selectRegion', label: '地域範囲選択', icon: <Layers className="w-4 h-4" />, desc: '範囲をドラッグ選択して4倍/16倍の地域マップを生成' },
     ...(activeRegionalMap?.kind === 'town'
       ? [

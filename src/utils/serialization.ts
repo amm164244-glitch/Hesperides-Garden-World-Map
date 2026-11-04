@@ -255,6 +255,8 @@ export function deserializeMapData(raw: any): MapData {
         outsideSea: typeof regRaw.outsideSea === 'boolean' ? regRaw.outsideSea : undefined,
         townObjects: sanitizeTownObjects(regRaw.townObjects),
         townStyle: sanitizeTownStyle(regRaw.townStyle, regRaw.kind),
+        rivers: Array.isArray(regRaw.rivers) ? regRaw.rivers : undefined,
+        lakes: Array.isArray(regRaw.lakes) ? regRaw.lakes : undefined,
       };
     }
   }
@@ -278,6 +280,8 @@ export function deserializeMapData(raw: any): MapData {
     customAssets: Array.isArray(raw.customAssets) ? raw.customAssets : undefined,
     customCategories: Array.isArray(raw.customCategories) ? raw.customCategories : undefined,
     regionalMaps,
+    rivers: Array.isArray(raw.rivers) ? raw.rivers : undefined,
+    lakes: Array.isArray(raw.lakes) ? raw.lakes : undefined,
     cells: Array.isArray(raw.cells) ? raw.cells : [],
     config: raw.config || {
       seed: raw.seed || 12345,

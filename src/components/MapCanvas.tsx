@@ -91,6 +91,15 @@ import {
   translateObject,
 } from '../utils/town/townEdit';
 import { metersToUnits, polylineLength } from '../utils/town/townGeometry';
+import { RiverData, LakeData, WaterToolSettings, DEFAULT_WATER_TOOL_SETTINGS } from '../types/water';
+import {
+  drawWaterBodies,
+  findWaterAtPoint,
+  findNearestRiverVertex,
+  findNearestLakeVertex,
+} from '../utils/waterRenderer';
+import { createOrganicLake, smoothRiverPath } from '../utils/waterGenerator';
+import { WaterPanel } from './WaterPanel';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -145,6 +154,18 @@ interface MapCanvasProps {
   onToggleAddingGateMode?: (enabled: boolean) => void;
   onUpdateTownObjects?: (objects: TownObject[]) => void;
   dimOutsideRegion?: boolean;
+  rivers?: RiverData[];
+  lakes?: LakeData[];
+  onUpdateRivers?: (rivers: RiverData[]) => void;
+  onUpdateLakes?: (lakes: LakeData[]) => void;
+  selectedWaterId?: string | null;
+  selectedWaterType?: 'river' | 'lake' | null;
+  onSelectWater?: (id: string | null, type: 'river' | 'lake' | null) => void;
+  waterSettings?: WaterToolSettings;
+  onChangeWaterSettings?: (patch: Partial<WaterToolSettings>) => void;
+  onAutoGenerateWater?: (riverCount: number, lakeCount: number) => void;
+  onClearAllWater?: () => void;
+  onUpdateBrush?: (patch: Partial<BrushSettings>) => void;
 }
 
 const BUILDING_KIND_LABELS: Record<string, string> = {
@@ -213,6 +234,18 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onClearMapBackground,
   maxZoom,
   onInteractingChange,
+  rivers,
+  lakes,
+  onUpdateRivers,
+  onUpdateLakes,
+  selectedWaterId = null,
+  selectedWaterType = null,
+  onSelectWater,
+  waterSettings = DEFAULT_WATER_TOOL_SETTINGS,
+  onChangeWaterSettings,
+  onAutoGenerateWater,
+  onClearAllWater,
+  onUpdateBrush,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -393,6 +426,49 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
   const currentTownObjectsRef = useRef<TownObject[]>(townObjects);
   currentTownObjectsRef.current = townObjects;
+
+  // Effective Rivers and Lakes (passed as props or from active map / world map)
+  const effectiveRivers: RiverData[] = useMemo(() => {
+    if (rivers !== undefined) return rivers;
+    if (activeRegionalMap?.rivers !== undefined) return activeRegionalMap.rivers;
+    return mapData.rivers || [];
+  }, [rivers, activeRegionalMap?.rivers, mapData.rivers]);
+
+  const effectiveLakes: LakeData[] = useMemo(() => {
+    if (lakes !== undefined) return lakes;
+    if (activeRegionalMap?.lakes !== undefined) return activeRegionalMap.lakes;
+    return mapData.lakes || [];
+  }, [lakes, activeRegionalMap?.lakes, mapData.lakes]);
+
+  const [drawingRiverPoints, setDrawingRiverPoints] = useState<[number, number][]>([]);
+  const [drawingLakeStart, setDrawingLakeStart] = useState<[number, number] | null>(null);
+  const [drawingLakePolygon, setDrawingLakePolygon] = useState<[number, number][]>([]);
+  const [activeWaterVertexIndex, setActiveWaterVertexIndex] = useState<number | null>(null);
+
+  const waterDragRef = useRef<{
+    type: 'translate' | 'vertex';
+    waterType: 'river' | 'lake';
+    id: string;
+    vertexIndex?: number;
+    startWorldPos: [number, number];
+    initialRiver?: RiverData;
+    initialLake?: LakeData;
+    hasMoved?: boolean;
+  } | null>(null);
+
+  // Reset water drawing states when switching modes
+  useEffect(() => {
+    if (brushSettings.mode !== 'river') {
+      setDrawingRiverPoints([]);
+    }
+    if (brushSettings.mode !== 'lake') {
+      setDrawingLakeStart(null);
+      setDrawingLakePolygon([]);
+    }
+    if (brushSettings.mode !== 'waterEdit') {
+      setActiveWaterVertexIndex(null);
+    }
+  }, [brushSettings.mode]);
 
   const metersPerUnit = useMemo(() => {
     return (effectiveWidthKm * 1000) / currentWidth;
@@ -1428,6 +1504,84 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
     }
 
+    // 3.4. Water Bodies (Rivers and Lakes)
+    const activeRivers = effectiveRivers;
+    const activeLakes = effectiveLakes;
+    if (activeRivers.length > 0 || activeLakes.length > 0) {
+      drawWaterBodies(ctx, activeRivers, activeLakes, {
+        zoom: viewport.zoom * dpr,
+        selectedWaterId,
+        selectedWaterType,
+        showLabels: true,
+        showHandles: brushSettings.mode === 'waterEdit',
+        activeVertexIndex: activeWaterVertexIndex,
+      });
+    }
+
+    // In-progress river preview
+    if (brushSettings.mode === 'river' && drawingRiverPoints.length > 0) {
+      const zoom = viewport.zoom * dpr;
+      const curPos = cursorPosRef.current;
+      const pts = curPos ? [...drawingRiverPoints, [curPos.x, curPos.y] as [number, number]] : drawingRiverPoints;
+      ctx.save();
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p[0], p[1]);
+        else ctx.lineTo(p[0], p[1]);
+      });
+      ctx.strokeStyle = '#2b7fb3';
+      ctx.lineWidth = Math.max(2, (waterSettings?.sourceWidth || 4) / zoom);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      pts.forEach((p) => {
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 4 / zoom, 0, Math.PI * 2);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fill();
+        ctx.strokeStyle = '#0369a1';
+        ctx.lineWidth = 1.5 / zoom;
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+
+    // In-progress lake preview (drag circle or polygon)
+    if (brushSettings.mode === 'lake') {
+      const zoom = viewport.zoom * dpr;
+      if (drawingLakeStart && cursorPosRef.current) {
+        const cur = cursorPosRef.current;
+        const rad = Math.hypot(cur.x - drawingLakeStart[0], cur.y - drawingLakeStart[1]);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(drawingLakeStart[0], drawingLakeStart[1], Math.max(4, rad), 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 2 / zoom;
+        ctx.setLineDash([6 / zoom, 4 / zoom]);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      } else if (drawingLakePolygon.length > 0) {
+        const curPos = cursorPosRef.current;
+        const pts = curPos ? [...drawingLakePolygon, [curPos.x, curPos.y] as [number, number]] : drawingLakePolygon;
+        ctx.save();
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p[0], p[1]);
+          else ctx.lineTo(p[0], p[1]);
+        });
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 2 / zoom;
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     // 3.5. Town Objects (Districts, Roads, Piers, Buildings, Fortified Walls)
     if (
       showTownObjects &&
@@ -2005,7 +2159,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     selectedVertex,
     selectedGate,
     activeRegionalMap?.townStyle?.roofTheme,
+    effectiveRivers,
+    effectiveLakes,
+    selectedWaterId,
+    selectedWaterType,
+    activeWaterVertexIndex,
+    drawingRiverPoints,
+    drawingLakeStart,
+    drawingLakePolygon,
+    waterSettings,
   ]);
+
+  // Keep water bodies overlay in sync
+  useEffect(() => {
+    renderOverlay();
+  }, [effectiveRivers, effectiveLakes, selectedWaterId, selectedWaterType, activeWaterVertexIndex, renderOverlay]);
 
   // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, or vertex/gate selection updates
   useEffect(() => {
@@ -2017,6 +2185,90 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     rebuildBiomeCanvas(currentBiomeGrid, currentCols, currentRows);
     renderOverlay();
   }, [currentBiomeGrid, currentCols, currentRows, rebuildBiomeCanvas, renderOverlay]);
+
+  // Finalize River Drawing
+  const finalizeRiverDrawing = useCallback(
+    (points: [number, number][]) => {
+      if (points.length < 2) {
+        setDrawingRiverPoints([]);
+        renderOverlay();
+        return;
+      }
+      const smoothed = smoothRiverPath(points);
+      const id = `river_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newRiver: RiverData = {
+        id,
+        name: `河川 ${effectiveRivers.length + 1}`,
+        points: smoothed,
+        sourceWidth: waterSettings?.sourceWidth ?? 3,
+        mouthWidth: waterSettings?.mouthWidth ?? 12,
+        style: waterSettings?.style ?? 'natural',
+        color: waterSettings?.waterColor,
+      };
+      const nextRivers = [...effectiveRivers, newRiver];
+      onCommitHistory({
+        description: '河川を追加',
+        timestamp: Date.now(),
+        waterChanges: {
+          prevRivers: effectiveRivers,
+          newRivers: nextRivers,
+        },
+      });
+      onUpdateRivers?.(nextRivers);
+      onSelectWater?.(newRiver.id, 'river');
+      setDrawingRiverPoints([]);
+      renderOverlay();
+    },
+    [effectiveRivers, waterSettings, onCommitHistory, onUpdateRivers, onSelectWater, renderOverlay]
+  );
+
+  // Finalize Lake Polygon Drawing
+  const finalizeLakePolygon = useCallback(
+    (points: [number, number][]) => {
+      if (points.length < 3) {
+        setDrawingLakePolygon([]);
+        renderOverlay();
+        return;
+      }
+      let cx = 0;
+      let cy = 0;
+      for (const p of points) {
+        cx += p[0];
+        cy += p[1];
+      }
+      cx /= points.length;
+      cy /= points.length;
+      let maxDist = 0;
+      for (const p of points) {
+        const d = Math.hypot(p[0] - cx, p[1] - cy);
+        if (d > maxDist) maxDist = d;
+      }
+      const id = `lake_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newLake: LakeData = {
+        id,
+        name: `湖 ${effectiveLakes.length + 1}`,
+        center: [cx, cy],
+        radius: Math.max(10, maxDist),
+        shape: 'polygon',
+        polygon: points,
+        color: waterSettings?.waterColor,
+      };
+      const nextLakes = [...effectiveLakes, newLake];
+      onCommitHistory({
+        description: '湖を追加',
+        timestamp: Date.now(),
+        waterChanges: {
+          prevLakes: effectiveLakes,
+          newLakes: nextLakes,
+        },
+      });
+      onUpdateLakes?.(nextLakes);
+      onSelectWater?.(newLake.id, 'lake');
+      setDrawingLakePolygon([]);
+      renderOverlay();
+    },
+    [effectiveLakes, waterSettings, onCommitHistory, onUpdateLakes, onSelectWater, renderOverlay]
+  );
 
   // Finalize polygon building drawing
   const finalizeTownBuildingPolygon = useCallback(
@@ -2662,6 +2914,132 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
       }
 
+      // Water Tools Keyboard Handling
+      if (brushSettings.mode === 'river') {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (drawingRiverPoints.length >= 2) {
+            finalizeRiverDrawing(drawingRiverPoints);
+          }
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setDrawingRiverPoints([]);
+          renderOverlay();
+          return;
+        }
+        if (e.key === 'Backspace' && drawingRiverPoints.length > 0) {
+          e.preventDefault();
+          setDrawingRiverPoints((prev) => prev.slice(0, prev.length - 1));
+          renderOverlay();
+          return;
+        }
+      }
+
+      if (brushSettings.mode === 'lake') {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (drawingLakePolygon.length >= 3) {
+            finalizeLakePolygon(drawingLakePolygon);
+          }
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setDrawingLakePolygon([]);
+          setDrawingLakeStart(null);
+          renderOverlay();
+          return;
+        }
+        if (e.key === 'Backspace' && drawingLakePolygon.length > 0) {
+          e.preventDefault();
+          setDrawingLakePolygon((prev) => prev.slice(0, prev.length - 1));
+          renderOverlay();
+          return;
+        }
+      }
+
+      if (brushSettings.mode === 'waterEdit') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          onSelectWater?.(null, null);
+          setActiveWaterVertexIndex(null);
+          renderOverlay();
+          return;
+        }
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedWaterId) {
+          e.preventDefault();
+          if (selectedWaterType === 'river') {
+            const curRiver = effectiveRivers.find((r) => r.id === selectedWaterId);
+            if (curRiver && activeWaterVertexIndex !== null && curRiver.points.length > 2) {
+              const nextPts = curRiver.points.filter((_, idx) => idx !== activeWaterVertexIndex);
+              const next = effectiveRivers.map((r) => (r.id === curRiver.id ? { ...r, points: nextPts } : r));
+              onCommitHistory({
+                description: '河川頂点の削除',
+                timestamp: Date.now(),
+                waterChanges: {
+                  prevRivers: effectiveRivers,
+                  newRivers: next,
+                },
+              });
+              onUpdateRivers?.(next);
+              setActiveWaterVertexIndex(null);
+              renderOverlay();
+              return;
+            } else {
+              const next = effectiveRivers.filter((r) => r.id !== selectedWaterId);
+              onCommitHistory({
+                description: '河川の削除',
+                timestamp: Date.now(),
+                waterChanges: {
+                  prevRivers: effectiveRivers,
+                  newRivers: next,
+                },
+              });
+              onUpdateRivers?.(next);
+              onSelectWater?.(null, null);
+              setActiveWaterVertexIndex(null);
+              renderOverlay();
+              return;
+            }
+          } else if (selectedWaterType === 'lake') {
+            const curLake = effectiveLakes.find((l) => l.id === selectedWaterId);
+            if (curLake && curLake.polygon && activeWaterVertexIndex !== null && curLake.polygon.length > 3) {
+              const nextPoly = curLake.polygon.filter((_, idx) => idx !== activeWaterVertexIndex);
+              const next = effectiveLakes.map((l) => (l.id === curLake.id ? { ...l, polygon: nextPoly } : l));
+              onCommitHistory({
+                description: '湖頂点の削除',
+                timestamp: Date.now(),
+                waterChanges: {
+                  prevLakes: effectiveLakes,
+                  newLakes: next,
+                },
+              });
+              onUpdateLakes?.(next);
+              setActiveWaterVertexIndex(null);
+              renderOverlay();
+              return;
+            } else {
+              const next = effectiveLakes.filter((l) => l.id !== selectedWaterId);
+              onCommitHistory({
+                description: '湖の削除',
+                timestamp: Date.now(),
+                waterChanges: {
+                  prevLakes: effectiveLakes,
+                  newLakes: next,
+                },
+              });
+              onUpdateLakes?.(next);
+              onSelectWater?.(null, null);
+              setActiveWaterVertexIndex(null);
+              renderOverlay();
+              return;
+            }
+          }
+        }
+      }
+
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedSymbolId) {
         const symList = symbols || [];
         const nextSymbols = symList.filter((s) => s.id !== selectedSymbolId);
@@ -2717,6 +3095,18 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     onToggleAddingGateMode,
     onUpdateTownObjects,
     effectiveWidthKm,
+    drawingRiverPoints,
+    finalizeRiverDrawing,
+    drawingLakePolygon,
+    finalizeLakePolygon,
+    effectiveRivers,
+    effectiveLakes,
+    selectedWaterId,
+    selectedWaterType,
+    activeWaterVertexIndex,
+    onSelectWater,
+    onUpdateRivers,
+    onUpdateLakes,
   ]);
 
   // Mouse wheel zoom
@@ -3267,6 +3657,140 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         });
         renderOverlay();
         return;
+      }
+    }
+
+    // Water Tools: River drawing, Lake drawing, Water Edit
+    if (brushSettings.mode === 'river') {
+      const dpr = glCanvasRef.current ? glCanvasRef.current.width / (glCanvasRef.current.clientWidth || 1) : 1;
+      const zoom = viewport.zoom * dpr;
+      const toleranceUnits = 10 / zoom;
+      if (e.button === 2) {
+        e.preventDefault();
+        if (drawingRiverPoints.length >= 2) {
+          finalizeRiverDrawing(drawingRiverPoints);
+        } else {
+          setDrawingRiverPoints([]);
+        }
+        renderOverlay();
+        return;
+      }
+      const clickPt: [number, number] = [worldPos.x, worldPos.y];
+      if (drawingRiverPoints.length > 0) {
+        const lastPt = drawingRiverPoints[drawingRiverPoints.length - 1];
+        if (Math.hypot(clickPt[0] - lastPt[0], clickPt[1] - lastPt[1]) <= toleranceUnits) {
+          finalizeRiverDrawing(drawingRiverPoints);
+          return;
+        }
+      }
+      setDrawingRiverPoints((prev) => [...prev, clickPt]);
+      renderOverlay();
+      return;
+    }
+
+    if (brushSettings.mode === 'lake') {
+      const dpr = glCanvasRef.current ? glCanvasRef.current.width / (glCanvasRef.current.clientWidth || 1) : 1;
+      const zoom = viewport.zoom * dpr;
+      const toleranceUnits = 10 / zoom;
+      if (waterSettings?.lakeShapeMode === 'polygon') {
+        if (e.button === 2) {
+          e.preventDefault();
+          if (drawingLakePolygon.length >= 3) {
+            finalizeLakePolygon(drawingLakePolygon);
+          } else {
+            setDrawingLakePolygon([]);
+          }
+          renderOverlay();
+          return;
+        }
+        const clickPt: [number, number] = [worldPos.x, worldPos.y];
+        if (drawingLakePolygon.length >= 3) {
+          const firstPt = drawingLakePolygon[0];
+          if (Math.hypot(clickPt[0] - firstPt[0], clickPt[1] - firstPt[1]) <= toleranceUnits) {
+            finalizeLakePolygon(drawingLakePolygon);
+            return;
+          }
+        }
+        setDrawingLakePolygon((prev) => [...prev, clickPt]);
+        renderOverlay();
+        return;
+      } else {
+        // Drag circle / organic placement
+        if (e.button === 0) {
+          setDrawingLakeStart([worldPos.x, worldPos.y]);
+          renderOverlay();
+          return;
+        }
+      }
+    }
+
+    if (brushSettings.mode === 'waterEdit') {
+      const dpr = glCanvasRef.current ? glCanvasRef.current.width / (glCanvasRef.current.clientWidth || 1) : 1;
+      const zoom = viewport.zoom * dpr;
+      const toleranceUnits = 10 / zoom;
+
+      // Check vertex handles of selected water body first
+      if (selectedWaterType === 'river' && selectedWaterId) {
+        const curRiver = effectiveRivers.find((r) => r.id === selectedWaterId);
+        if (curRiver) {
+          const vIdx = findNearestRiverVertex(curRiver, [worldPos.x, worldPos.y], toleranceUnits);
+          if (vIdx !== null) {
+            setActiveWaterVertexIndex(vIdx);
+            waterDragRef.current = {
+              type: 'vertex',
+              waterType: 'river',
+              id: curRiver.id,
+              vertexIndex: vIdx,
+              startWorldPos: [worldPos.x, worldPos.y],
+              initialRiver: { ...curRiver, points: curRiver.points.map((p) => [...p]) },
+              hasMoved: false,
+            };
+            renderOverlay();
+            return;
+          }
+        }
+      } else if (selectedWaterType === 'lake' && selectedWaterId) {
+        const curLake = effectiveLakes.find((l) => l.id === selectedWaterId);
+        if (curLake) {
+          const vIdx = findNearestLakeVertex(curLake, [worldPos.x, worldPos.y], toleranceUnits);
+          if (vIdx !== null) {
+            setActiveWaterVertexIndex(vIdx);
+            waterDragRef.current = {
+              type: 'vertex',
+              waterType: 'lake',
+              id: curLake.id,
+              vertexIndex: vIdx,
+              startWorldPos: [worldPos.x, worldPos.y],
+              initialLake: { ...curLake, polygon: curLake.polygon?.map((p) => [...p]) },
+              hasMoved: false,
+            };
+            renderOverlay();
+            return;
+          }
+        }
+      }
+
+      // Hit-test water bodies
+      const hit = findWaterAtPoint([worldPos.x, worldPos.y], effectiveRivers, effectiveLakes, toleranceUnits);
+      if (hit) {
+        onSelectWater?.(hit.water.id, hit.type);
+        setActiveWaterVertexIndex(null);
+        waterDragRef.current = {
+          type: 'translate',
+          waterType: hit.type,
+          id: hit.water.id,
+          startWorldPos: [worldPos.x, worldPos.y],
+          initialRiver: hit.type === 'river' ? { ...(hit.water as RiverData), points: (hit.water as RiverData).points.map((p) => [...p]) } : undefined,
+          initialLake: hit.type === 'lake' ? { ...(hit.water as LakeData), polygon: (hit.water as LakeData).polygon?.map((p) => [...p]) } : undefined,
+          hasMoved: false,
+        };
+        renderOverlay();
+        return;
+      } else {
+        // Deselect if clicked empty space
+        onSelectWater?.(null, null);
+        setActiveWaterVertexIndex(null);
+        renderOverlay();
       }
     }
 

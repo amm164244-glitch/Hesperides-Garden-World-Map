@@ -517,6 +517,8 @@ export async function serializeMapDataToFwm(
     coastlines: mapData.coastlines,
     ripples: mapData.ripples,
     symbols: mapData.symbols || [],
+    rivers: mapData.rivers,
+    lakes: mapData.lakes,
     biomeTypes: mapData.biomeTypes || DEFAULT_BIOME_TYPES,
     regionalMaps: regionalMapsMeta,
     customAssets: customAssetsMeta,

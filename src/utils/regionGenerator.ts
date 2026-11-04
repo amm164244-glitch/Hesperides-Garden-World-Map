@@ -7,6 +7,7 @@ import {
   applyShapeMaskElevation,
 } from './regionShape';
 import { sampleElevationBicubic } from './elevationSampling';
+import { generateRiversAndLakes } from './waterGenerator';
 
 export interface GenerateRegionOptions {
   kind?: 'region' | 'town';
@@ -174,6 +175,22 @@ export function generateRegionalMap(
   const formattedW = formatDistance(widthKm);
   const defaultName = name || (isTown ? `町マップ (${formattedW})` : `地域マップ (${zoomScale}x: ${formattedW})`);
 
+  const { rivers, lakes } = isTown
+    ? { rivers: [], lakes: [] }
+    : generateRiversAndLakes(
+        elevationGrid,
+        gridCols,
+        gridRows,
+        regionW,
+        regionH,
+        parent.seaLevel,
+        seed,
+        {
+          riverCount: Math.max(2, Math.round(6 / (zoomScale === 16 ? 2 : 1))),
+          lakeCount: Math.max(1, Math.round(3 / (zoomScale === 16 ? 2 : 1))),
+        }
+      );
+
   return {
     id: regionId,
     name: defaultName,
@@ -193,6 +210,8 @@ export function generateRegionalMap(
     symbols: [],
     outline: shapeMask?.polygon ? [...shapeMask.polygon] : undefined,
     outsideSea: shapeMask ? shapeMask.outsideSea : undefined,
+    rivers,
+    lakes,
   };
 }
 
