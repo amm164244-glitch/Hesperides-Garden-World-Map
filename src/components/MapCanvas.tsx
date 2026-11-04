@@ -163,7 +163,6 @@ interface MapCanvasProps {
   onSelectWater?: (id: string | null, type: 'river' | 'lake' | null) => void;
   waterSettings?: WaterToolSettings;
   onChangeWaterSettings?: (patch: Partial<WaterToolSettings>) => void;
-  onAutoGenerateWater?: (riverCount: number, lakeCount: number) => void;
   onClearAllWater?: () => void;
   onUpdateBrush?: (patch: Partial<BrushSettings>) => void;
 }
@@ -243,7 +242,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onSelectWater,
   waterSettings = DEFAULT_WATER_TOOL_SETTINGS,
   onChangeWaterSettings,
-  onAutoGenerateWater,
   onClearAllWater,
   onUpdateBrush,
 }) => {
@@ -5233,7 +5231,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             renderOverlay();
           }}
           onClearAllWater={onClearAllWater || (() => {})}
-          onAutoGenerateWater={onAutoGenerateWater || (() => {})}
           onClose={() => onUpdateBrush?.({ mode: 'pan' })}
           inProgressCount={brushSettings.mode === 'river' ? drawingRiverPoints.length : drawingLakePolygon.length}
           onCommitRiverDrawing={() => {

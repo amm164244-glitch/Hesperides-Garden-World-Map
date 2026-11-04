@@ -34,8 +34,6 @@ export interface WaterToolSettings {
   riverWidthEnd: number;
   lakeRadius: number;
   lakeMode: 'drag' | 'polygon';
-  autoRiverCount: number;
-  autoLakeCount: number;
   showWater: boolean;
 }
 
@@ -44,8 +42,6 @@ export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
   riverWidthEnd: 4.5,
   lakeRadius: 18,
   lakeMode: 'drag',
-  autoRiverCount: 14,
-  autoLakeCount: 6,
   showWater: true,
 };
 

@@ -30,10 +30,6 @@ export interface GeneratorConfig {
   erosionStrength?: number; // 1 - 10 (侵食強度)
   cellCount?: number;
   coastlineComplexity?: number; // 1 - 10 (海岸線の複雑さ・湾曲度、標準: 4)
-  riverCount?: number;          // 0 - 30 (川の自動生成数、標準: 14)
-  lakeCount?: number;           // 0 - 15 (湖の自動生成数、標準: 6)
-  enableRivers?: boolean;       // 川の生成有効/無効
-  enableLakes?: boolean;        // 湖の生成有効/無効
 }
 
 export interface RegionalBounds {

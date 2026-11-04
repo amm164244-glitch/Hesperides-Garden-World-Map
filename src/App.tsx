@@ -62,7 +62,6 @@ import {
   exportSymbolLibraryToJson,
 } from './utils/assetStorage';
 import { RiverData, LakeData, WaterToolSettings, DEFAULT_WATER_TOOL_SETTINGS } from './types/water';
-import { generateRiversAndLakes } from './utils/waterGenerator';
 
 // Global Planetary 2:1 Aspect Ratio
 export const getResolutionDimensions = (gridRes: string) => {
@@ -350,50 +349,6 @@ export default function App() {
     [activeRegionId]
   );
 
-  // Auto-generate rivers and lakes for the current map
-  const handleAutoGenerateWater = useCallback(
-    (riverCount: number, lakeCount: number) => {
-      const activeMap = activeRegionalMap || mapData;
-      const seed = activeMap.seed;
-      const { rivers: genRivers, lakes: genLakes } = generateRiversAndLakes(
-        activeMap.elevationGrid,
-        activeMap.gridCols,
-        activeMap.gridRows,
-        activeMap.width,
-        activeMap.height,
-        activeMap.seaLevel,
-        seed,
-        {
-          riverCount,
-          lakeCount,
-          enableRivers: riverCount > 0,
-          enableLakes: lakeCount > 0,
-          worldWidthKm: (activeMap as any).widthKm ?? (activeMap as any).worldWidthKm ?? 40000,
-        }
-      );
-
-      setUndoStack((prev) => [
-        ...prev,
-        {
-          description: '川と湖を自動生成',
-          timestamp: Date.now(),
-          waterChanges: {
-            prevRivers: currentRivers,
-            newRivers: genRivers,
-            prevLakes: currentLakes,
-            newLakes: genLakes,
-          },
-        },
-      ]);
-      setRedoStack([]);
-
-      handleUpdateRivers(genRivers);
-      handleUpdateLakes(genLakes);
-      setSelectedWaterId(null);
-      setSelectedWaterType(null);
-    },
-    [activeRegionalMap, mapData, currentRivers, currentLakes, handleUpdateRivers, handleUpdateLakes]
-  );
 
   // Clear all rivers and lakes for current map
   const handleClearAllWater = useCallback(() => {
@@ -1538,7 +1493,6 @@ export default function App() {
           }}
           waterSettings={waterSettings}
           onChangeWaterSettings={(patch) => setWaterSettings((prev) => ({ ...prev, ...patch }))}
-          onAutoGenerateWater={handleAutoGenerateWater}
           onClearAllWater={handleClearAllWater}
           onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
         />

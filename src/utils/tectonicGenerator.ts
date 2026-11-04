@@ -1,7 +1,6 @@
 import { GeneratorConfig, MapCell, MapData, TectonicPlate } from '../types/map';
 import { Mulberry32, Noise2D } from './prng';
 import { applyErosion } from './erosion';
-import { generateRiversAndLakes } from './waterGenerator';
 
 export const STANDARD_SEA_LEVEL = 35.0;
 
@@ -512,24 +511,6 @@ export function generateTectonicWorld(
     }
   }
 
-  onProgress?.(95, '河川・水系網と天然湖を生成中...');
-  const { rivers, lakes } = generateRiversAndLakes(
-    elevationGrid,
-    gridCols,
-    gridRows,
-    width,
-    height,
-    STANDARD_SEA_LEVEL,
-    seed,
-    {
-      riverCount: config.riverCount ?? 14,
-      lakeCount: config.lakeCount ?? 6,
-      enableRivers: config.enableRivers ?? true,
-      enableLakes: config.enableLakes ?? true,
-      worldWidthKm: config.worldWidthKm || 40000,
-    }
-  );
-
   onProgress?.(100, '世界マップ生成完了！');
 
   return {
@@ -547,8 +528,8 @@ export function generateTectonicWorld(
     plates,
     cells,
     regionalMaps: {},
-    rivers,
-    lakes,
+    rivers: [],
+    lakes: [],
   };
 }
 

@@ -6,7 +6,6 @@ import {
   CircleDot,
   Trash2,
   X,
-  Sparkles,
   Sliders,
   Eye,
   EyeOff,
@@ -29,7 +28,6 @@ interface WaterPanelProps {
   onUpdateLake: (lake: LakeData) => void;
   onDeleteWater: (id: string, type: 'river' | 'lake') => void;
   onClearAllWater: () => void;
-  onAutoGenerateWater: (riverCount: number, lakeCount: number) => void;
   onClose: () => void;
   inProgressCount?: number;
   onCommitRiverDrawing?: () => void;
@@ -50,16 +48,11 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
   onUpdateLake,
   onDeleteWater,
   onClearAllWater,
-  onAutoGenerateWater,
   onClose,
   inProgressCount = 0,
   onCommitRiverDrawing,
   onCancelRiverDrawing,
 }) => {
-  const [showAutoModal, setShowAutoModal] = useState(false);
-  const [autoRiverCount, setAutoRiverCount] = useState(waterSettings.autoRiverCount || 14);
-  const [autoLakeCount, setAutoLakeCount] = useState(waterSettings.autoLakeCount || 6);
-
   const selectedRiver = selectedWaterType === 'river' ? rivers.find((r) => r.id === selectedWaterId) : null;
   const selectedLake = selectedWaterType === 'lake' ? lakes.find((l) => l.id === selectedWaterId) : null;
 
@@ -365,32 +358,19 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
         </div>
       )}
 
-      {/* Bottom Actions: Auto Generate & Clear */}
-      <div className="flex items-center justify-between pt-1 border-t border-stone-800 text-[11px]">
-        <div className="flex items-center gap-2">
+      {/* Bottom Actions: Clear & Quick Selector */}
+      {(rivers.length > 0 || lakes.length > 0) && (
+        <div className="flex items-center justify-between pt-1 border-t border-stone-800 text-[11px]">
           <button
             type="button"
-            onClick={() => setShowAutoModal((prev) => !prev)}
-            className="px-2.5 py-1 rounded bg-cyan-950/80 hover:bg-cyan-900 text-cyan-200 border border-cyan-700/80 font-medium flex items-center gap-1.5 transition shadow-sm"
+            onClick={onClearAllWater}
+            className="px-2 py-1 rounded bg-stone-800 hover:bg-red-950 text-stone-400 hover:text-red-300 transition text-[11px]"
+            title="現在のマップの川・湖をすべて削除"
           >
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>川と湖を自動生成</span>
+            全消去
           </button>
 
-          {(rivers.length > 0 || lakes.length > 0) && (
-            <button
-              type="button"
-              onClick={onClearAllWater}
-              className="px-2 py-1 rounded bg-stone-800 hover:bg-red-950 text-stone-400 hover:text-red-300 transition text-[11px]"
-              title="現在のマップの川・湖をすべて削除"
-            >
-              全消去
-            </button>
-          )}
-        </div>
-
-        {/* Existing items dropdown quick selector */}
-        {(rivers.length > 0 || lakes.length > 0) && (
+          {/* Existing items dropdown quick selector */}
           <select
             value={selectedWaterId || ''}
             onChange={(e) => {
@@ -425,76 +405,6 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
               </optgroup>
             )}
           </select>
-        )}
-      </div>
-
-      {/* Auto-Generation Settings Popout */}
-      {showAutoModal && (
-        <div className="bg-stone-950/90 border border-cyan-600/80 rounded-lg p-3 flex flex-col gap-2.5 animate-in fade-in duration-150">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-cyan-300">標高地形から自動生成:</span>
-            <button
-              type="button"
-              onClick={() => setShowAutoModal(false)}
-              className="text-stone-500 hover:text-stone-300 p-0.5"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between text-[11px]">
-                <span className="text-stone-400">川の数:</span>
-                <span className="font-mono text-cyan-300 font-bold">{autoRiverCount}</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={30}
-                step={1}
-                value={autoRiverCount}
-                onChange={(e) => setAutoRiverCount(Number(e.target.value))}
-                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between text-[11px]">
-                <span className="text-stone-400">湖の数:</span>
-                <span className="font-mono text-cyan-300 font-bold">{autoLakeCount}</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={15}
-                step={1}
-                value={autoLakeCount}
-                onChange={(e) => setAutoLakeCount(Number(e.target.value))}
-                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => setShowAutoModal(false)}
-              className="px-2.5 py-1 rounded bg-stone-800 text-stone-300 hover:bg-stone-700 transition"
-            >
-              キャンセル
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                onAutoGenerateWater(autoRiverCount, autoLakeCount);
-                setShowAutoModal(false);
-              }}
-              className="px-3 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-stone-950 font-bold transition shadow"
-            >
-              生成を実行
-            </button>
-          </div>
         </div>
       )}
     </div>

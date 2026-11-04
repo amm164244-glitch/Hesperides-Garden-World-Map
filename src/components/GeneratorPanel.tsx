@@ -343,50 +343,6 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
             className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
           />
         </div>
-
-        {/* River & Lake Generation Settings */}
-        <div className="flex flex-col gap-1.5 border-t border-stone-800 pt-2">
-          <div className="flex items-center justify-between text-stone-300">
-            <span className="font-semibold text-cyan-300 flex items-center gap-1.5">
-              <Waves className="w-3.5 h-3.5" />
-              <span>河川・湖の自動生成</span>
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2.5 pt-1">
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between text-[11px] text-stone-400">
-                <span>川の生成数:</span>
-                <span className="font-mono text-cyan-300 font-bold">{config.riverCount ?? 14}</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={30}
-                step={1}
-                value={config.riverCount ?? 14}
-                onChange={(e) => onUpdateConfig({ riverCount: Number(e.target.value) })}
-                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <div className="flex justify-between text-[11px] text-stone-400">
-                <span>湖の生成数:</span>
-                <span className="font-mono text-cyan-300 font-bold">{config.lakeCount ?? 6}</span>
-              </div>
-              <input
-                type="range"
-                min={0}
-                max={15}
-                step={1}
-                value={config.lakeCount ?? 6}
-                onChange={(e) => onUpdateConfig({ lakeCount: Number(e.target.value) })}
-                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
-              />
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* Regenerate Button */}
