@@ -29,7 +29,12 @@ import { GeneratorPanel } from './components/GeneratorPanel';
 import { MapCanvas } from './components/MapCanvas';
 import { InspectorBar } from './components/InspectorBar';
 import { TownObjectsPanel } from './components/TownObjectsPanel';
-import { TownObject } from './types/town';
+import {
+  DEFAULT_TOWN_TOOL_CONFIG,
+  TownObject,
+  TownRoofTheme,
+  TownToolConfig,
+} from './types/town';
 import { MapStorageModal } from './components/MapStorageModal';
 import { RegionManagerModal } from './components/RegionManagerModal';
 import { RegionSelector } from './components/RegionSelector';
@@ -235,7 +240,14 @@ export default function App() {
 
   // Town Objects state for town-scale regional maps
   const [showTownObjects, setShowTownObjects] = useState<boolean>(true);
-  const [selectedTownObjectId, setSelectedTownObjectId] = useState<string | null>(null);
+  const [selectedTownObjectIds, setSelectedTownObjectIds] = useState<string[]>([]);
+  const [townToolConfig, setTownToolConfig] = useState<TownToolConfig>(DEFAULT_TOWN_TOOL_CONFIG);
+  const [isAddingGateMode, setIsAddingGateMode] = useState<boolean>(false);
+
+  const selectedTownObjectId = selectedTownObjectIds[0] ?? null;
+  const setSelectedTownObjectId = useCallback((id: string | null) => {
+    setSelectedTownObjectIds(id ? [id] : []);
+  }, []);
 
   // Current active map town objects (derived from active regional map if kind is 'town')
   const currentTownObjects = useMemo(() => {
@@ -293,6 +305,22 @@ export default function App() {
     strength: 0.35,
     flattenTarget: 50,
   });
+
+  // Automatically switch away from town-specific tools when exiting town map
+  useEffect(() => {
+    if (activeRegionalMap?.kind !== 'town') {
+      if (
+        brushSettings.mode === 'townSelect' ||
+        brushSettings.mode === 'townRoad' ||
+        brushSettings.mode === 'townWall' ||
+        brushSettings.mode === 'townPier'
+      ) {
+        setBrushSettings((prev) => ({ ...prev, mode: 'pan' }));
+      }
+      setSelectedTownObjectIds([]);
+      setIsAddingGateMode(false);
+    }
+  }, [activeRegionalMap?.kind, brushSettings.mode]);
 
   const [viewMode, setViewMode] = useState<ViewMode>('elevation');
 
@@ -906,6 +934,31 @@ export default function App() {
       handleUpdateTownObjects(newObjects);
     },
     [currentTownObjects, handleCommitHistory, handleUpdateTownObjects]
+  );
+
+  // Update roof theme for the currently active town map (not recorded in undo/redo history)
+  const handleChangeRoofTheme = useCallback(
+    (theme: TownRoofTheme) => {
+      if (!activeRegionId) return;
+      setMapData((prev) => {
+        const reg = prev.regionalMaps[activeRegionId];
+        if (!reg) return prev;
+        return {
+          ...prev,
+          regionalMaps: {
+            ...prev.regionalMaps,
+            [activeRegionId]: {
+              ...reg,
+              townStyle: {
+                ...reg.townStyle,
+                roofTheme: theme,
+              },
+            },
+          },
+        };
+      });
+    },
+    [activeRegionId]
   );
 
   // Undo
@@ -1556,6 +1609,12 @@ export default function App() {
               showTownObjects={showTownObjects}
               onToggleShowTownObjects={setShowTownObjects}
               onApplyTownObjects={handleApplyTownObjectsWithHistory}
+              elevationGrid={activeRegionalMap.elevationGrid}
+              gridCols={activeRegionalMap.gridCols}
+              gridRows={activeRegionalMap.gridRows}
+              seaLevel={activeRegionalMap.seaLevel}
+              roofTheme={activeRegionalMap.townStyle?.roofTheme ?? 'terracotta'}
+              onChangeRoofTheme={handleChangeRoofTheme}
             />
           </div>
         )}

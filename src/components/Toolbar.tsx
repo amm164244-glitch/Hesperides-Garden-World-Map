@@ -26,6 +26,10 @@ import {
   Home,
   EyeOff,
   Trash2,
+  MousePointer,
+  Milestone,
+  Shield,
+  Anchor,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
 import { SymbolToolSettings } from '../types/symbols';
@@ -144,6 +148,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     { id: 'biomeFill', label: '地形タイプ塗りつぶし', icon: <PaintBucket className="w-4 h-4" />, desc: '同種の地形タイプ領域を一括塗りつぶし' },
     { id: 'biomeErase', label: '地形タイプ消去', icon: <Eraser className="w-4 h-4" />, desc: '地形タイプの塗りを消去して透明に戻す' },
     { id: 'selectRegion', label: '地域範囲選択', icon: <Layers className="w-4 h-4" />, desc: '範囲をドラッグ選択して4倍/16倍の地域マップを生成' },
+    ...(activeRegionalMap?.kind === 'town'
+      ? [
+          { id: 'townSelect' as BrushMode, label: '町選択', icon: <MousePointer className="w-4 h-4" />, desc: '町部品の選択・移動・頂点編集・門の追加/移動 (Delキーで削除)' },
+          { id: 'townRoad' as BrushMode, label: '道', icon: <Milestone className="w-4 h-4" />, desc: '道を描く (クリックで頂点追加、ダブルクリック/Enterで確定、Escで取消)' },
+          { id: 'townWall' as BrushMode, label: '城壁', icon: <Shield className="w-4 h-4" />, desc: '城壁を描く (クリックで頂点追加、始点クリックで閉じる、Enterで確定)' },
+          { id: 'townPier' as BrushMode, label: '桟橋/橋', icon: <Anchor className="w-4 h-4" />, desc: '桟橋・橋を描く (クリックで頂点追加、Enterで確定)' },
+        ]
+      : []),
   ];
 
   // Collapsed Mode: slim floating bar with icons only

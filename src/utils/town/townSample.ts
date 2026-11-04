@@ -1,7 +1,9 @@
 /**
  * Deterministic Sample Town Procedural Generator
- * Generates an authentic medieval fortified settlement for visual verification
- * and development scaffolding (wall, towers, gates, roads, districts, ~150 buildings, pier).
+ * Generates an authentic medieval fortified settlement adapted to water and terrain:
+ * - Only places piers if a valid shoreline is detected in the map interior.
+ * - Prevents buildings from being placed on water.
+ * - Fully deterministic with seed.
  */
 
 import {
@@ -14,14 +16,63 @@ import {
   TownWall,
 } from '../../types/town';
 import { makeRng } from '../penSymbols';
-import { metersToUnits, pointInPolygon } from './townGeometry';
+import { metersToUnits, pointInPolygon, polygonCentroid } from './townGeometry';
+
+export interface TerrainWaterSampler {
+  isWater: (x: number, y: number) => boolean;
+}
+
+export interface SampleTownStats {
+  skippedBuildingsCount: number;
+  pierPlaced: boolean;
+}
+
+export type SampleTownResult = TownObject[] & { stats: SampleTownStats };
+
+/**
+ * Creates a smooth bilinear terrain water sampler from an elevation grid.
+ * Any coordinate with elevation < seaLevel is identified as water.
+ */
+export function createTerrainWaterSampler(
+  elevationGrid: Float32Array,
+  gridCols: number,
+  gridRows: number,
+  width: number,
+  height: number,
+  seaLevel: number
+): TerrainWaterSampler {
+  return {
+    isWater: (x: number, y: number): boolean => {
+      if (gridCols <= 1 || gridRows <= 1 || width <= 0 || height <= 0) {
+        return false;
+      }
+      const gx = Math.max(0, Math.min(gridCols - 1, (x / width) * (gridCols - 1)));
+      const gy = Math.max(0, Math.min(gridRows - 1, (y / height) * (gridRows - 1)));
+      const c0 = Math.floor(gx);
+      const r0 = Math.floor(gy);
+      const c1 = Math.min(gridCols - 1, c0 + 1);
+      const r1 = Math.min(gridRows - 1, r0 + 1);
+      const fx = gx - c0;
+      const fy = gy - r0;
+
+      const e00 = elevationGrid[r0 * gridCols + c0];
+      const e10 = elevationGrid[r0 * gridCols + c1];
+      const e01 = elevationGrid[r1 * gridCols + c0];
+      const e11 = elevationGrid[r1 * gridCols + c1];
+
+      const elev = (e00 * (1 - fx) + e10 * fx) * (1 - fy) + (e01 * (1 - fx) + e11 * fx) * fy;
+      return elev < seaLevel;
+    },
+  };
+}
 
 export function generateSampleTown(
   width: number,
   height: number,
   metersPerUnit: number,
-  seed: number = 42875
-): TownObject[] {
+  seed: number = 42875,
+  terrain?: TerrainWaterSampler
+): SampleTownResult {
   const rng = makeRng(seed);
   const objects: TownObject[] = [];
 
@@ -32,6 +83,19 @@ export function generateSampleTown(
   const rx = width * 0.29;
   const ry = Math.min(height * 0.35, rx * (height / width));
 
+  let skippedBuildingsCount = 0;
+  let pierPlaced = false;
+
+  const isBuildingOnWater = (poly: Pt[]): boolean => {
+    if (!terrain) return false;
+    const c = polygonCentroid(poly);
+    if (terrain.isWater(c[0], c[1])) return true;
+    for (const pt of poly) {
+      if (terrain.isWater(pt[0], pt[1])) return true;
+    }
+    return false;
+  };
+
   // ---------------------------------------------------------------------------
   // 1. Fortified Town Wall (12-vertex oval with corner towers and 2 gates)
   // ---------------------------------------------------------------------------
@@ -40,7 +104,6 @@ export function generateSampleTown(
 
   for (let i = 0; i < wallVertCount; i++) {
     const angle = (i / wallVertCount) * Math.PI * 2;
-    // Slight organic jitter
     const jitterR = 1.0 + (rng() - 0.5) * 0.08;
     const px = cx + Math.cos(angle) * rx * jitterR;
     const py = cy + Math.sin(angle) * ry * jitterR;
@@ -78,7 +141,6 @@ export function generateSampleTown(
   // ---------------------------------------------------------------------------
   // 2. Main Roads & Intersecting Streets
   // ---------------------------------------------------------------------------
-  // Main thoroughfare connecting West Gate -> Central Plaza -> East Gate
   const mainRoadPoints: Pt[] = [
     [westGatePt[0] - width * 0.06, westGatePt[1]],
     westGatePt,
@@ -141,7 +203,6 @@ export function generateSampleTown(
   // ---------------------------------------------------------------------------
   // 3. Zoning Districts
   // ---------------------------------------------------------------------------
-  // Market plaza at center
   const marketDistrict: TownDistrict = {
     id: `dist_${seed}_market`,
     name: '中央市場広場',
@@ -155,7 +216,6 @@ export function generateSampleTown(
     ],
   };
 
-  // Noble quarter in North-West
   const nobleDistrict: TownDistrict = {
     id: `dist_${seed}_noble`,
     name: '領主・貴族街区',
@@ -169,7 +229,6 @@ export function generateSampleTown(
     ],
   };
 
-  // Residential in North-East
   const residentialNorthEast: TownDistrict = {
     id: `dist_${seed}_res_ne`,
     name: '北東住宅街区',
@@ -183,7 +242,6 @@ export function generateSampleTown(
     ],
   };
 
-  // Residential in South
   const residentialSouth: TownDistrict = {
     id: `dist_${seed}_res_s`,
     name: '南部職人・居住街区',
@@ -197,7 +255,6 @@ export function generateSampleTown(
     ],
   };
 
-  // Farmland outside the town wall (South-East)
   const farmlandOutside: TownDistrict = {
     id: `dist_${seed}_farm`,
     name: '城外農耕地区',
@@ -214,22 +271,112 @@ export function generateSampleTown(
   objects.push(marketDistrict, nobleDistrict, residentialNorthEast, residentialSouth, farmlandOutside);
 
   // ---------------------------------------------------------------------------
-  // 4. Pier / Jetty extending South from the wall
+  // 4. Pier Placement: only where water exists in map interior
   // ---------------------------------------------------------------------------
-  const pierStart: Pt = [cx + rx * 0.04, cy + ry * 0.88];
-  const pierEnd: Pt = [cx + rx * 0.04, Math.min(height - 15, cy + ry * 1.35)];
-  const townPier: TownPier = {
-    id: `pier_${seed}_south`,
-    name: '南門河岸桟橋',
-    kind: 'pier',
-    variant: 'pier',
-    points: [pierStart, [cx + rx * 0.04, (pierStart[1] + pierEnd[1]) / 2], pierEnd],
-    widthM: 5.5,
-  };
-  objects.push(townPier);
+  if (terrain) {
+    const minMarginX = width * 0.05;
+    const maxMarginX = width * 0.95;
+    const minMarginY = height * 0.05;
+    const maxMarginY = height * 0.95;
+
+    // Search 16 directions outward from town center
+    interface ShoreCandidate {
+      dirIndex: number;
+      dx: number;
+      dy: number;
+      distFromCenter: number;
+      shorePt: Pt;
+    }
+    const candidates: ShoreCandidate[] = [];
+
+    const numDirections = 16;
+    const stepSize = Math.max(1.0, metersToUnits(2, metersPerUnit));
+    const maxRayDist = Math.hypot(width, height);
+
+    for (let d = 0; d < numDirections; d++) {
+      const ang = (d / numDirections) * Math.PI * 2;
+      const dx = Math.cos(ang);
+      const dy = Math.sin(ang);
+
+      let prevIsWater = terrain.isWater(cx, cy);
+      let prevX = cx;
+      let prevY = cy;
+
+      // March outward from center
+      for (let dist = stepSize; dist < maxRayDist; dist += stepSize) {
+        const px = cx + dx * dist;
+        const py = cy + dy * dist;
+
+        // Stop if outside outer margin
+        if (px < minMarginX || px > maxMarginX || py < minMarginY || py > maxMarginY) {
+          break;
+        }
+
+        const currIsWater = terrain.isWater(px, py);
+        if (!prevIsWater && currIsWater) {
+          // Found Land -> Water shoreline transition!
+          const shoreX = (prevX + px) / 2;
+          const shoreY = (prevY + py) / 2;
+
+          candidates.push({
+            dirIndex: d,
+            dx,
+            dy,
+            distFromCenter: dist,
+            shorePt: [shoreX, shoreY],
+          });
+          break;
+        }
+
+        prevIsWater = currIsWater;
+        prevX = px;
+        prevY = py;
+      }
+    }
+
+    if (candidates.length > 0) {
+      // Pick direction with the closest shoreline to town center
+      candidates.sort((a, b) => a.distFromCenter - b.distFromCenter);
+      const best = candidates[0];
+
+      const inshoreUnits = metersToUnits(2, metersPerUnit);
+      const pierLenUnits = metersToUnits(25, metersPerUnit);
+
+      // Start on land (~2m inside shore)
+      const startX = best.shorePt[0] - best.dx * inshoreUnits;
+      const startY = best.shorePt[1] - best.dy * inshoreUnits;
+
+      // End in water (~25m total length, clamped inside map)
+      const rawEndX = best.shorePt[0] + best.dx * (pierLenUnits - inshoreUnits);
+      const rawEndY = best.shorePt[1] + best.dy * (pierLenUnits - inshoreUnits);
+      const endX = Math.max(minMarginX, Math.min(maxMarginX, rawEndX));
+      const endY = Math.max(minMarginY, Math.min(maxMarginY, rawEndY));
+
+      const midX = (startX + endX) / 2;
+      const midY = (startY + endY) / 2;
+
+      // Ensure start is on land and end is in water
+      if (!terrain.isWater(startX, startY) && terrain.isWater(endX, endY)) {
+        const townPier: TownPier = {
+          id: `pier_${seed}_waterfront`,
+          name: '水辺の桟橋 (Pier)',
+          kind: 'pier',
+          variant: 'pier',
+          points: [
+            [startX, startY],
+            [midX, midY],
+            [endX, endY],
+          ],
+          widthM: 5.5,
+        };
+        objects.push(townPier);
+        pierPlaced = true;
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
-  // 5. Buildings Placement (~150 buildings with zero overlap)
+  // 5. Buildings Placement (Zero building placed on water)
   // ---------------------------------------------------------------------------
   const buildings: TownBuilding[] = [];
   const placedBoxes: { minX: number; minY: number; maxX: number; maxY: number }[] = [];
@@ -250,7 +397,6 @@ export function generateSampleTown(
     return false;
   };
 
-  // Helper to create rotated rectangular building polygon
   const createRectPoly = (
     bx: number,
     by: number,
@@ -280,23 +426,26 @@ export function generateSampleTown(
   const keepW = metersToUnits(18, metersPerUnit);
   const keepH = metersToUnits(24, metersPerUnit);
   const keepPoly = createRectPoly(keepX, keepY, keepW, keepH, 0.08);
-  const keepBox = {
-    minX: keepX - keepW / 2 - 2,
-    minY: keepY - keepH / 2 - 2,
-    maxX: keepX + keepW / 2 + 2,
-    maxY: keepY + keepH / 2 + 2,
-  };
-  placedBoxes.push(keepBox);
 
-  buildings.push({
-    id: `bld_${seed}_keep`,
-    name: '領主の主城 (Keep)',
-    kind: 'building',
-    buildingKind: 'keep',
-    polygon: keepPoly,
-    heightM: 22,
-    tone: 0.1,
-  });
+  if (isBuildingOnWater(keepPoly)) {
+    skippedBuildingsCount++;
+  } else {
+    placedBoxes.push({
+      minX: keepX - keepW / 2 - 2,
+      minY: keepY - keepH / 2 - 2,
+      maxX: keepX + keepW / 2 + 2,
+      maxY: keepY + keepH / 2 + 2,
+    });
+    buildings.push({
+      id: `bld_${seed}_keep`,
+      name: '領主の主城 (Keep)',
+      kind: 'building',
+      buildingKind: 'keep',
+      polygon: keepPoly,
+      heightM: 22,
+      tone: 0.1,
+    });
+  }
 
   // Centerpiece 2: Grand Cathedral / Church (near Market)
   const churchX = cx + rx * 0.28;
@@ -304,21 +453,26 @@ export function generateSampleTown(
   const churchW = metersToUnits(16, metersPerUnit);
   const churchH = metersToUnits(26, metersPerUnit);
   const churchPoly = createRectPoly(churchX, churchY, churchW, churchH, -0.15);
-  placedBoxes.push({
-    minX: churchX - churchW / 2 - 2,
-    minY: churchY - churchH / 2 - 2,
-    maxX: churchX + churchW / 2 + 2,
-    maxY: churchY + churchH / 2 + 2,
-  });
-  buildings.push({
-    id: `bld_${seed}_church`,
-    name: '大聖堂 (Cathedral)',
-    kind: 'building',
-    buildingKind: 'church',
-    polygon: churchPoly,
-    heightM: 19,
-    tone: 0.25,
-  });
+
+  if (isBuildingOnWater(churchPoly)) {
+    skippedBuildingsCount++;
+  } else {
+    placedBoxes.push({
+      minX: churchX - churchW / 2 - 2,
+      minY: churchY - churchH / 2 - 2,
+      maxX: churchX + churchW / 2 + 2,
+      maxY: churchY + churchH / 2 + 2,
+    });
+    buildings.push({
+      id: `bld_${seed}_church`,
+      name: '大聖堂 (Cathedral)',
+      kind: 'building',
+      buildingKind: 'church',
+      polygon: churchPoly,
+      heightM: 19,
+      tone: 0.25,
+    });
+  }
 
   // Centerpiece 3: Watchtower / Bell Tower
   const towerX = cx + rx * 0.02;
@@ -332,21 +486,26 @@ export function generateSampleTown(
       towerY + Math.sin(ang) * towerRadius,
     ]);
   }
-  placedBoxes.push({
-    minX: towerX - towerRadius - 2,
-    minY: towerY - towerRadius - 2,
-    maxX: towerX + towerRadius + 2,
-    maxY: towerY + towerRadius + 2,
-  });
-  buildings.push({
-    id: `bld_${seed}_tower`,
-    name: '鐘楼・見張り塔',
-    kind: 'building',
-    buildingKind: 'tower',
-    polygon: towerPoly,
-    heightM: 17,
-    tone: 0.85,
-  });
+
+  if (isBuildingOnWater(towerPoly)) {
+    skippedBuildingsCount++;
+  } else {
+    placedBoxes.push({
+      minX: towerX - towerRadius - 2,
+      minY: towerY - towerRadius - 2,
+      maxX: towerX + towerRadius + 2,
+      maxY: towerY + towerRadius + 2,
+    });
+    buildings.push({
+      id: `bld_${seed}_tower`,
+      name: '鐘楼・見張り塔',
+      kind: 'building',
+      buildingKind: 'tower',
+      polygon: towerPoly,
+      heightM: 17,
+      tone: 0.85,
+    });
+  }
 
   // Generate townhouses across the inner districts
   const candidateDistricts = [
@@ -361,7 +520,6 @@ export function generateSampleTown(
     let placed = 0;
     let attempts = 0;
 
-    // District bounds
     let dMinX = Infinity;
     let dMinY = Infinity;
     let dMaxX = -Infinity;
@@ -379,7 +537,6 @@ export function generateSampleTown(
       const by = dMinY + rng() * (dMaxY - dMinY);
 
       if (!pointInPolygon([bx, by], dist.polygon)) continue;
-      // Also ensure within main town wall
       if (!pointInPolygon([bx, by], wallPoints)) continue;
 
       const bwM = 6.0 + rng() * 6.0;
@@ -387,6 +544,14 @@ export function generateSampleTown(
       const bwUnits = metersToUnits(bwM, metersPerUnit);
       const bhUnits = metersToUnits(bhM, metersPerUnit);
       const angle = (rng() - 0.5) * 0.4;
+
+      const poly = createRectPoly(bx, by, bwUnits, bhUnits, angle);
+
+      // Water collision check: Discard building if centroid or vertices sit on water
+      if (isBuildingOnWater(poly)) {
+        skippedBuildingsCount++;
+        continue;
+      }
 
       const halfD = Math.max(bwUnits, bhUnits) * 0.7;
       const box = {
@@ -401,7 +566,6 @@ export function generateSampleTown(
       placedBoxes.push(box);
       placed++;
 
-      const poly = createRectPoly(bx, by, bwUnits, bhUnits, angle);
       buildings.push({
         id: `bld_${seed}_${bldIndex++}`,
         name: type === 'shop' ? '商家・工房' : type === 'hall' ? '邸宅' : '町屋',
@@ -429,6 +593,14 @@ export function generateSampleTown(
     const bwUnits = metersToUnits(bwM, metersPerUnit);
     const bhUnits = metersToUnits(bhM, metersPerUnit);
 
+    const poly = createRectPoly(fx, fy, bwUnits, bhUnits, rng() * Math.PI);
+
+    // Water collision check
+    if (isBuildingOnWater(poly)) {
+      skippedBuildingsCount++;
+      continue;
+    }
+
     const halfD = Math.max(bwUnits, bhUnits) * 0.7;
     const box = {
       minX: fx - halfD - 1.5,
@@ -442,7 +614,6 @@ export function generateSampleTown(
     placedBoxes.push(box);
     barnsPlaced++;
 
-    const poly = createRectPoly(fx, fy, bwUnits, bhUnits, rng() * Math.PI);
     buildings.push({
       id: `bld_${seed}_barn_${barnsPlaced}`,
       name: '納屋・畜舎 (Barn)',
@@ -457,8 +628,15 @@ export function generateSampleTown(
   // Push buildings
   objects.push(...buildings);
 
-  // Push wall last so it sits in objects array according to specification
+  // Push wall last
   objects.push(wall);
 
-  return objects;
+  // Attach execution statistics to the returned array
+  const result = objects as SampleTownResult;
+  result.stats = {
+    skippedBuildingsCount,
+    pierPlaced,
+  };
+
+  return result;
 }

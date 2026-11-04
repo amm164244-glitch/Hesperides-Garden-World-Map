@@ -1,7 +1,8 @@
 /**
  * Town Vector Cartography 2D Renderer
  * Renders districts, roads, piers, buildings, and fortified walls onto the 2D map overlay canvas.
- * Implements Tolkien & historical antique map styling with viewport culling and LOD optimizations.
+ * Implements Tolkien & historical antique map styling with viewport culling, LOD optimizations,
+ * and customizable architectural roof themes (terracotta, thatch, slate, stone).
  */
 
 import {
@@ -12,6 +13,7 @@ import {
   TownObjectBounds,
   TownPier,
   TownRoad,
+  TownRoofTheme,
   TownWall,
 } from '../../types/town';
 import { hatchPoly, makeRng, roughen } from '../penSymbols';
@@ -23,13 +25,20 @@ import {
   polygonCentroid,
   sampleCatmullRom,
 } from './townGeometry';
-import { getRoofColor, TOWN_STYLE } from './townStyle';
+import {
+  getBuildingOutlineMultiplier,
+  getBuildingShadowColor,
+  getRoofColor,
+  TOWN_STYLE,
+} from './townStyle';
 
 export interface DrawTownOptions {
   metersPerUnit: number;
   zoomPx: number; // viewport.zoom * dpr
   viewBounds: TownObjectBounds;
   selectedId?: string | null;
+  selectedIds?: string[];
+  roofTheme?: TownRoofTheme;
 }
 
 // In-memory cache for roughened polygon/polyline coordinates to ensure deterministic, zero-jitter rendering.
@@ -101,7 +110,7 @@ export function drawTownObjects(
 ): void {
   if (!objects || objects.length === 0) return;
 
-  const { metersPerUnit, zoomPx, viewBounds, selectedId } = opts;
+  const { metersPerUnit, zoomPx, viewBounds, selectedId, roofTheme = 'terracotta' } = opts;
 
   // Filter visible objects via viewport AABB check
   const visible = objects.filter((obj) => {
@@ -148,7 +157,7 @@ export function drawTownObjects(
 
   ctx.save();
   for (const bld of buildings) {
-    drawBuilding(ctx, bld, metersPerUnit, zoomPx);
+    drawBuilding(ctx, bld, metersPerUnit, zoomPx, roofTheme);
   }
   ctx.restore();
 
@@ -162,10 +171,16 @@ export function drawTownObjects(
   ctx.restore();
 
   // 6. Selected object outline highlight (Amber #f59e0b)
-  if (selectedId) {
-    const target = visible.find((o) => o.id === selectedId);
-    if (target) {
-      drawSelectionHighlight(ctx, target, zoomPx);
+  const selectedSet = new Set<string>();
+  if (selectedId) selectedSet.add(selectedId);
+  if (selectedIds) {
+    for (const id of selectedIds) selectedSet.add(id);
+  }
+  if (selectedSet.size > 0) {
+    for (const obj of visible) {
+      if (selectedSet.has(obj.id)) {
+        drawSelectionHighlight(ctx, obj, zoomPx);
+      }
     }
   }
 }
@@ -331,7 +346,8 @@ function drawBuilding(
   ctx: CanvasRenderingContext2D,
   bld: TownBuilding,
   metersPerUnit: number,
-  zoomPx: number
+  zoomPx: number,
+  roofTheme: TownRoofTheme = 'terracotta'
 ): void {
   const rawPoly = bld.polygon;
   if (!rawPoly || rawPoly.length < 3) return;
@@ -347,7 +363,7 @@ function drawBuilding(
 
   const isKeep = bld.buildingKind === 'keep';
   const isTower = bld.buildingKind === 'tower';
-  const roofColor = getRoofColor(bld.tone, isKeep);
+  const roofColor = getRoofColor(bld.buildingKind, bld.tone, roofTheme);
 
   // 2. Smaller than 4px on screen -> simple flat fill without outline or hatch
   if (screenPx < 4.0) {
@@ -367,12 +383,13 @@ function drawBuilding(
   const poly = getCachedRoughened(bld.id, rawPoly, roughAmount);
 
   // Base cast shadow on South-East (shifted right and down)
+  // Shadow opacity is adjusted based on theme (slightly darker on stone to stand out from ground)
   const heightUnits = metersToUnits(bld.heightM, metersPerUnit);
   const shadowDist = Math.max(0.6, heightUnits * 0.35);
   const shadowShiftX = shadowDist * 0.7;
   const shadowShiftY = shadowDist * 0.7;
 
-  ctx.fillStyle = TOWN_STYLE.inkShadow;
+  ctx.fillStyle = getBuildingShadowColor(roofTheme);
   ctx.beginPath();
   ctx.moveTo(poly[0][0] + shadowShiftX, poly[0][1] + shadowShiftY);
   for (let i = 1; i < poly.length; i++) {
@@ -393,7 +410,6 @@ function drawBuilding(
 
   // Shading from North-West light: South-East half hatch lines
   const centroid = polygonCentroid(poly);
-  // Clip half-plane: SE side (x + y >= cx + cy)
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(poly[0][0], poly[0][1]);
@@ -407,8 +423,6 @@ function drawBuilding(
   const diagCut = centroid[0] + centroid[1];
   const big = Math.max(wUnits, hUnits) * 3;
   ctx.beginPath();
-  // Cut line passing through centroid with normal (1, 1)
-  // Polygon covering SE side
   ctx.moveTo(centroid[0] - big, centroid[1] + big);
   ctx.lineTo(centroid[0] + big * 2, centroid[1] - big * 2);
   ctx.lineTo(centroid[0] + big * 3, centroid[1] + big * 3);
@@ -426,9 +440,10 @@ function drawBuilding(
   hatchPoly(ctx, poly as [number, number][], Math.PI / 4, hatchSpacing);
   ctx.restore();
 
-  // Ink Outline
+  // Ink Outline: ~1.2x strengthened, with keeps and stone theme further accented
+  const outlineMult = getBuildingOutlineMultiplier(roofTheme, isKeep, isTower);
   ctx.strokeStyle = TOWN_STYLE.ink;
-  ctx.lineWidth = (isKeep ? 1.8 : isTower ? 1.4 : 1.0) / Math.max(0.001, zoomPx);
+  ctx.lineWidth = outlineMult / Math.max(0.001, zoomPx);
   ctx.beginPath();
   ctx.moveTo(poly[0][0], poly[0][1]);
   for (let i = 1; i < poly.length; i++) {
@@ -464,7 +479,6 @@ function drawWall(
     if (segmentGates.length === 0) {
       segments.push({ p0, p1 });
     } else {
-      // Sort gates by t
       segmentGates.sort((a, b) => a.t - b.t);
       const edgeLen = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
       let lastT = 0;
@@ -482,7 +496,6 @@ function drawWall(
           });
         }
 
-        // Draw small square gatehouse towers at gate edges
         drawGatehouse(ctx, p0, p1, tStart, tEnd, wallWidth, zoomPx);
         lastT = tEnd;
       }
@@ -527,7 +540,6 @@ function drawWall(
 
     for (let i = 0; i < pts.length; i++) {
       const tp = pts[i];
-      // Circular stone tower
       ctx.beginPath();
       ctx.arc(tp[0], tp[1], radius, 0, Math.PI * 2);
       ctx.fillStyle = TOWN_STYLE.stoneTower;

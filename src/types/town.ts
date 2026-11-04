@@ -4,6 +4,12 @@ export type TownDistrictKind = 'residential' | 'market' | 'noble' | 'poor' | 'pa
 export type TownBuildingKind = 'house' | 'shop' | 'hall' | 'church' | 'keep' | 'tower' | 'barn';
 export type TownRoadStyle = 'main' | 'street' | 'path';
 
+export type TownRoofTheme = 'terracotta' | 'thatch' | 'slate' | 'stone';
+
+export interface TownStyle {
+  roofTheme: TownRoofTheme;
+}
+
 interface TownObjectBase {
   id: string;
   name?: string;
@@ -62,3 +68,31 @@ export interface TownObjectBounds {
   maxX: number;
   maxY: number;
 }
+
+export interface TownToolConfig {
+  roadStyle: TownRoadStyle;
+  roadWidthM: number;
+  roadSmooth: boolean;
+  wallThicknessM: number;
+  wallClosed: boolean;
+  wallTowers: boolean;
+  wallTowerRadiusM: number;
+  pierVariant: 'pier' | 'bridge';
+  pierWidthM: number;
+  snapEnabled: boolean;
+  showLengths: boolean;
+}
+
+export const DEFAULT_TOWN_TOOL_CONFIG: TownToolConfig = {
+  roadStyle: 'street',
+  roadWidthM: 6,
+  roadSmooth: true,
+  wallThicknessM: 4,
+  wallClosed: false,
+  wallTowers: true,
+  wallTowerRadiusM: 3.5,
+  pierVariant: 'pier',
+  pierWidthM: 4,
+  snapEnabled: true,
+  showLengths: true,
+};

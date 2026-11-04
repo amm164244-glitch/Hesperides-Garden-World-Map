@@ -42,8 +42,30 @@ import {
   findEnclosingIslandContour,
   CoastlineSnapResult,
 } from '../utils/coastlineSelection';
-import { TownObject } from '../types/town';
+import {
+  DEFAULT_TOWN_TOOL_CONFIG,
+  Pt,
+  TownObject,
+  TownPier,
+  TownRoad,
+  TownToolConfig,
+  TownWall,
+} from '../types/town';
 import { drawTownObjects } from '../utils/town/townRenderer';
+import {
+  addGate,
+  getGateWorldPosition,
+  hitTestTownObjects,
+  insertVertex,
+  moveGate,
+  moveVertex,
+  nearestPointOnPolyline,
+  objectsInRect,
+  snapAngle,
+  snapPoint,
+  translateObject,
+} from '../utils/town/townEdit';
+import { polylineLength } from '../utils/town/townGeometry';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -92,6 +114,11 @@ interface MapCanvasProps {
   showTownObjects?: boolean;
   selectedTownObjectId?: string | null;
   onSelectTownObjectId?: (id: string | null) => void;
+  selectedTownObjectIds?: string[];
+  onSelectTownObjectIds?: (ids: string[]) => void;
+  townToolConfig?: TownToolConfig;
+  isAddingGateMode?: boolean;
+  onToggleAddingGateMode?: (enabled: boolean) => void;
   onUpdateTownObjects?: (objects: TownObject[]) => void;
   dimOutsideRegion?: boolean;
 }
@@ -123,6 +150,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   showTownObjects = true,
   selectedTownObjectId = null,
   onSelectTownObjectId,
+  selectedTownObjectIds = [],
+  onSelectTownObjectIds,
+  townToolConfig = DEFAULT_TOWN_TOOL_CONFIG,
+  isAddingGateMode = false,
+  onToggleAddingGateMode,
   onUpdateTownObjects,
   dimOutsideRegion = true,
   biomeSettings,
@@ -271,6 +303,221 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       snappedCoastRef.current = null;
     }
   }, [brushSettings.mode]);
+
+  // Town Editing State & Helpers
+  const effectiveTownSelectedIds = useMemo(() => {
+    if (selectedTownObjectIds && selectedTownObjectIds.length > 0) return selectedTownObjectIds;
+    if (selectedTownObjectId) return [selectedTownObjectId];
+    return [];
+  }, [selectedTownObjectIds, selectedTownObjectId]);
+
+  const [drawingTownPoints, setDrawingTownPoints] = useState<Pt[]>([]);
+  const [townMarqueeBox, setTownMarqueeBox] = useState<{
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+
+  const townDragRef = useRef<{
+    type: 'translate' | 'vertex' | 'gate' | 'marquee';
+    startWorldPos: Pt;
+    objectId?: string;
+    vertexIndex?: number;
+    gateIndex?: number;
+    initialObjects: TownObject[];
+    hasMoved?: boolean;
+  } | null>(null);
+
+  const currentTownObjectsRef = useRef<TownObject[]>(townObjects);
+  currentTownObjectsRef.current = townObjects;
+
+  const metersPerUnit = useMemo(() => {
+    return (effectiveWidthKm * 1000) / currentWidth;
+  }, [effectiveWidthKm, currentWidth]);
+
+  // Reset drawing points when switching away from town drawing tools
+  useEffect(() => {
+    if (
+      brushSettings.mode !== 'townRoad' &&
+      brushSettings.mode !== 'townWall' &&
+      brushSettings.mode !== 'townPier'
+    ) {
+      setDrawingTownPoints([]);
+    }
+  }, [brushSettings.mode]);
+
+  // Candidates for snapping (8px on screen)
+  const townSnapCandidates = useMemo(() => {
+    if (activeRegionalMap?.kind !== 'town' || !townToolConfig.snapEnabled) return [];
+    const pts: Pt[] = [];
+    for (const obj of townObjects) {
+      const objPts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
+      for (const p of objPts) {
+        pts.push(p);
+      }
+    }
+    if (drawingTownPoints.length > 0) {
+      pts.push(drawingTownPoints[0]);
+    }
+    return pts;
+  }, [activeRegionalMap?.kind, townToolConfig.snapEnabled, townObjects, drawingTownPoints]);
+
+  // Find active handle of a selected object under cursor
+  const findTownHandleUnderCursor = useCallback(
+    (worldPos: Pt, toleranceUnits: number) => {
+      if (effectiveTownSelectedIds.length === 0) return null;
+      const selectedSet = new Set(effectiveTownSelectedIds);
+      const selectedObjs = townObjects.filter((o) => selectedSet.has(o.id));
+
+      // 1. Gate handles
+      for (const obj of selectedObjs) {
+        if (obj.kind === 'wall') {
+          for (let gIdx = 0; gIdx < obj.gates.length; gIdx++) {
+            const g = obj.gates[gIdx];
+            const gp = getGateWorldPosition(obj, g);
+            if (Math.hypot(worldPos[0] - gp[0], worldPos[1] - gp[1]) <= toleranceUnits) {
+              return { type: 'gate' as const, objectId: obj.id, gateIndex: gIdx, p: gp };
+            }
+          }
+        }
+      }
+
+      // 2. Vertex handles
+      for (const obj of selectedObjs) {
+        const pts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
+        for (let vIdx = 0; vIdx < pts.length; vIdx++) {
+          const p = pts[vIdx];
+          if (Math.hypot(worldPos[0] - p[0], worldPos[1] - p[1]) <= toleranceUnits) {
+            return { type: 'vertex' as const, objectId: obj.id, vertexIndex: vIdx, p };
+          }
+        }
+      }
+
+      // 3. Midpoint handles
+      for (const obj of selectedObjs) {
+        const pts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
+        const isClosed =
+          obj.kind === 'district' ||
+          obj.kind === 'building' ||
+          (obj.kind === 'wall' && obj.closed);
+        const numEdges = isClosed ? pts.length : pts.length - 1;
+        for (let eIdx = 0; eIdx < numEdges; eIdx++) {
+          const p0 = pts[eIdx];
+          const p1 = pts[(eIdx + 1) % pts.length];
+          const mp: Pt = [(p0[0] + p1[0]) * 0.5, (p0[1] + p1[1]) * 0.5];
+          if (Math.hypot(worldPos[0] - mp[0], worldPos[1] - mp[1]) <= toleranceUnits) {
+            return { type: 'midpoint' as const, objectId: obj.id, segmentIndex: eIdx, p: mp };
+          }
+        }
+      }
+
+      return null;
+    },
+    [effectiveTownSelectedIds, townObjects]
+  );
+
+  // Finalize in-progress line drawing into a new TownObject
+  const finalizeTownDrawing = useCallback(
+    (pointsToFinalize: Pt[], forceClosedWall: boolean = false) => {
+      if (pointsToFinalize.length < 2) {
+        setDrawingTownPoints([]);
+        return;
+      }
+
+      const mode = brushSettings.mode;
+      let newObj: TownObject | null = null;
+      const now = Date.now();
+      const rand = Math.random().toString(36).substring(2, 6);
+
+      if (mode === 'townRoad') {
+        const road: TownRoad = {
+          id: `road_${now}_${rand}`,
+          name: `道 ${townObjects.filter((o) => o.kind === 'road').length + 1}`,
+          kind: 'road',
+          style: townToolConfig.roadStyle,
+          widthM: townToolConfig.roadWidthM,
+          smooth: townToolConfig.roadSmooth,
+          points: pointsToFinalize,
+        };
+        newObj = road;
+      } else if (mode === 'townWall') {
+        const isClosed =
+          forceClosedWall ||
+          townToolConfig.wallClosed ||
+          (pointsToFinalize.length >= 3 &&
+            Math.hypot(
+              pointsToFinalize[0][0] - pointsToFinalize[pointsToFinalize.length - 1][0],
+              pointsToFinalize[0][1] - pointsToFinalize[pointsToFinalize.length - 1][1]
+            ) <
+              12 / viewport.zoom);
+
+        const wallPts =
+          isClosed &&
+          pointsToFinalize.length >= 3 &&
+          Math.hypot(
+            pointsToFinalize[0][0] - pointsToFinalize[pointsToFinalize.length - 1][0],
+            pointsToFinalize[0][1] - pointsToFinalize[pointsToFinalize.length - 1][1]
+          ) <
+            12 / viewport.zoom
+            ? pointsToFinalize.slice(0, pointsToFinalize.length - 1)
+            : pointsToFinalize;
+
+        const wall: TownWall = {
+          id: `wall_${now}_${rand}`,
+          name: `城壁 ${townObjects.filter((o) => o.kind === 'wall').length + 1}`,
+          kind: 'wall',
+          points: wallPts,
+          closed: isClosed,
+          thicknessM: townToolConfig.wallThicknessM,
+          towers: townToolConfig.wallTowers,
+          towerRadiusM: townToolConfig.wallTowerRadiusM,
+          gates: [],
+        };
+        newObj = wall;
+      } else if (mode === 'townPier') {
+        const pier: TownPier = {
+          id: `pier_${now}_${rand}`,
+          name: `${townToolConfig.pierVariant === 'pier' ? '桟橋' : '橋'} ${
+            townObjects.filter((o) => o.kind === 'pier').length + 1
+          }`,
+          kind: 'pier',
+          variant: townToolConfig.pierVariant,
+          widthM: townToolConfig.pierWidthM,
+          points: pointsToFinalize,
+        };
+        newObj = pier;
+      }
+
+      if (newObj) {
+        const nextObjects = [...townObjects, newObj];
+        onCommitHistory({
+          description: `${newObj.name || '町部品'}の作成`,
+          timestamp: Date.now(),
+          townChanges: {
+            prevObjects: townObjects,
+            newObjects: nextObjects,
+          },
+        });
+        onUpdateTownObjects?.(nextObjects);
+        onSelectTownObjectIds?.([newObj.id]);
+        onSelectTownObjectId?.(newObj.id);
+      }
+
+      setDrawingTownPoints([]);
+    },
+    [
+      brushSettings.mode,
+      townObjects,
+      townToolConfig,
+      viewport.zoom,
+      onCommitHistory,
+      onUpdateTownObjects,
+      onSelectTownObjectIds,
+      onSelectTownObjectId,
+    ]
+  );
+
 
   // Commits a shape (polygon / freehand) selection, calculates bounds with margin, and fits to limits
   const commitShapeSelection = useCallback(
@@ -1098,7 +1345,190 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         zoomPx: viewport.zoom * dpr,
         viewBounds,
         selectedId: selectedTownObjectId,
+        selectedIds: effectiveTownSelectedIds,
+        roofTheme: activeRegionalMap?.townStyle?.roofTheme ?? 'terracotta',
       });
+    }
+
+    // 3.6 Town Editing Interactive Overlays (Handles, In-progress Drawing, Marquee, Snap Target)
+    if (activeRegionalMap?.kind === 'town') {
+      const zoomPx = viewport.zoom * dpr;
+      const handleSizeUnits = 7 / zoomPx;
+      const midpointRadius = 3.5 / zoomPx;
+
+      // A. Vertex, Midpoint, and Gate Handles for Selected Objects
+      if (brushSettings.mode === 'townSelect' && effectiveTownSelectedIds.length > 0) {
+        const selectedSet = new Set(effectiveTownSelectedIds);
+        const selectedObjs = townObjects.filter((o) => selectedSet.has(o.id));
+
+        for (const obj of selectedObjs) {
+          const pts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
+          const isClosed =
+            obj.kind === 'district' ||
+            obj.kind === 'building' ||
+            (obj.kind === 'wall' && obj.closed);
+
+          // Edge Midpoint handles (circles for vertex insertion)
+          const numEdges = isClosed ? pts.length : pts.length - 1;
+          for (let eIdx = 0; eIdx < numEdges; eIdx++) {
+            const p0 = pts[eIdx];
+            const p1 = pts[(eIdx + 1) % pts.length];
+            const mx = (p0[0] + p1[0]) * 0.5;
+            const my = (p0[1] + p1[1]) * 0.5;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(mx, my, midpointRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#d97706';
+            ctx.lineWidth = 1.2 / zoomPx;
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Vertex handles (amber squares)
+          for (let vIdx = 0; vIdx < pts.length; vIdx++) {
+            const p = pts[vIdx];
+            ctx.save();
+            ctx.fillStyle = '#f59e0b';
+            ctx.strokeStyle = '#1c1917';
+            ctx.lineWidth = 1.5 / zoomPx;
+            ctx.fillRect(
+              p[0] - handleSizeUnits * 0.5,
+              p[1] - handleSizeUnits * 0.5,
+              handleSizeUnits,
+              handleSizeUnits
+            );
+            ctx.strokeRect(
+              p[0] - handleSizeUnits * 0.5,
+              p[1] - handleSizeUnits * 0.5,
+              handleSizeUnits,
+              handleSizeUnits
+            );
+            ctx.restore();
+          }
+
+          // Gate handles (sky-blue diamonds) for walls
+          if (obj.kind === 'wall') {
+            for (const g of obj.gates) {
+              const gp = getGateWorldPosition(obj, g);
+              const gs = 8 / zoomPx;
+              ctx.save();
+              ctx.translate(gp[0], gp[1]);
+              ctx.rotate(Math.PI / 4);
+              ctx.fillStyle = '#38bdf8';
+              ctx.strokeStyle = '#0f172a';
+              ctx.lineWidth = 1.5 / zoomPx;
+              ctx.fillRect(-gs * 0.5, -gs * 0.5, gs, gs);
+              ctx.strokeRect(-gs * 0.5, -gs * 0.5, gs, gs);
+              ctx.restore();
+            }
+          }
+        }
+      }
+
+      // B. Marquee Box Overlay
+      if (townMarqueeBox) {
+        const minX = Math.min(townMarqueeBox.startX, townMarqueeBox.currentX);
+        const maxX = Math.max(townMarqueeBox.startX, townMarqueeBox.currentX);
+        const minY = Math.min(townMarqueeBox.startY, townMarqueeBox.currentY);
+        const maxY = Math.max(townMarqueeBox.startY, townMarqueeBox.currentY);
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+        ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.5 / zoomPx;
+        ctx.setLineDash([5 / zoomPx, 4 / zoomPx]);
+        ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.restore();
+      }
+
+      // C. In-progress Line Drawing and Rubberband
+      if (
+        (brushSettings.mode === 'townRoad' ||
+          brushSettings.mode === 'townWall' ||
+          brushSettings.mode === 'townPier') &&
+        drawingTownPoints.length > 0
+      ) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
+        for (let i = 1; i < drawingTownPoints.length; i++) {
+          ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
+        }
+
+        const curPos = cursorPosRef.current;
+        let activeEndPt: Pt | null = null;
+        if (curPos) {
+          const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
+          let targetPt: Pt = [curPos.x, curPos.y];
+
+          // Snapping to existing vertices/endpoints (8px)
+          const snapTol = 8 / zoomPx;
+          if (townToolConfig.snapEnabled) {
+            const snapRes = snapPoint(targetPt, townSnapCandidates, snapTol);
+            if (snapRes.didSnap) {
+              targetPt = snapRes.snapped;
+            }
+          }
+
+          activeEndPt = targetPt;
+          ctx.lineTo(targetPt[0], targetPt[1]);
+        }
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2.0 / zoomPx;
+        ctx.setLineDash([5 / zoomPx, 4 / zoomPx]);
+        ctx.stroke();
+
+        // Placed vertex dots
+        for (let i = 0; i < drawingTownPoints.length; i++) {
+          const pt = drawingTownPoints[i];
+          const isStartWall = i === 0 && brushSettings.mode === 'townWall';
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], (isStartWall ? 5.5 : 3.5) / zoomPx, 0, Math.PI * 2);
+          ctx.fillStyle = isStartWall ? '#34d399' : '#f59e0b';
+          ctx.fill();
+          ctx.strokeStyle = '#1c1917';
+          ctx.lineWidth = 1.0 / zoomPx;
+          ctx.stroke();
+        }
+
+        // Segment distance and total length badge
+        if (activeEndPt && townToolConfig.showLengths) {
+          const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
+          const segDistM = Math.round(
+            Math.hypot(activeEndPt[0] - lastPt[0], activeEndPt[1] - lastPt[1]) * metersPerUnit
+          );
+          const totalDistM = Math.round(
+            (polylineLength(drawingTownPoints) +
+              Math.hypot(activeEndPt[0] - lastPt[0], activeEndPt[1] - lastPt[1])) *
+              metersPerUnit
+          );
+
+          const midX = (lastPt[0] + activeEndPt[0]) * 0.5;
+          const midY = (lastPt[1] + activeEndPt[1]) * 0.5;
+
+          const label = `${segDistM}m (計 ${totalDistM}m)`;
+          ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+          ctx.setLineDash([]);
+          const textMetrics = ctx.measureText(label);
+          const pad = 3.5 / viewport.zoom;
+          ctx.fillStyle = 'rgba(28, 25, 23, 0.9)';
+          ctx.fillRect(
+            midX - pad,
+            midY - 12 / viewport.zoom - pad,
+            textMetrics.width + pad * 2,
+            14 / viewport.zoom
+          );
+          ctx.fillStyle = '#fef3c7';
+          ctx.fillText(label, midX, midY - 2 / viewport.zoom);
+        }
+
+        ctx.restore();
+      }
     }
 
     // 4. Cartographic Tolkien-style Symbols (Mountains, Forests, Settlements, Maritime)
@@ -1172,7 +1602,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     biomeSettings?.opacity,
     currentBiomeGrid,
     dimOutsideRegion,
+    townObjects,
+    showTownObjects,
+    selectedTownObjectId,
+    activeRegionalMap?.townStyle?.roofTheme,
   ]);
+
+  // Keep town objects overlay in sync whenever showTownObjects, townObjects, or roofTheme updates
+  useEffect(() => {
+    renderOverlay();
+  }, [showTownObjects, townObjects, activeRegionalMap?.townStyle?.roofTheme, renderOverlay]);
 
   // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
   useEffect(() => {
@@ -1193,7 +1632,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     ctx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
     const curPos = cursorPosRef.current;
-    if (!curPos || brushSettings.mode === 'pan' || brushSettings.mode === 'selectRegion') {
+    const isTownMode =
+      brushSettings.mode === 'townSelect' ||
+      brushSettings.mode === 'townRoad' ||
+      brushSettings.mode === 'townWall' ||
+      brushSettings.mode === 'townPier';
+    if (!curPos || brushSettings.mode === 'pan' || brushSettings.mode === 'selectRegion' || isTownMode) {
       return;
     }
 
@@ -1355,6 +1799,107 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           setSelectionBox(null);
           setConfirmedShape(null);
           return;
+        }
+      }
+
+      // Town Tools Keyboard Controls
+      if (activeRegionalMap?.kind === 'town') {
+        // Drawing tools: Enter to finish, Escape to cancel, Backspace to pop point
+        if (
+          brushSettings.mode === 'townRoad' ||
+          brushSettings.mode === 'townWall' ||
+          brushSettings.mode === 'townPier'
+        ) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (drawingTownPoints.length >= 2) {
+              finalizeTownDrawing(drawingTownPoints);
+            }
+            return;
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setDrawingTownPoints([]);
+            renderOverlay();
+            return;
+          }
+          if (e.key === 'Backspace' && drawingTownPoints.length > 0) {
+            e.preventDefault();
+            setDrawingTownPoints((prev) => prev.slice(0, prev.length - 1));
+            renderOverlay();
+            return;
+          }
+        }
+
+        // Town Select tool: Del/Backspace to delete, Ctrl+A to select all, Esc to deselect, Arrows to nudge
+        if (brushSettings.mode === 'townSelect') {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            onSelectTownObjectIds?.([]);
+            onSelectTownObjectId?.(null);
+            onToggleAddingGateMode?.(false);
+            renderOverlay();
+            return;
+          }
+
+          if ((e.key === 'Delete' || e.key === 'Backspace') && effectiveTownSelectedIds.length > 0) {
+            e.preventDefault();
+            const toDelete = new Set(effectiveTownSelectedIds);
+            const next = townObjects.filter((o) => !toDelete.has(o.id));
+            onCommitHistory({
+              description: effectiveTownSelectedIds.length === 1 ? '町部品の削除' : '町部品の一括削除',
+              timestamp: Date.now(),
+              townChanges: {
+                prevObjects: townObjects,
+                newObjects: next,
+              },
+            });
+            onUpdateTownObjects?.(next);
+            onSelectTownObjectIds?.([]);
+            onSelectTownObjectId?.(null);
+            renderOverlay();
+            return;
+          }
+
+          if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+            e.preventDefault();
+            const allIds = townObjects.map((o) => o.id);
+            onSelectTownObjectIds?.(allIds);
+            onSelectTownObjectId?.(allIds[0] ?? null);
+            renderOverlay();
+            return;
+          }
+
+          if (
+            ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) &&
+            effectiveTownSelectedIds.length > 0
+          ) {
+            e.preventDefault();
+            const stepM = e.shiftKey ? 5 : 1;
+            const stepUnits = (stepM * currentWidth) / Math.max(1, effectiveWidthKm * 1000);
+            let dx = 0;
+            let dy = 0;
+            if (e.key === 'ArrowLeft') dx = -stepUnits;
+            if (e.key === 'ArrowRight') dx = stepUnits;
+            if (e.key === 'ArrowUp') dy = -stepUnits;
+            if (e.key === 'ArrowDown') dy = stepUnits;
+
+            const selectedSet = new Set(effectiveTownSelectedIds);
+            const next = townObjects.map((o) =>
+              selectedSet.has(o.id) ? translateObject(o, dx, dy) : o
+            );
+            onCommitHistory({
+              description: '町部品の微調整移動',
+              timestamp: Date.now(),
+              townChanges: {
+                prevObjects: townObjects,
+                newObjects: next,
+              },
+            });
+            onUpdateTownObjects?.(next);
+            renderOverlay();
+            return;
+          }
         }
       }
 
@@ -1521,6 +2066,190 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     onInteractingChange?.(true);
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     const worldPos = screenToWorld(e.clientX, e.clientY);
+
+    // Town Tools: Line Drawing (townRoad, townWall, townPier) and Selection (townSelect)
+    if (activeRegionalMap?.kind === 'town') {
+      const dpr = glCanvasRef.current ? glCanvasRef.current.width / (glCanvasRef.current.clientWidth || 1) : 1;
+      const zoomPx = viewport.zoom * dpr;
+      const toleranceUnits = 8 / zoomPx;
+
+      // 1. Line Drawing Tools
+      if (
+        brushSettings.mode === 'townRoad' ||
+        brushSettings.mode === 'townWall' ||
+        brushSettings.mode === 'townPier'
+      ) {
+        let clickPt: Pt = [worldPos.x, worldPos.y];
+
+        // Snapping candidate check (unless Alt held)
+        if (townToolConfig.snapEnabled && !e.altKey) {
+          const snapRes = snapPoint(clickPt, townSnapCandidates, toleranceUnits);
+          if (snapRes.didSnap) {
+            clickPt = snapRes.snapped;
+          }
+        }
+
+        // 15-degree constraint if Shift held
+        if (e.shiftKey && drawingTownPoints.length > 0) {
+          clickPt = snapAngle(drawingTownPoints[drawingTownPoints.length - 1], clickPt, 15);
+        }
+
+        if (drawingTownPoints.length > 0) {
+          // If wall and clicked on start point: close wall loop!
+          if (
+            brushSettings.mode === 'townWall' &&
+            Math.hypot(clickPt[0] - drawingTownPoints[0][0], clickPt[1] - drawingTownPoints[0][1]) <= toleranceUnits &&
+            drawingTownPoints.length >= 2
+          ) {
+            finalizeTownDrawing(drawingTownPoints, true);
+            renderOverlay();
+            return;
+          }
+
+          // If clicked very close to last point (double-click to finish)
+          const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
+          if (Math.hypot(clickPt[0] - lastPt[0], clickPt[1] - lastPt[1]) <= 2 / viewport.zoom) {
+            finalizeTownDrawing(drawingTownPoints);
+            renderOverlay();
+            return;
+          }
+        }
+
+        setDrawingTownPoints((prev) => [...prev, clickPt]);
+        renderOverlay();
+        return;
+      }
+
+      // 2. Selection & Edit Tool (townSelect)
+      if (brushSettings.mode === 'townSelect') {
+        const handle = findTownHandleUnderCursor([worldPos.x, worldPos.y], toleranceUnits);
+
+        // A. Adding Gate Mode
+        if (isAddingGateMode) {
+          const wallHit = hitTestTownObjects(
+            townObjects.filter((o) => o.kind === 'wall'),
+            [worldPos.x, worldPos.y],
+            toleranceUnits * 1.5,
+            metersPerUnit
+          ) as TownWall | null;
+          if (wallHit) {
+            const nearest = nearestPointOnPolyline(wallHit.points, [worldPos.x, worldPos.y], wallHit.closed);
+            const updated = addGate(wallHit, nearest.segmentIndex, nearest.t, 4);
+            const next = townObjects.map((o) => (o.id === wallHit.id ? updated : o));
+            onCommitHistory({
+              description: '城門の追加',
+              timestamp: Date.now(),
+              townChanges: {
+                prevObjects: townObjects,
+                newObjects: next,
+              },
+            });
+            onUpdateTownObjects?.(next);
+            onToggleAddingGateMode?.(false);
+            renderOverlay();
+            return;
+          }
+        }
+
+        // B. Gate Handle Drag
+        if (handle && handle.type === 'gate') {
+          townDragRef.current = {
+            type: 'gate',
+            startWorldPos: [worldPos.x, worldPos.y],
+            objectId: handle.objectId,
+            gateIndex: handle.gateIndex,
+            initialObjects: [...townObjects],
+            hasMoved: false,
+          };
+          return;
+        }
+
+        // C. Vertex Handle Drag
+        if (handle && handle.type === 'vertex') {
+          townDragRef.current = {
+            type: 'vertex',
+            startWorldPos: [worldPos.x, worldPos.y],
+            objectId: handle.objectId,
+            vertexIndex: handle.vertexIndex,
+            initialObjects: [...townObjects],
+            hasMoved: false,
+          };
+          return;
+        }
+
+        // D. Midpoint Handle Click (Insert new vertex and start dragging it)
+        if (handle && handle.type === 'midpoint') {
+          const targetObj = townObjects.find((o) => o.id === handle.objectId);
+          if (targetObj) {
+            const inserted = insertVertex(targetObj, handle.segmentIndex!, handle.p);
+            const next = townObjects.map((o) => (o.id === targetObj.id ? inserted : o));
+            onUpdateTownObjects?.(next);
+            townDragRef.current = {
+              type: 'vertex',
+              startWorldPos: [worldPos.x, worldPos.y],
+              objectId: targetObj.id,
+              vertexIndex: handle.segmentIndex! + 1,
+              initialObjects: [...townObjects],
+              hasMoved: true,
+            };
+            renderOverlay();
+            return;
+          }
+        }
+
+        // E. Object Hit Test
+        const hit = hitTestTownObjects(townObjects, [worldPos.x, worldPos.y], toleranceUnits, metersPerUnit);
+        if (hit) {
+          if (e.shiftKey) {
+            // Toggle selection
+            const currentSelected = new Set(effectiveTownSelectedIds);
+            if (currentSelected.has(hit.id)) {
+              currentSelected.delete(hit.id);
+            } else {
+              currentSelected.add(hit.id);
+            }
+            const nextList = Array.from(currentSelected);
+            onSelectTownObjectIds?.(nextList);
+            onSelectTownObjectId?.(nextList[0] ?? null);
+          } else {
+            // If already part of multi-selection, keep selection and drag all
+            if (!effectiveTownSelectedIds.includes(hit.id)) {
+              onSelectTownObjectIds?.([hit.id]);
+              onSelectTownObjectId?.(hit.id);
+            }
+            townDragRef.current = {
+              type: 'translate',
+              startWorldPos: [worldPos.x, worldPos.y],
+              initialObjects: [...townObjects],
+              hasMoved: false,
+            };
+          }
+          renderOverlay();
+          return;
+        }
+
+        // F. Empty space clicked -> Marquee selection or Deselect
+        if (!e.shiftKey) {
+          onSelectTownObjectIds?.([]);
+          onSelectTownObjectId?.(null);
+        }
+        townDragRef.current = {
+          type: 'marquee',
+          startWorldPos: [worldPos.x, worldPos.y],
+          initialObjects: [...townObjects],
+          hasMoved: false,
+        };
+        setTownMarqueeBox({
+          startX: worldPos.x,
+          startY: worldPos.y,
+          currentX: worldPos.x,
+          currentY: worldPos.y,
+        });
+        renderOverlay();
+        return;
+      }
+    }
+
     // 0. Click to navigate into a child region on Parent Map (Pan mode)
     if (brushSettings.mode === 'pan' && !isSpacePressed && onSelectRegionMap && mapData.regionalMaps) {
       const currentMapId = activeRegionalMap ? activeRegionalMap.id : null;
@@ -2023,6 +2752,91 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const worldPos = screenToWorld(e.clientX, e.clientY);
     cursorPosRef.current = worldPos;
 
+    // Town Dragging (Marquee / Translate / Vertex / Gate)
+    if (activeRegionalMap?.kind === 'town') {
+      if (townDragRef.current) {
+        townDragRef.current.hasMoved = true;
+        const drag = townDragRef.current;
+
+        if (drag.type === 'marquee') {
+          setTownMarqueeBox({
+            startX: drag.startWorldPos[0],
+            startY: drag.startWorldPos[1],
+            currentX: worldPos.x,
+            currentY: worldPos.y,
+          });
+          renderOverlay();
+          return;
+        }
+
+        if (drag.type === 'translate') {
+          const dx = worldPos.x - drag.startWorldPos[0];
+          const dy = worldPos.y - drag.startWorldPos[1];
+          const selectedSet = new Set(effectiveTownSelectedIds);
+          const next = drag.initialObjects.map((o) =>
+            selectedSet.has(o.id) ? translateObject(o, dx, dy) : o
+          );
+          onUpdateTownObjects?.(next);
+          renderOverlay();
+          return;
+        }
+
+        if (drag.type === 'vertex') {
+          let targetP: Pt = [worldPos.x, worldPos.y];
+          if (townToolConfig.snapEnabled && !e.altKey) {
+            const snapRes = snapPoint(targetP, townSnapCandidates, 8 / viewport.zoom);
+            if (snapRes.didSnap) {
+              targetP = snapRes.snapped;
+            }
+          }
+          if (e.shiftKey) {
+            const initialObj = drag.initialObjects.find((o) => o.id === drag.objectId);
+            const pts = initialObj
+              ? initialObj.kind === 'district' || initialObj.kind === 'building'
+                ? initialObj.polygon
+                : initialObj.points
+              : [];
+            const adjIdx = drag.vertexIndex! > 0 ? drag.vertexIndex! - 1 : 1;
+            if (pts[adjIdx]) {
+              targetP = snapAngle(pts[adjIdx], targetP, 15);
+            }
+          }
+          const objId = drag.objectId!;
+          const vIdx = drag.vertexIndex!;
+          const next = drag.initialObjects.map((o) =>
+            o.id === objId ? moveVertex(o, vIdx, targetP) : o
+          );
+          onUpdateTownObjects?.(next);
+          renderOverlay();
+          return;
+        }
+
+        if (drag.type === 'gate') {
+          const objId = drag.objectId!;
+          const gIdx = drag.gateIndex!;
+          const wall = drag.initialObjects.find((o) => o.id === objId) as TownWall | undefined;
+          if (wall) {
+            const nearest = nearestPointOnPolyline(wall.points, [worldPos.x, worldPos.y], wall.closed);
+            const updatedWall = moveGate(wall, gIdx, nearest.segmentIndex, nearest.t);
+            const next = drag.initialObjects.map((o) => (o.id === objId ? updatedWall : o));
+            onUpdateTownObjects?.(next);
+            renderOverlay();
+            return;
+          }
+        }
+      }
+
+      // Update rubberband line when drawing in progress
+      if (
+        (brushSettings.mode === 'townRoad' ||
+          brushSettings.mode === 'townWall' ||
+          brushSettings.mode === 'townPier') &&
+        drawingTownPoints.length > 0
+      ) {
+        renderOverlay();
+      }
+    }
+
     const isCoastlineAssisted = (
       brushSettings.mode === 'selectRegion' && (
         isAutoSelectingIsland ||
@@ -2320,7 +3134,55 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   };
 
   // Mouse Up
-  const handleMouseUp = () => {
+  const handleMouseUp = (e?: React.MouseEvent) => {
+    // Town Drag End / Marquee Commit
+    if (activeRegionalMap?.kind === 'town' && townDragRef.current) {
+      const drag = townDragRef.current;
+      townDragRef.current = null;
+
+      if (drag.type === 'marquee') {
+        if (townMarqueeBox) {
+          const minX = Math.min(townMarqueeBox.startX, townMarqueeBox.currentX);
+          const maxX = Math.max(townMarqueeBox.startX, townMarqueeBox.currentX);
+          const minY = Math.min(townMarqueeBox.startY, townMarqueeBox.currentY);
+          const maxY = Math.max(townMarqueeBox.startY, townMarqueeBox.currentY);
+
+          if (maxX - minX > 2 || maxY - minY > 2) {
+            const inRect = objectsInRect(townObjects, { minX, minY, maxX, maxY });
+            const foundIds = inRect.map((o) => o.id);
+            const finalIds = e?.shiftKey
+              ? Array.from(new Set([...effectiveTownSelectedIds, ...foundIds]))
+              : foundIds;
+            onSelectTownObjectIds?.(finalIds);
+            onSelectTownObjectId?.(finalIds[0] ?? null);
+          }
+          setTownMarqueeBox(null);
+        }
+        renderOverlay();
+        return;
+      }
+
+      if (drag.hasMoved) {
+        const desc =
+          drag.type === 'translate'
+            ? '町部品の移動'
+            : drag.type === 'vertex'
+            ? '頂点の編集'
+            : '城門の移動';
+
+        onCommitHistory({
+          description: desc,
+          timestamp: Date.now(),
+          townChanges: {
+            prevObjects: drag.initialObjects,
+            newObjects: currentTownObjectsRef.current,
+          },
+        });
+      }
+      renderOverlay();
+      return;
+    }
+
     if (isDraggingCompassRef.current) {
       isDraggingCompassRef.current = false;
       renderOverlay();
@@ -2475,6 +3337,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     ? 'cursor-grabbing'
     : isSpacePressed || brushSettings.mode === 'pan'
     ? 'cursor-grab'
+    : brushSettings.mode === 'townSelect'
+    ? 'cursor-default'
+    : brushSettings.mode === 'townRoad' ||
+      brushSettings.mode === 'townWall' ||
+      brushSettings.mode === 'townPier'
+    ? 'cursor-crosshair'
     : brushSettings.mode === 'stamp'
     ? 'cursor-pointer'
     : brushSettings.mode === 'symbolBrush'

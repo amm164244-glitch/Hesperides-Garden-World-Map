@@ -60,6 +60,7 @@ export interface RegionalMapData {
   outline?: [number, number][]; // 親マップ座標系での境界多角形頂点列
   outsideSea?: boolean;         // 外側を海にしたか (false の場合は親のまま生成)
   townObjects?: import('./town').TownObject[];
+  townStyle?: import('./town').TownStyle;
 }
 
 export interface ShapeMaskConfig {
@@ -161,6 +162,10 @@ export type BrushMode =
   | 'biomeFill'    // 地形タイプバケツ塗りつぶし
   | 'biomeErase'   // 地形タイプ消しゴム
   | 'selectRegion' // 地域範囲選択
+  | 'townSelect'   // 町部品選択・編集
+  | 'townRoad'     // 道描画
+  | 'townWall'     // 城壁描画
+  | 'townPier'     // 桟橋・橋描画
   | 'pan';         // 視点移動
 
 export interface BrushSettings {

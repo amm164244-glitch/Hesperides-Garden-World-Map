@@ -1,7 +1,7 @@
 import { MapData, RegionalMapData } from '../types/map';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { CustomMapAsset, CustomSymbolCategory } from '../types/symbols';
-import { deserializeMapData, sanitizeTownObjects } from './serialization';
+import { deserializeMapData, sanitizeTownObjects, sanitizeTownStyle } from './serialization';
 
 export const CURRENT_FWM_VERSION = 1;
 
@@ -776,6 +776,7 @@ export async function deserializeMapDataFromFwm(
       symbols: Array.isArray(regMeta.symbols) ? regMeta.symbols : [],
       outline: Array.isArray(regMeta.outline) ? regMeta.outline : undefined,
       townObjects: sanitizeTownObjects(regMeta.townObjects),
+      townStyle: sanitizeTownStyle(regMeta.townStyle, regMeta.kind),
     };
   }
 

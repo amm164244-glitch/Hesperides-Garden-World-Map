@@ -152,6 +152,23 @@ export function sanitizeTownObjects(raw: any): TownObject[] | undefined {
   return sanitized.length > 0 ? sanitized : undefined;
 }
 
+/**
+ * Validates and ensures proper townStyle configuration.
+ * Default is { roofTheme: 'terracotta' } for town maps when missing or invalid.
+ */
+export function sanitizeTownStyle(
+  raw: any,
+  kind?: string
+): import('../types/town').TownStyle | undefined {
+  if (kind !== 'town' && (!raw || typeof raw !== 'object')) return undefined;
+  const validThemes = new Set(['terracotta', 'thatch', 'slate', 'stone']);
+  const roofTheme =
+    raw && typeof raw === 'object' && validThemes.has(raw.roofTheme)
+      ? (raw.roofTheme as import('../types/town').TownRoofTheme)
+      : 'terracotta';
+  return { roofTheme };
+}
+
 function sanitizeBiomeGrid(grid: Uint8Array | undefined, validSlots: Set<number>): Uint8Array | undefined {
   if (!grid) return undefined;
   for (let i = 0; i < grid.length; i++) {
@@ -237,6 +254,7 @@ export function deserializeMapData(raw: any): MapData {
         outline: Array.isArray(regRaw.outline) ? regRaw.outline : undefined,
         outsideSea: typeof regRaw.outsideSea === 'boolean' ? regRaw.outsideSea : undefined,
         townObjects: sanitizeTownObjects(regRaw.townObjects),
+        townStyle: sanitizeTownStyle(regRaw.townStyle, regRaw.kind),
       };
     }
   }
