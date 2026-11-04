@@ -33,6 +33,7 @@ import {
   pointInPolygon,
   simplifyPolyline,
   smoothPolygon,
+  removeDegenerateSpikes,
 } from '../utils/regionShape';
 import {
   findNearestCoastlinePoint,
@@ -40,6 +41,8 @@ import {
   findEnclosingIslandContour,
   CoastlineSnapResult,
 } from '../utils/coastlineSelection';
+
+const COASTLINE_SNAP_PX = 24;
 import {
   DEFAULT_TOWN_TOOL_CONFIG,
   Pt,
@@ -608,7 +611,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   const commitShapeSelection = useCallback(
     (rawPolygon: [number, number][]) => {
       if (rawPolygon.length < 3) return;
-      const poly = smoothShape ? smoothPolygon(rawPolygon, 4) : [...rawPolygon];
+      const cleaned = removeDegenerateSpikes(rawPolygon, 2.0);
+      if (cleaned.length < 3) return;
+      const poly = smoothShape ? smoothPolygon(cleaned, 4) : [...cleaned];
       const rawB = polygonBounds(poly);
       const w = rawB.maxX - rawB.minX;
       const h = rawB.maxY - rawB.minY;
@@ -1078,9 +1083,23 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       const curPos = cursorPosRef.current;
       if (curPos) {
         const lastPt = polygonPoints[polygonPoints.length - 1];
-        const shouldTraceCoast = selectMethod === 'polygon' && followCoastline;
-        const rubberPath = shouldTraceCoast
-          ? traceCoastlinePath(
+        const isCurCoastSnapped = !!(followCoastline && snapCoastline && snappedCoastRef.current);
+        let rubberPath: [number, number][] = [[lastPt[0], lastPt[1]], [curPos.x, curPos.y]];
+
+        if (selectMethod === 'polygon' && followCoastline && isCurCoastSnapped) {
+          const snapLast = findNearestCoastlinePoint(
+            lastPt[0],
+            lastPt[1],
+            currentElevation,
+            currentCols,
+            currentRows,
+            currentWidth,
+            currentHeight,
+            currentSeaLevel,
+            COASTLINE_SNAP_PX / viewport.zoom
+          );
+          if (snapLast && snapLast.contourIndex === snappedCoastRef.current!.contourIndex) {
+            rubberPath = traceCoastlinePath(
               lastPt,
               [curPos.x, curPos.y],
               currentElevation,
@@ -1089,9 +1108,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               currentWidth,
               currentHeight,
               currentSeaLevel,
-              35 / viewport.zoom
-            )
-          : [[lastPt[0], lastPt[1]], [curPos.x, curPos.y]];
+              COASTLINE_SNAP_PX / viewport.zoom
+            );
+          }
+        }
 
         ctx.beginPath();
         ctx.moveTo(rubberPath[0][0], rubberPath[0][1]);
@@ -2277,7 +2297,34 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           e.preventDefault();
           const p0 = polygonPoints[0];
           const lastPt = polygonPoints[polygonPoints.length - 1];
-          const closingTrace = followCoastline
+          const snapLast = (followCoastline && snapCoastline)
+            ? findNearestCoastlinePoint(
+                lastPt[0],
+                lastPt[1],
+                currentElevation,
+                currentCols,
+                currentRows,
+                currentWidth,
+                currentHeight,
+                currentSeaLevel,
+                COASTLINE_SNAP_PX / viewport.zoom
+              )
+            : null;
+          const snapFirst = (followCoastline && snapCoastline)
+            ? findNearestCoastlinePoint(
+                p0[0],
+                p0[1],
+                currentElevation,
+                currentCols,
+                currentRows,
+                currentWidth,
+                currentHeight,
+                currentSeaLevel,
+                COASTLINE_SNAP_PX / viewport.zoom
+              )
+            : null;
+          const canTraceClose = !!(snapLast && snapFirst && snapLast.contourIndex === snapFirst.contourIndex);
+          const closingTrace = canTraceClose
             ? traceCoastlinePath(
                 lastPt,
                 p0,
@@ -2287,7 +2334,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 currentWidth,
                 currentHeight,
                 currentSeaLevel,
-                40 / viewport.zoom
+                COASTLINE_SNAP_PX / viewport.zoom
               )
             : [];
           const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;
@@ -3655,8 +3702,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
       } else if (selectMethod === 'polygon') {
         setConfirmedShape(null);
-        const clickPt: [number, number] = (followCoastline && snappedCoastRef.current)
-          ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+        const isCurCoastSnapped = !!(followCoastline && snapCoastline && snappedCoastRef.current);
+        const clickPt: [number, number] = isCurCoastSnapped
+          ? [snappedCoastRef.current!.point[0], snappedCoastRef.current!.point[1]]
           : [worldPos.x, worldPos.y];
 
         // If clicking near first vertex and length >= 3, close and commit
@@ -3664,9 +3712,37 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const p0 = polygonPoints[0];
           const distToFirst = Math.hypot(clickPt[0] - p0[0], clickPt[1] - p0[1]);
           if (distToFirst <= 18 / viewport.zoom) {
-            const closingTrace = followCoastline
+            const lastPt = polygonPoints[polygonPoints.length - 1];
+            const snapLast = (followCoastline && snapCoastline)
+              ? findNearestCoastlinePoint(
+                  lastPt[0],
+                  lastPt[1],
+                  currentElevation,
+                  currentCols,
+                  currentRows,
+                  currentWidth,
+                  currentHeight,
+                  currentSeaLevel,
+                  COASTLINE_SNAP_PX / viewport.zoom
+                )
+              : null;
+            const snapFirst = (followCoastline && snapCoastline)
+              ? findNearestCoastlinePoint(
+                  p0[0],
+                  p0[1],
+                  currentElevation,
+                  currentCols,
+                  currentRows,
+                  currentWidth,
+                  currentHeight,
+                  currentSeaLevel,
+                  COASTLINE_SNAP_PX / viewport.zoom
+                )
+              : null;
+            const canTraceClose = !!(snapLast && snapFirst && snapLast.contourIndex === snapFirst.contourIndex);
+            const closingTrace = canTraceClose
               ? traceCoastlinePath(
-                  polygonPoints[polygonPoints.length - 1],
+                  lastPt,
                   p0,
                   currentElevation,
                   currentCols,
@@ -3674,7 +3750,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   currentWidth,
                   currentHeight,
                   currentSeaLevel,
-                  40 / viewport.zoom
+                  COASTLINE_SNAP_PX / viewport.zoom
                 )
               : [];
             const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;
@@ -3686,19 +3762,36 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         if (polygonPoints.length === 0) {
           setPolygonPoints([clickPt]);
         } else {
-          if (followCoastline) {
-            const lastPt = polygonPoints[polygonPoints.length - 1];
-            const traced = traceCoastlinePath(
-              lastPt,
-              clickPt,
+          const lastPt = polygonPoints[polygonPoints.length - 1];
+          let traced: [number, number][] | null = null;
+          if (followCoastline && isCurCoastSnapped) {
+            const snapLast = findNearestCoastlinePoint(
+              lastPt[0],
+              lastPt[1],
               currentElevation,
               currentCols,
               currentRows,
               currentWidth,
               currentHeight,
               currentSeaLevel,
-              40 / viewport.zoom
+              COASTLINE_SNAP_PX / viewport.zoom
             );
+            if (snapLast && snapLast.contourIndex === snappedCoastRef.current!.contourIndex) {
+              traced = traceCoastlinePath(
+                lastPt,
+                clickPt,
+                currentElevation,
+                currentCols,
+                currentRows,
+                currentWidth,
+                currentHeight,
+                currentSeaLevel,
+                COASTLINE_SNAP_PX / viewport.zoom
+              );
+            }
+          }
+
+          if (traced && traced.length > 1) {
             setPolygonPoints((prev) => [...prev, ...traced.slice(1)]);
           } else {
             setPolygonPoints((prev) => [...prev, clickPt]);
@@ -3833,7 +3926,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const isCoastlineAssisted = (
       brushSettings.mode === 'selectRegion' && (
         isAutoSelectingIsland ||
-        ((selectMethod === 'rect2' || selectMethod === 'polygon') && followCoastline) ||
+        ((selectMethod === 'rect2' || selectMethod === 'polygon') && followCoastline && snapCoastline) ||
         (selectMethod === 'freehand' && snapCoastline)
       )
     );
@@ -3848,7 +3941,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         currentWidth,
         currentHeight,
         currentSeaLevel,
-        28 / viewport.zoom
+        COASTLINE_SNAP_PX / viewport.zoom
       );
       snappedCoastRef.current = snap;
       if (snap) {
@@ -4490,7 +4583,34 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             if (polygonPoints.length >= 3) {
               const p0 = polygonPoints[0];
               const lastPt = polygonPoints[polygonPoints.length - 1];
-              const closingTrace = followCoastline
+              const snapLast = (followCoastline && snapCoastline)
+                ? findNearestCoastlinePoint(
+                    lastPt[0],
+                    lastPt[1],
+                    currentElevation,
+                    currentCols,
+                    currentRows,
+                    currentWidth,
+                    currentHeight,
+                    currentSeaLevel,
+                    COASTLINE_SNAP_PX / viewport.zoom
+                  )
+                : null;
+              const snapFirst = (followCoastline && snapCoastline)
+                ? findNearestCoastlinePoint(
+                    p0[0],
+                    p0[1],
+                    currentElevation,
+                    currentCols,
+                    currentRows,
+                    currentWidth,
+                    currentHeight,
+                    currentSeaLevel,
+                    COASTLINE_SNAP_PX / viewport.zoom
+                  )
+                : null;
+              const canTraceClose = !!(snapLast && snapFirst && snapLast.contourIndex === snapFirst.contourIndex);
+              const closingTrace = canTraceClose
                 ? traceCoastlinePath(
                     lastPt,
                     p0,
@@ -4500,7 +4620,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                     currentWidth,
                     currentHeight,
                     currentSeaLevel,
-                    40 / viewport.zoom
+                    COASTLINE_SNAP_PX / viewport.zoom
                   )
                 : [];
               const fullLoop = closingTrace.length > 2 ? [...polygonPoints, ...closingTrace.slice(1)] : polygonPoints;

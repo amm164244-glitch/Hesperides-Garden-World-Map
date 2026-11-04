@@ -97,6 +97,47 @@ export function simplifyPolyline(points: [number, number][], tolerance: number):
 }
 
 /**
+ * Removes degenerate hairpin spikes (where a vertex shoots out and immediately returns to nearly the same point).
+ */
+export function removeDegenerateSpikes(
+  points: [number, number][],
+  tolerance: number = 2.0
+): [number, number][] {
+  if (points.length < 3) return [...points];
+  let current = [...points];
+
+  // Up to 2 passes to eliminate any nested or cascaded spikes
+  for (let pass = 0; pass < 2; pass++) {
+    const n = current.length;
+    if (n < 4) break;
+    const nextPts: [number, number][] = [];
+    let removedAny = false;
+
+    for (let i = 0; i < n; i++) {
+      const prev = current[(i - 1 + n) % n];
+      const curr = current[i];
+      const next = current[(i + 1) % n];
+
+      const dPrevNext = Math.hypot(next[0] - prev[0], next[1] - prev[1]);
+      const dCurrPrev = Math.hypot(curr[0] - prev[0], curr[1] - prev[1]);
+      const dCurrNext = Math.hypot(curr[0] - next[0], curr[1] - next[1]);
+
+      // If prev and next are virtually the same coordinate (< tolerance) while curr is an excursion (> tolerance * 1.5):
+      if (dPrevNext < tolerance && (dCurrPrev > tolerance * 1.5 || dCurrNext > tolerance * 1.5)) {
+        removedAny = true;
+        continue;
+      }
+      nextPts.push(curr);
+    }
+
+    current = nextPts;
+    if (!removedAny) break;
+  }
+
+  return current;
+}
+
+/**
  * Centripetal Catmull-Rom (alpha = 0.5) closed spline smoothing for polygons.
  * Unlike standard uniform Catmull-Rom, centripetal parameterization mathematically
  * prevents cusps, self-intersections, and wild overshoot spikes when adjacent segments
@@ -129,17 +170,19 @@ export function smoothPolygon(
     }
   }
 
-  const m = cleaned.length;
+  // Remove any degenerate hairpin spikes before smoothing
+  const deSpiked = removeDegenerateSpikes(cleaned, 2.0);
+  const m = deSpiked.length;
   if (m < 3) return [...points];
 
   const result: [number, number][] = [];
   const alpha = 0.5; // Centripetal parameterization
 
   for (let i = 0; i < m; i++) {
-    const p0 = cleaned[(i - 1 + m) % m];
-    const p1 = cleaned[i];
-    const p2 = cleaned[(i + 1) % m];
-    const p3 = cleaned[(i + 2) % m];
+    const p0 = deSpiked[(i - 1 + m) % m];
+    const p1 = deSpiked[i];
+    const p2 = deSpiked[(i + 1) % m];
+    const p3 = deSpiked[(i + 2) % m];
 
     const segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
     // For already dense micro-segments (< 3.0 units, like raw coastline contour vertices),
@@ -150,10 +193,14 @@ export function smoothPolygon(
     const d12 = Math.max(1e-4, segLen);
     const d23 = Math.max(1e-4, Math.hypot(p3[0] - p2[0], p3[1] - p2[1]));
 
+    // Restrain excessive tangent overshoot when transitioning from micro-segments to long polygon edges
+    const effD01 = Math.max(d01, segLen * 0.1);
+    const effD23 = Math.max(d23, segLen * 0.1);
+
     const t0 = 0;
-    const t1 = t0 + Math.pow(d01, alpha);
+    const t1 = t0 + Math.pow(effD01, alpha);
     const t2 = t1 + Math.pow(d12, alpha);
-    const t3 = t2 + Math.pow(d23, alpha);
+    const t3 = t2 + Math.pow(effD23, alpha);
 
     for (let s = 0; s < subs; s++) {
       const t = t1 + (s / subs) * (t2 - t1);

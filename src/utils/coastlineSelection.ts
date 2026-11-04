@@ -1,5 +1,5 @@
 import { Point2D, extractClosedContours } from './marchingSquares';
-import { pointInPolygon, simplifyPolyline } from './regionShape';
+import { pointInPolygon, simplifyPolyline, removeDegenerateSpikes } from './regionShape';
 
 // Cache contours for elevationGrid reference + seaLevel
 let cachedGridRef: Float32Array | null = null;
@@ -151,7 +151,7 @@ export function traceCoastlinePath(
   width: number,
   height: number,
   seaLevel: number,
-  maxSnapDist: number = 20
+  maxSnapDist: number = 24
 ): [number, number][] {
   const snap1 = findNearestCoastlinePoint(p1[0], p1[1], grid, cols, rows, width, height, seaLevel, maxSnapDist);
   const snap2 = findNearestCoastlinePoint(p2[0], p2[1], grid, cols, rows, width, height, seaLevel, maxSnapDist);
@@ -227,7 +227,9 @@ export function traceCoastlinePath(
           cleaned.push(path[i]);
         }
       }
-      return cleaned;
+
+      // Remove any degenerate hairpin spikes (spikes extending out and immediately returning to the coast)
+      return removeDegenerateSpikes(cleaned, 1.0);
     }
   }
 
