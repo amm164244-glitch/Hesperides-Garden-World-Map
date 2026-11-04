@@ -30,6 +30,8 @@ import {
   Milestone,
   Shield,
   Anchor,
+  Building2,
+  Landmark,
 } from 'lucide-react';
 import { BrushMode, BrushSettings, ViewMode } from '../types/map';
 import { SymbolToolSettings } from '../types/symbols';
@@ -152,6 +154,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       ? [
           { id: 'townSelect' as BrushMode, label: '町選択', icon: <MousePointer className="w-4 h-4" />, desc: '町部品の選択・移動・頂点編集・門の追加/移動 (Delキーで削除)' },
           { id: 'townRoad' as BrushMode, label: '道', icon: <Milestone className="w-4 h-4" />, desc: '道を描く (クリックで頂点追加、ダブルクリック/Enterで確定、Escで取消)' },
+          { id: 'townBuilding' as BrushMode, label: '建物', icon: <Building2 className="w-4 h-4" />, desc: '建物を作成 (3点で長方形、サイズ指定、多角形)' },
+          { id: 'townDistrict' as BrushMode, label: '区画', icon: <Landmark className="w-4 h-4" />, desc: '区画を描く (クリックで頂点追加、ダブルクリック/Enterで確定)' },
           { id: 'townWall' as BrushMode, label: '城壁', icon: <Shield className="w-4 h-4" />, desc: '城壁を描く (クリックで頂点追加、始点クリックで閉じる、Enterで確定)' },
           { id: 'townPier' as BrushMode, label: '桟橋/橋', icon: <Anchor className="w-4 h-4" />, desc: '桟橋・橋を描く (クリックで頂点追加、Enterで確定)' },
         ]

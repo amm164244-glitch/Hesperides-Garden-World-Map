@@ -69,6 +69,24 @@ export interface TownObjectBounds {
   maxY: number;
 }
 
+export const DEFAULT_BUILDING_HEIGHTS: Record<TownBuildingKind, number> = {
+  house: 6,
+  shop: 7,
+  hall: 9,
+  church: 14,
+  keep: 18,
+  tower: 16,
+  barn: 7,
+};
+
+export type TownBuildingDrawMode = '3point' | 'preset' | 'polygon';
+export type TownBuildingOrientationMode = 'auto' | 'fixed';
+
+export interface TownClipboardData {
+  metersPerUnit: number;
+  objects: TownObject[];
+}
+
 export interface TownToolConfig {
   roadStyle: TownRoadStyle;
   roadWidthM: number;
@@ -81,18 +99,44 @@ export interface TownToolConfig {
   pierWidthM: number;
   snapEnabled: boolean;
   showLengths: boolean;
+
+  // Building Tool
+  buildingKind: TownBuildingKind;
+  buildingHeightM: number;
+  buildingRoofToneRandom: boolean;
+  buildingRoofToneFixed: number;
+  buildingDrawMode: TownBuildingDrawMode;
+  buildingPresetWidthM: number;
+  buildingPresetDepthM: number;
+  buildingOrientationMode: TownBuildingOrientationMode;
+  buildingFixedAngleDeg: number;
+
+  // District Tool
+  districtKind: TownDistrictKind;
 }
 
 export const DEFAULT_TOWN_TOOL_CONFIG: TownToolConfig = {
   roadStyle: 'street',
-  roadWidthM: 6,
+  roadWidthM: 5,
   roadSmooth: true,
-  wallThicknessM: 4,
-  wallClosed: false,
+  wallThicknessM: 2.5,
+  wallClosed: true,
   wallTowers: true,
-  wallTowerRadiusM: 3.5,
+  wallTowerRadiusM: 4,
   pierVariant: 'pier',
-  pierWidthM: 4,
+  pierWidthM: 3,
   snapEnabled: true,
   showLengths: true,
+
+  buildingKind: 'house',
+  buildingHeightM: 6,
+  buildingRoofToneRandom: true,
+  buildingRoofToneFixed: 0.5,
+  buildingDrawMode: '3point',
+  buildingPresetWidthM: 10,
+  buildingPresetDepthM: 7,
+  buildingOrientationMode: 'auto',
+  buildingFixedAngleDeg: 0,
+
+  districtKind: 'residential',
 };

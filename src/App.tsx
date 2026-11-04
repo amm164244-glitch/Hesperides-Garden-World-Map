@@ -313,7 +313,9 @@ export default function App() {
         brushSettings.mode === 'townSelect' ||
         brushSettings.mode === 'townRoad' ||
         brushSettings.mode === 'townWall' ||
-        brushSettings.mode === 'townPier'
+        brushSettings.mode === 'townPier' ||
+        brushSettings.mode === 'townBuilding' ||
+        brushSettings.mode === 'townDistrict'
       ) {
         setBrushSettings((prev) => ({ ...prev, mode: 'pan' }));
       }

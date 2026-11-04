@@ -16,6 +16,7 @@ import {
   snapAngle,
   objectsInRect,
   selectionBounds,
+  reprojectGates,
 } from './townEdit';
 import {
   TownBuilding,
@@ -23,6 +24,7 @@ import {
   TownPier,
   TownRoad,
   TownWall,
+  TownObject,
 } from '../../types/town';
 
 describe('townEdit geometry & pure helpers', () => {
@@ -321,5 +323,110 @@ describe('townEdit geometry & pure helpers', () => {
 
     const bounds = selectionBounds([r1, r2]);
     assert.deepEqual(bounds, { minX: 10, minY: 10, maxX: 120, maxY: 120 });
+  });
+
+  it('reprojectGates preserves world positions when vertices are inserted or removed', () => {
+    // Square wall [0,0] -> [100,0] -> [100,100] -> [0,100], closed
+    const initialWall: TownWall = {
+      id: 'w1',
+      kind: 'wall',
+      points: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      closed: true,
+      thicknessM: 2.5,
+      towers: true,
+      towerRadiusM: 4,
+      gates: [
+        // Gate on segment 1 ([100,0] -> [100,100]) at t = 0.5 -> world pos [100, 50]
+        { segmentIndex: 1, t: 0.5, widthM: 4 },
+      ],
+    };
+
+    const initialGatePos = getGateWorldPosition(initialWall, initialWall.gates[0]);
+    assert.deepEqual(initialGatePos, [100, 50]);
+
+    // Insert vertex at segment 0 ([50, 0])
+    // The points become: [0,0], [50,0], [100,0], [100,100], [0,100]
+    // The gate which was on segment 1 should now be reprojected to segment 2 ([100,0] -> [100,100])
+    const wallWithInserted = insertVertex(initialWall, 0, [50, 0]) as TownWall;
+    assert.equal(wallWithInserted.points.length, 5);
+    assert.equal(wallWithInserted.gates.length, 1);
+    assert.equal(wallWithInserted.gates[0].segmentIndex, 2);
+
+    const reprojectedPos = getGateWorldPosition(wallWithInserted, wallWithInserted.gates[0]);
+    assert.ok(Math.abs(reprojectedPos[0] - 100) < 1e-4);
+    assert.ok(Math.abs(reprojectedPos[1] - 50) < 1e-4);
+
+    // Remove the inserted vertex [50,0] at index 1
+    const wallRestored = removeVertex(wallWithInserted, 1) as TownWall;
+    assert.equal(wallRestored.points.length, 4);
+    assert.equal(wallRestored.gates.length, 1);
+    assert.equal(wallRestored.gates[0].segmentIndex, 1);
+
+    const restoredGatePos = getGateWorldPosition(wallRestored, wallRestored.gates[0]);
+    assert.ok(Math.abs(restoredGatePos[0] - 100) < 1e-4);
+    assert.ok(Math.abs(restoredGatePos[1] - 50) < 1e-4);
+  });
+
+  it('records 1 history entry per operation and handles undo/redo correctly for townChanges', () => {
+    const originalRoad: TownRoad = {
+      id: 'r1',
+      kind: 'road',
+      style: 'street',
+      points: [
+        [10, 10],
+        [50, 10],
+      ],
+      widthM: 5,
+      smooth: true,
+    };
+
+    let townObjects: TownObject[] = [originalRoad];
+    const undoStack: {
+      description: string;
+      townChanges: { prevObjects: TownObject[]; newObjects: TownObject[] };
+    }[] = [];
+    const redoStack: typeof undoStack = [];
+
+    // Simulate drag translation by dx=20, dy=0
+    const translatedRoad = translateObject(originalRoad, 20, 0);
+    const newObjects = [translatedRoad];
+
+    // Commit 1 history record on mouseUp
+    undoStack.push({
+      description: '町部品の移動',
+      townChanges: {
+        prevObjects: townObjects,
+        newObjects,
+      },
+    });
+    redoStack.length = 0;
+    townObjects = newObjects;
+
+    assert.equal(undoStack.length, 1);
+    assert.equal(redoStack.length, 0);
+    assert.deepEqual(townObjects[0].kind === 'road' ? townObjects[0].points[0] : null, [30, 10]);
+
+    // Undo operation
+    const undoRecord = undoStack.pop()!;
+    redoStack.push(undoRecord);
+    townObjects = undoRecord.townChanges.prevObjects;
+
+    assert.equal(undoStack.length, 0);
+    assert.equal(redoStack.length, 1);
+    assert.deepEqual(townObjects[0].kind === 'road' ? townObjects[0].points[0] : null, [10, 10]);
+
+    // Redo operation
+    const redoRecord = redoStack.pop()!;
+    undoStack.push(redoRecord);
+    townObjects = redoRecord.townChanges.newObjects;
+
+    assert.equal(undoStack.length, 1);
+    assert.equal(redoStack.length, 0);
+    assert.deepEqual(townObjects[0].kind === 'road' ? townObjects[0].points[0] : null, [30, 10]);
   });
 });

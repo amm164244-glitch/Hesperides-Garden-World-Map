@@ -110,7 +110,7 @@ export function drawTownObjects(
 ): void {
   if (!objects || objects.length === 0) return;
 
-  const { metersPerUnit, zoomPx, viewBounds, selectedId, roofTheme = 'terracotta' } = opts;
+  const { metersPerUnit, zoomPx, viewBounds, selectedId, selectedIds, roofTheme = 'terracotta' } = opts;
 
   // Filter visible objects via viewport AABB check
   const visible = objects.filter((obj) => {

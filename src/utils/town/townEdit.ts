@@ -271,28 +271,12 @@ export function insertVertex<T extends TownObject>(obj: T, segmentIndex: number,
   nextPoints.splice(insertIdx, 0, [p[0], p[1]]);
 
   if (obj.kind === 'wall') {
-    // When a vertex is inserted, segments at or after insertIdx are shifted by +1
-    // A gate on segmentIndex itself could be before or after the inserted point.
-    // We re-evaluate gates against the new geometry to be safe.
-    const updatedGates = obj.gates.map((g) => {
-      if (g.segmentIndex < segmentIndex) {
-        return g;
-      }
-      if (g.segmentIndex > segmentIndex) {
-        return { ...g, segmentIndex: g.segmentIndex + 1 };
-      }
-      // On the split segment: if t < 0.5 keep segmentIndex, if t >= 0.5 move to segmentIndex + 1
-      if (g.t < 0.5) {
-        return { ...g, t: g.t * 2 };
-      }
-      return { ...g, segmentIndex: g.segmentIndex + 1, t: (g.t - 0.5) * 2 };
-    });
-
-    return {
+    const oldPoints = obj.points;
+    const newWall: TownWall = {
       ...obj,
       points: nextPoints,
-      gates: updatedGates,
     };
+    return reprojectGates(newWall, oldPoints) as T;
   }
 
   return {
@@ -325,26 +309,48 @@ export function removeVertex<T extends TownObject>(obj: T, index: number): T | n
   const nextPoints = obj.points.filter((_, i) => i !== index);
 
   if (obj.kind === 'wall') {
-    // Drop gates attached to removed segment or shift segment indices
-    const updatedGates = obj.gates
-      .filter((g) => g.segmentIndex !== index && (index === 0 ? true : g.segmentIndex !== index - 1))
-      .map((g) => {
-        if (g.segmentIndex > index) {
-          return { ...g, segmentIndex: g.segmentIndex - 1 };
-        }
-        return g;
-      });
-
-    return {
+    const oldPoints = obj.points;
+    const newWall: TownWall = {
       ...obj,
       points: nextPoints,
-      gates: updatedGates,
     };
+    return reprojectGates(newWall, oldPoints) as T;
   }
 
   return {
     ...obj,
     points: nextPoints,
+  };
+}
+
+/**
+ * Reprojects gates onto the nearest edge of a modified wall so gate positions don't shift wildly when vertices are added/removed.
+ */
+export function reprojectGates(wall: TownWall, oldPoints: Pt[]): TownWall {
+  if (!wall.gates || wall.gates.length === 0) return wall;
+  if (!oldPoints || oldPoints.length < 2 || wall.points.length < 2) return wall;
+
+  const oldN = oldPoints.length;
+  const updatedGates: TownWallGate[] = wall.gates.map((g) => {
+    const sIdx = Math.max(0, Math.min(oldN - 1, g.segmentIndex));
+    const p0 = oldPoints[sIdx];
+    const p1 = oldPoints[(sIdx + 1) % oldN];
+    const worldP: Pt = [
+      p0[0] + (p1[0] - p0[0]) * g.t,
+      p0[1] + (p1[1] - p0[1]) * g.t,
+    ];
+
+    const nearest = nearestPointOnPolyline(wall.points, worldP, wall.closed);
+    return {
+      ...g,
+      segmentIndex: nearest.segmentIndex,
+      t: Math.max(0.05, Math.min(0.95, nearest.t)),
+    };
+  });
+
+  return {
+    ...wall,
+    gates: updatedGates,
   };
 }
 
@@ -532,3 +538,5 @@ export function selectionBounds(objects: TownObject[]): TownObjectBounds | null 
   if (minX === Infinity) return null;
   return { minX, minY, maxX, maxY };
 }
+
+export * from './townBuild';

@@ -166,6 +166,8 @@ export type BrushMode =
   | 'townRoad'     // 道描画
   | 'townWall'     // 城壁描画
   | 'townPier'     // 桟橋・橋描画
+  | 'townBuilding' // 建物描画
+  | 'townDistrict' // 区画描画
   | 'pan';         // 視点移動
 
 export interface BrushSettings {

@@ -20,10 +20,23 @@ import {
   Magnet,
   Ruler,
   MousePointer,
+  RotateCcw,
+  RotateCw,
+  FlipHorizontal,
+  FlipVertical,
+  AlignJustify,
+  CopyPlus,
+  Landmark,
+  Compass,
 } from 'lucide-react';
 import { BrushMode } from '../types/map';
 import {
   DEFAULT_TOWN_TOOL_CONFIG,
+  DEFAULT_BUILDING_HEIGHTS,
+  TownBuilding,
+  TownBuildingKind,
+  TownDistrict,
+  TownDistrictKind,
   TownObject,
   TownRoad,
   TownRoadStyle,
@@ -38,7 +51,16 @@ import {
   SampleTownStats,
 } from '../utils/town/townSample';
 import { polylineLength } from '../utils/town/townGeometry';
-import { removeGate } from '../utils/town/townEdit';
+import { removeGate, translateObject } from '../utils/town/townEdit';
+import {
+  rotateObject,
+  flipObject,
+  alignParallel,
+  alignToLine,
+  distributeEvenly,
+  minAreaRect,
+  getObjectsCentroid,
+} from '../utils/town/townBuild';
 
 interface TownObjectsPanelProps {
   mapWidth: number;
@@ -177,11 +199,84 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
     onSelectTownObjectIds?.([]);
   };
 
+  const selectedBuildings = useMemo(() => {
+    return selectedObjects.filter((o) => o.kind === 'building') as TownBuilding[];
+  }, [selectedObjects]);
+
+  const handleRotateSelected = (degrees: number) => {
+    if (selectedObjects.length === 0) return;
+    const center = getObjectsCentroid(selectedObjects);
+    const rad = (degrees * Math.PI) / 180;
+    const selectedSet = new Set(selectedTownObjectIds);
+    const next = townObjects.map((o) =>
+      selectedSet.has(o.id) ? rotateObject(o, rad, center) : o
+    );
+    onApplyTownObjects(next, `町部品の回転 (${degrees > 0 ? `+${degrees}` : degrees}°)`);
+  };
+
+  const handleFlipSelected = (axis: 'x' | 'y') => {
+    if (selectedObjects.length === 0) return;
+    const center = getObjectsCentroid(selectedObjects);
+    const selectedSet = new Set(selectedTownObjectIds);
+    const next = townObjects.map((o) =>
+      selectedSet.has(o.id) ? flipObject(o, axis, center) : o
+    );
+    onApplyTownObjects(next, `町部品の${axis === 'x' ? '左右反転' : '上下反転'}`);
+  };
+
+  const handleDuplicateSelected = () => {
+    if (selectedObjects.length === 0) return;
+    const shiftUnits = (3 / metersPerUnit) * 0.7071;
+    const now = Date.now();
+    const duplicated = selectedObjects.map((o) => {
+      const newId = `${o.kind}_${now}_${Math.random().toString(36).substring(2, 6)}`;
+      const shifted = translateObject(o, shiftUnits, shiftUnits);
+      return { ...shifted, id: newId };
+    });
+    const next = [...townObjects, ...duplicated];
+    onApplyTownObjects(next, '町部品の複製');
+    onSelectTownObjectIds?.(duplicated.map((o) => o.id));
+  };
+
+  const handleAlignParallel = () => {
+    const roadAndWalls = townObjects.filter((o) => o.kind === 'road' || o.kind === 'wall');
+    const next = alignParallel(townObjects, selectedTownObjectIds, roadAndWalls, metersPerUnit);
+    onApplyTownObjects(next, '建物を道に平行に整列');
+  };
+
+  const handleAlignToLine = () => {
+    if (selectedObjects.length < 2) return;
+    const next = alignToLine(townObjects, selectedTownObjectIds);
+    onApplyTownObjects(next, '部品を一列に整列');
+  };
+
+  const handleDistributeEvenly = () => {
+    if (selectedObjects.length < 3) return;
+    const next = distributeEvenly(townObjects, selectedTownObjectIds);
+    onApplyTownObjects(next, '部品を等間隔に整列');
+  };
+
+  const handleMinAreaRect = () => {
+    const singleBld =
+      selectedObjects.length === 1 && selectedObjects[0].kind === 'building'
+        ? selectedObjects[0]
+        : null;
+    if (!singleBld || singleBld.buildingKind === 'tower') return;
+    const next = townObjects.map((o) =>
+      o.id === singleBld.id && o.kind === 'building'
+        ? { ...o, polygon: minAreaRect(o.polygon) }
+        : o
+    );
+    onApplyTownObjects(next, '建物を長方形に整列');
+  };
+
   const isTownToolActive =
     activeTool === 'townSelect' ||
     activeTool === 'townRoad' ||
     activeTool === 'townWall' ||
-    activeTool === 'townPier';
+    activeTool === 'townPier' ||
+    activeTool === 'townBuilding' ||
+    activeTool === 'townDistrict';
 
   return (
     <>
@@ -232,11 +327,15 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                     {activeTool === 'townRoad' && <Milestone className="w-3.5 h-3.5" />}
                     {activeTool === 'townWall' && <Shield className="w-3.5 h-3.5" />}
                     {activeTool === 'townPier' && <Anchor className="w-3.5 h-3.5" />}
+                    {activeTool === 'townBuilding' && <Building2 className="w-3.5 h-3.5" />}
+                    {activeTool === 'townDistrict' && <Landmark className="w-3.5 h-3.5" />}
                     <span>
                       {activeTool === 'townSelect' && 'ツール設定: 選択・変形'}
                       {activeTool === 'townRoad' && 'ツール設定: 道を描く'}
                       {activeTool === 'townWall' && 'ツール設定: 城壁を描く'}
                       {activeTool === 'townPier' && 'ツール設定: 桟橋/橋を描く'}
+                      {activeTool === 'townBuilding' && 'ツール設定: 建物を配置'}
+                      {activeTool === 'townDistrict' && 'ツール設定: 区画を描く'}
                     </span>
                   </div>
 
@@ -408,13 +507,229 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                   </div>
                 )}
 
+                {/* Building tool options */}
+                {activeTool === 'townBuilding' && (
+                  <div className="space-y-2 text-[11px]">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-stone-400 block mb-0.5">建物の種類:</span>
+                        <select
+                          value={townToolConfig.buildingKind}
+                          onChange={(e) => {
+                            const k = e.target.value as TownBuildingKind;
+                            onChangeTownToolConfig?.({
+                              buildingKind: k,
+                              buildingHeightM: DEFAULT_BUILDING_HEIGHTS[k],
+                            });
+                          }}
+                          className="w-full bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-stone-200 text-xs"
+                        >
+                          <option value="house">民家 (6m)</option>
+                          <option value="shop">商家・工房 (7m)</option>
+                          <option value="hall">大広間 (9m)</option>
+                          <option value="church">教会・聖堂 (14m)</option>
+                          <option value="keep">天守・要塞 (18m)</option>
+                          <option value="tower">見張り塔 (16m)</option>
+                          <option value="barn">納屋・倉庫 (7m)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <span className="text-stone-400 block mb-0.5">高さ: {townToolConfig.buildingHeightM}m</span>
+                        <input
+                          type="range"
+                          min={4}
+                          max={26}
+                          step={1}
+                          value={townToolConfig.buildingHeightM}
+                          onChange={(e) => onChangeTownToolConfig?.({ buildingHeightM: Number(e.target.value) })}
+                          className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Draw Mode */}
+                    <div>
+                      <span className="text-stone-400 block mb-0.5">作図モード:</span>
+                      <div className="grid grid-cols-3 gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onChangeTownToolConfig?.({ buildingDrawMode: '3point' })}
+                          className={`px-1.5 py-1 rounded text-[10px] font-medium transition cursor-pointer border ${
+                            townToolConfig.buildingDrawMode === '3point'
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-semibold'
+                              : 'bg-stone-800 border-stone-700 text-stone-400 hover:text-stone-200'
+                          }`}
+                        >
+                          3点で長方形
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onChangeTownToolConfig?.({ buildingDrawMode: 'preset' })}
+                          className={`px-1.5 py-1 rounded text-[10px] font-medium transition cursor-pointer border ${
+                            townToolConfig.buildingDrawMode === 'preset'
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-semibold'
+                              : 'bg-stone-800 border-stone-700 text-stone-400 hover:text-stone-200'
+                          }`}
+                        >
+                          サイズ指定
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onChangeTownToolConfig?.({ buildingDrawMode: 'polygon' })}
+                          className={`px-1.5 py-1 rounded text-[10px] font-medium transition cursor-pointer border ${
+                            townToolConfig.buildingDrawMode === 'polygon'
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-semibold'
+                              : 'bg-stone-800 border-stone-700 text-stone-400 hover:text-stone-200'
+                          }`}
+                        >
+                          多角形
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Preset Size & Orientation Settings */}
+                    {townToolConfig.buildingDrawMode === 'preset' && (
+                      <div className="bg-stone-950 p-2 rounded border border-stone-800 space-y-1.5">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">幅: {townToolConfig.buildingPresetWidthM}m</span>
+                            <input
+                              type="range"
+                              min={3}
+                              max={30}
+                              step={1}
+                              value={townToolConfig.buildingPresetWidthM}
+                              onChange={(e) => onChangeTownToolConfig?.({ buildingPresetWidthM: Number(e.target.value) })}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">奥行: {townToolConfig.buildingPresetDepthM}m</span>
+                            <input
+                              type="range"
+                              min={3}
+                              max={30}
+                              step={1}
+                              value={townToolConfig.buildingPresetDepthM}
+                              onChange={(e) => onChangeTownToolConfig?.({ buildingPresetDepthM: Number(e.target.value) })}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <span className="text-stone-400 block mb-0.5">向き:</span>
+                          <div className="flex items-center gap-3">
+                            <label className="flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="bOrient"
+                                checked={townToolConfig.buildingOrientationMode === 'auto'}
+                                onChange={() => onChangeTownToolConfig?.({ buildingOrientationMode: 'auto' })}
+                                className="text-amber-500 bg-stone-800"
+                              />
+                              <span>道に平行に自動</span>
+                            </label>
+                            <label className="flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="bOrient"
+                                checked={townToolConfig.buildingOrientationMode === 'fixed'}
+                                onChange={() => onChangeTownToolConfig?.({ buildingOrientationMode: 'fixed' })}
+                                className="text-amber-500 bg-stone-800"
+                              />
+                              <span>固定角度</span>
+                            </label>
+                          </div>
+                        </div>
+
+                        {townToolConfig.buildingOrientationMode === 'fixed' && (
+                          <div className="flex items-center gap-2 pt-0.5">
+                            <span className="text-stone-400 shrink-0">角度: {townToolConfig.buildingFixedAngleDeg}°</span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={345}
+                              step={15}
+                              value={townToolConfig.buildingFixedAngleDeg}
+                              onChange={(e) => onChangeTownToolConfig?.({ buildingFixedAngleDeg: Number(e.target.value) })}
+                              className="flex-1 h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Roof Tone Variation */}
+                    <div className="flex items-center justify-between pt-0.5 border-t border-stone-800">
+                      <span className="text-stone-400">屋根色のばらつき:</span>
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="roofToneRand"
+                            checked={townToolConfig.buildingRoofToneRandom}
+                            onChange={() => onChangeTownToolConfig?.({ buildingRoofToneRandom: true })}
+                            className="text-amber-500 bg-stone-800"
+                          />
+                          <span>ランダム</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="roofToneRand"
+                            checked={!townToolConfig.buildingRoofToneRandom}
+                            onChange={() => onChangeTownToolConfig?.({ buildingRoofToneRandom: false })}
+                            className="text-amber-500 bg-stone-800"
+                          />
+                          <span>固定</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* District tool options */}
+                {activeTool === 'townDistrict' && (
+                  <div className="space-y-1.5 text-[11px]">
+                    <div>
+                      <span className="text-stone-400 block mb-0.5">区画の種類:</span>
+                      <select
+                        value={townToolConfig.districtKind}
+                        onChange={(e) => onChangeTownToolConfig?.({ districtKind: e.target.value as TownDistrictKind })}
+                        className="w-full bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-stone-200 text-xs"
+                      >
+                        <option value="residential">住宅街 (Residential)</option>
+                        <option value="market">市場・商業区 (Market)</option>
+                        <option value="noble">貴族街 (Noble)</option>
+                        <option value="poor">貧民街・下町 (Poor)</option>
+                        <option value="park">庭園・広場 (Park)</option>
+                        <option value="farmland">農地・畑 (Farmland)</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
                 {/* Help tip for drawing tools */}
                 <div className="text-[10px] text-amber-300/80 flex items-center justify-between pt-1 border-t border-amber-800/30">
                   {activeTool === 'townSelect' && (
-                    <span>クリックで選択、ドラッグで移動。頂点・中間点の丸をドラッグして変形。Delで削除。</span>
+                    <span>クリックで選択、ドラッグで移動。上部の青丸で回転。Delで削除。</span>
                   )}
                   {activeTool === 'townRoad' && (
                     <span>クリックで頂点を追加。Enterまたは最後の点を再クリックで確定。Escでキャンセル。</span>
+                  )}
+                  {activeTool === 'townBuilding' && townToolConfig.buildingDrawMode === '3point' && (
+                    <span>1点目と2点目で辺を決め、3点目で奥行きを確定。Shiftで15°固定。</span>
+                  )}
+                  {activeTool === 'townBuilding' && townToolConfig.buildingDrawMode === 'preset' && (
+                    <span>クリック位置に建物を配置。40m以内の最寄りの道に自動で向きを合わせます。</span>
+                  )}
+                  {activeTool === 'townBuilding' && townToolConfig.buildingDrawMode === 'polygon' && (
+                    <span>クリックで頂点を追加(3〜12点)。ダブルクリック/Enterで確定。</span>
+                  )}
+                  {activeTool === 'townDistrict' && (
+                    <span>クリックで頂点を追加。ダブルクリック/Enterで確定。Escでキャンセル。</span>
                   )}
                   {activeTool === 'townWall' && (
                     <span>クリックで頂点を追加。始点クリックでループ閉鎖。Enterで確定。</span>
@@ -447,6 +762,120 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                     <Trash2 className="w-3 h-3 text-red-400" />
                     <span>{selectedObjects.length === 1 ? '削除' : '一括削除'}</span>
                   </button>
+                </div>
+
+                {/* Transform & Arrange Actions */}
+                <div className="space-y-1.5 pt-0.5 border-b border-stone-800 pb-2">
+                  <div className="flex items-center justify-between text-[10px] text-stone-400">
+                    <span>回転・反転・複製:</span>
+                    <span className="text-stone-500 font-mono text-[9px]">[ / ] 5° (Shift 15°)</span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-1">
+                    <button
+                      type="button"
+                      onClick={(e) => handleRotateSelected(e.shiftKey ? -15 : -5)}
+                      className="px-1.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded text-[10px] flex items-center justify-center gap-0.5 transition cursor-pointer border border-stone-700"
+                      title="左回転 (5°、Shiftで15°)"
+                    >
+                      <RotateCcw className="w-3 h-3 text-amber-400" />
+                      <span>-5°</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleRotateSelected(e.shiftKey ? 15 : 5)}
+                      className="px-1.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded text-[10px] flex items-center justify-center gap-0.5 transition cursor-pointer border border-stone-700"
+                      title="右回転 (5°、Shiftで15°)"
+                    >
+                      <RotateCw className="w-3 h-3 text-amber-400" />
+                      <span>+5°</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFlipSelected('x')}
+                      className="px-1.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded text-[10px] flex items-center justify-center gap-0.5 transition cursor-pointer border border-stone-700"
+                      title="左右反転 (選択の重心を軸に反転)"
+                    >
+                      <FlipHorizontal className="w-3 h-3 text-sky-400" />
+                      <span>左右</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleFlipSelected('y')}
+                      className="px-1.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded text-[10px] flex items-center justify-center gap-0.5 transition cursor-pointer border border-stone-700"
+                      title="上下反転 (選択の重心を軸に反転)"
+                    >
+                      <FlipVertical className="w-3 h-3 text-sky-400" />
+                      <span>上下</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDuplicateSelected}
+                      className="px-1.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded text-[10px] flex items-center justify-center gap-0.5 transition cursor-pointer border border-stone-700"
+                      title="3mずらして複製 (Ctrl+D)"
+                    >
+                      <CopyPlus className="w-3 h-3 text-emerald-400" />
+                      <span>複製</span>
+                    </button>
+                  </div>
+
+                  {/* Alignment Tools (when buildings selected) */}
+                  {selectedBuildings.length > 0 && (
+                    <div className="pt-1.5 border-t border-stone-800/80 space-y-1">
+                      <div className="flex items-center justify-between text-[10px] text-stone-400">
+                        <span>建物の整列:</span>
+                        <span className="text-amber-400/80 font-mono">{selectedBuildings.length}棟</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={handleAlignParallel}
+                          className="px-2 py-1 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded flex items-center justify-center gap-1 transition cursor-pointer border border-stone-700"
+                          title="40m以内の最も近い道・城壁の向きに合わせて回転"
+                        >
+                          <Compass className="w-3 h-3 text-amber-400" />
+                          <span>道に平行にする</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selectedBuildings.length < 2}
+                          onClick={handleAlignToLine}
+                          className={`px-2 py-1 rounded flex items-center justify-center gap-1 transition border border-stone-700 ${
+                            selectedBuildings.length >= 2
+                              ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 cursor-pointer'
+                              : 'bg-stone-900 text-stone-600 cursor-not-allowed border-stone-800'
+                          }`}
+                          title="重心の主軸に垂直な位置を平均に揃えて1本の直線上に並べる (2棟以上)"
+                        >
+                          <AlignJustify className="w-3 h-3 text-amber-400" />
+                          <span>一列に揃える</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={selectedBuildings.length < 3}
+                          onClick={handleDistributeEvenly}
+                          className={`px-2 py-1 rounded flex items-center justify-center gap-1 transition border border-stone-700 ${
+                            selectedBuildings.length >= 3
+                              ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 cursor-pointer'
+                              : 'bg-stone-900 text-stone-600 cursor-not-allowed border-stone-800'
+                          }`}
+                          title="主方向に沿って等間隔に並べる (両端は固定、3棟以上)"
+                        >
+                          <AlignJustify className="w-3 h-3 text-emerald-400 rotate-90" />
+                          <span>等間隔に並べる</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!selectedBuildings.some((b) => b.buildingKind !== 'tower')}
+                          onClick={handleMinAreaRect}
+                          className="px-2 py-1 bg-stone-800 hover:bg-stone-700 text-stone-200 rounded flex items-center justify-center gap-1 transition cursor-pointer border border-stone-700"
+                          title="多角形の建物を最小外接長方形に整形 (見張り塔は除く)"
+                        >
+                          <Ruler className="w-3 h-3 text-sky-400" />
+                          <span>長方形に整える</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Single Object Inspector */}
@@ -636,22 +1065,40 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                               {singleSelected.gates.map((g, gIdx) => (
                                 <div
                                   key={gIdx}
-                                  className="flex items-center justify-between bg-stone-950 px-2 py-0.5 rounded text-[10px]"
+                                  className="flex items-center justify-between bg-stone-950 px-2 py-1 rounded text-[10px]"
                                 >
                                   <span className="text-stone-300">
-                                    門 #{gIdx + 1}: 区間{g.segmentIndex + 1} (幅{g.widthM}m)
+                                    門 #{gIdx + 1}: 区間{g.segmentIndex + 1}
                                   </span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const updated = removeGate(singleSelected, gIdx);
-                                      handleUpdateSingleObject(updated, '城門の削除');
-                                    }}
-                                    className="text-stone-500 hover:text-red-400 p-0.5 rounded"
-                                    title="この城門を削除"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </button>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-stone-400">幅:</span>
+                                    <input
+                                      type="number"
+                                      min={2}
+                                      max={16}
+                                      step={0.5}
+                                      value={g.widthM}
+                                      onChange={(e) => {
+                                        const w = Math.max(2, Math.min(20, Number(e.target.value) || 4));
+                                        const nextGates = [...singleSelected.gates];
+                                        nextGates[gIdx] = { ...g, widthM: w };
+                                        handleUpdateSingleObject({ ...singleSelected, gates: nextGates }, '城門の幅を変更');
+                                      }}
+                                      className="w-12 bg-stone-800 border border-stone-700 rounded px-1 py-0.5 text-stone-200 text-[10px]"
+                                    />
+                                    <span className="text-stone-400">m</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const updated = removeGate(singleSelected, gIdx);
+                                        handleUpdateSingleObject(updated, '城門の削除');
+                                      }}
+                                      className="text-stone-500 hover:text-red-400 p-0.5 rounded ml-1"
+                                      title="この城門を削除"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -724,44 +1171,94 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
 
                     {/* Building properties */}
                     {singleSelected.kind === 'building' && (
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-2">
                         <div>
-                          <span className="text-stone-400 block mb-0.5">高さ: {singleSelected.heightM}m</span>
-                          <input
-                            type="range"
-                            min={4}
-                            max={24}
-                            step={1}
-                            value={singleSelected.heightM}
+                          <span className="text-stone-400 block mb-0.5">建物の種類:</span>
+                          <select
+                            value={singleSelected.buildingKind}
                             onChange={(e) => {
-                              const updated = {
+                              const updated: TownBuilding = {
                                 ...singleSelected,
-                                heightM: Number(e.target.value),
+                                buildingKind: e.target.value as TownBuildingKind,
                               };
-                              handleUpdateSingleObject(updated, '建物の高さを変更');
+                              handleUpdateSingleObject(updated, '建物の種類を変更');
                             }}
-                            className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                          />
+                            className="w-full bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-stone-200 text-xs"
+                          >
+                            <option value="house">民家 (House)</option>
+                            <option value="shop">商家・工房 (Shop)</option>
+                            <option value="hall">大広間・ギルド (Hall)</option>
+                            <option value="church">教会・聖堂 (Church)</option>
+                            <option value="keep">天守・要塞 (Keep)</option>
+                            <option value="tower">見張り塔 (Tower)</option>
+                            <option value="barn">納屋・倉庫 (Barn)</option>
+                          </select>
                         </div>
 
-                        <div>
-                          <span className="text-stone-400 block mb-0.5">屋根トーン差: {Math.round(singleSelected.tone * 100)}%</span>
-                          <input
-                            type="range"
-                            min={0}
-                            max={1}
-                            step={0.05}
-                            value={singleSelected.tone}
-                            onChange={(e) => {
-                              const updated = {
-                                ...singleSelected,
-                                tone: Number(e.target.value),
-                              };
-                              handleUpdateSingleObject(updated, '屋根トーンの変更');
-                            }}
-                            className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                          />
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">高さ: {singleSelected.heightM}m</span>
+                            <input
+                              type="range"
+                              min={4}
+                              max={24}
+                              step={1}
+                              value={singleSelected.heightM}
+                              onChange={(e) => {
+                                const updated = {
+                                  ...singleSelected,
+                                  heightM: Number(e.target.value),
+                                };
+                                handleUpdateSingleObject(updated, '建物の高さを変更');
+                              }}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">屋根トーン差: {Math.round(singleSelected.tone * 100)}%</span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={singleSelected.tone}
+                              onChange={(e) => {
+                                const updated = {
+                                  ...singleSelected,
+                                  tone: Number(e.target.value),
+                                };
+                                handleUpdateSingleObject(updated, '屋根トーンの変更');
+                              }}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
                         </div>
+                      </div>
+                    )}
+
+                    {/* District properties */}
+                    {singleSelected.kind === 'district' && (
+                      <div>
+                        <span className="text-stone-400 block mb-0.5">区画の種類:</span>
+                        <select
+                          value={singleSelected.districtKind}
+                          onChange={(e) => {
+                            const updated: TownDistrict = {
+                              ...singleSelected,
+                              districtKind: e.target.value as TownDistrictKind,
+                            };
+                            handleUpdateSingleObject(updated, '区画の種類を変更');
+                          }}
+                          className="w-full bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-stone-200 text-xs"
+                        >
+                          <option value="residential">住宅街 (Residential)</option>
+                          <option value="market">市場・商業区 (Market)</option>
+                          <option value="noble">貴族街 (Noble)</option>
+                          <option value="poor">貧民街・下町 (Poor)</option>
+                          <option value="park">庭園・広場 (Park)</option>
+                          <option value="farmland">農地・畑 (Farmland)</option>
+                        </select>
                       </div>
                     )}
                   </div>
