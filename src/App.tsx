@@ -283,7 +283,7 @@ export default function App() {
     bounds: RegionalBounds;
     adjusted: boolean;
     shapePolygon?: [number, number][];
-    options?: { kind?: 'region' | 'town'; name?: string; detailScale?: number };
+    options?: { kind?: 'region' | 'town'; name?: string; detailScale?: number; coastFidelity?: number };
   } | null>(null);
 
   // Spatial index for fast queries
@@ -335,7 +335,6 @@ export default function App() {
   const [showShading, setShowShading] = useState<boolean>(true);
   const [showRipples, setShowRipples] = useState<boolean>(true);
   const [showCompass, setShowCompass] = useState<boolean>(true);
-  const [showBorder, setShowBorder] = useState<boolean>(true);
   const [dimOutsideRegion, setDimOutsideRegion] = useState<boolean>(true);
   const [compassPos, setCompassPos] = useState<{ x: number; y: number }>({ x: 280, y: 320 });
 
@@ -820,7 +819,7 @@ export default function App() {
       zoomScale: 4 | 16,
       name: string,
       shapeMask?: ShapeMaskConfig,
-      options?: { kind?: 'region' | 'town'; detailScale?: number }
+      options?: { kind?: 'region' | 'town'; detailScale?: number; coastFidelity?: number }
     ) => {
       setPendingRegionInfo(null);
       setIsGenerating(true);
@@ -1336,7 +1335,6 @@ export default function App() {
           showShading={showShading}
           showRipples={showRipples}
           showCompass={showCompass}
-          showBorder={showBorder}
           compassPos={compassPos}
           onUpdateCompassPos={setCompassPos}
           symbols={currentSymbols}
@@ -1391,8 +1389,6 @@ export default function App() {
             onToggleRipples={() => setShowRipples((v) => !v)}
             showCompass={showCompass}
             onToggleCompass={() => setShowCompass((v) => !v)}
-            showBorder={showBorder}
-            onToggleBorder={() => setShowBorder((v) => !v)}
             isSymbolPaletteOpen={isSymbolPaletteOpen}
             onToggleSymbolPalette={() => setIsSymbolPaletteOpen((v) => !v)}
             onOpenImageToPixel={() => setIsImageToPixelOpen(true)}

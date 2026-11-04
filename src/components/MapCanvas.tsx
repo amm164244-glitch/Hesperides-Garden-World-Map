@@ -14,8 +14,6 @@ import { applyBrushToElevationGrid, SpatialIndex } from '../utils/terrainEditor'
 import {
   drawCompassRose,
   drawRhumbLines,
-  drawDecorativeBorder,
-  drawAntiqueScaleBar,
 } from '../utils/cartographyRenderer';
 import { drawSortedSymbols, setCustomImageLoadedCallback } from '../utils/symbolRenderer';
 import {
@@ -103,7 +101,6 @@ interface MapCanvasProps {
   showShading: boolean;
   showRipples?: boolean;
   showCompass?: boolean;
-  showBorder?: boolean;
   compassPos?: { x: number; y: number };
   onUpdateCompassPos?: (pos: { x: number; y: number }) => void;
   symbols?: MapSymbolInstance[];
@@ -126,7 +123,7 @@ interface MapCanvasProps {
     bounds: RegionalBounds,
     adjusted?: boolean,
     shapePolygon?: [number, number][],
-    options?: { kind?: 'region' | 'town'; name?: string; detailScale?: number }
+    options?: { kind?: 'region' | 'town'; name?: string; detailScale?: number; coastFidelity?: number }
   ) => void;
   onSelectRegionMap?: (regionId: string) => void;
   mapBackgroundUrl?: string | null;
@@ -184,7 +181,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   showShading,
   showRipples = true,
   showCompass = true,
-  showBorder = true,
   compassPos,
   onUpdateCompassPos,
   symbols = [],
@@ -1953,22 +1949,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       drawCompassRose(ctx, cPos.x, cPos.y, 72, viewport.zoom * dpr);
     }
 
-    // 6. Antique Double Border with Filigree Corners & Scale Bar
-    if (showBorder) {
-      drawDecorativeBorder(ctx, currentWidth, currentHeight, viewport.zoom * dpr);
-      drawAntiqueScaleBar(
-        ctx,
-        42,
-        currentHeight - 56,
-        currentWidth,
-        effectiveWidthKm,
-        viewport.zoom * dpr
-      );
-    } else {
-      ctx.strokeStyle = '#3d2e20';
-      ctx.lineWidth = 3 / (viewport.zoom * dpr);
-      ctx.strokeRect(0, 0, currentWidth, currentHeight);
-    }
+    // 6. Map boundary frame
+    ctx.strokeStyle = '#3d2e20';
+    ctx.lineWidth = 3 / (viewport.zoom * dpr);
+    ctx.strokeRect(0, 0, currentWidth, currentHeight);
 
     ctx.restore();
   }, [
@@ -1983,7 +1967,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     currentWidth,
     currentHeight,
     showCompass,
-    showBorder,
     compassPos,
     effectiveWidthKm,
     symbols,
@@ -4543,16 +4526,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         />
       )}
 
-      {/* Cartographic Scale Bar (Bottom-Left) if outer border is turned off */}
-      {!showBorder && (
-        <div className="absolute bottom-3 left-4 z-20">
-          <ScaleBar
-            worldWidthKm={effectiveWidthKm}
-            mapWidth={currentWidth}
-            viewport={viewport}
-          />
-        </div>
-      )}
+      {/* Cartographic Scale Bar (Bottom-Left) */}
+      <div className="absolute bottom-3 left-4 z-20">
+        <ScaleBar
+          worldWidthKm={effectiveWidthKm}
+          mapWidth={currentWidth}
+          viewport={viewport}
+        />
+      </div>
 
       {/* Map Background Indicator Badge */}
       {mapBackgroundUrl && (

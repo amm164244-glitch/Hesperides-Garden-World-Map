@@ -17,7 +17,6 @@ export interface CompassRoseState {
 export interface CartographyDisplayOptions {
   showCompass: boolean;
   showRhumbLines: boolean;
-  showBorder: boolean;
   showRipples: boolean;
 }
 

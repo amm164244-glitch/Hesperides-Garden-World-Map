@@ -151,13 +151,19 @@ export function traceCoastlinePath(
   width: number,
   height: number,
   seaLevel: number,
-  maxSnapDist: number = 30
+  maxSnapDist: number = 20
 ): [number, number][] {
   const snap1 = findNearestCoastlinePoint(p1[0], p1[1], grid, cols, rows, width, height, seaLevel, maxSnapDist);
   const snap2 = findNearestCoastlinePoint(p2[0], p2[1], grid, cols, rows, width, height, seaLevel, maxSnapDist);
 
-  // If both are snapped to the SAME coastline contour:
-  if (snap1 && snap2 && snap1.contourIndex === snap2.contourIndex) {
+  // If both endpoints are snapped to the SAME coastline contour within maxSnapDist:
+  if (
+    snap1 &&
+    snap2 &&
+    snap1.contourIndex === snap2.contourIndex &&
+    snap1.distance <= maxSnapDist &&
+    snap2.distance <= maxSnapDist
+  ) {
     const contours = getCoastlineContours(grid, cols, rows, width, height, seaLevel);
     const contour = contours[snap1.contourIndex];
     if (contour.length >= 3) {
@@ -201,13 +207,19 @@ export function traceCoastlinePath(
       const lenBwd = calcPathLen(backwardIndices, snap1.point, snap2.point);
 
       const chosenIndices = lenFwd <= lenBwd ? forwardIndices : backwardIndices;
-      const path: [number, number][] = [p1, snap1.point];
+      const path: [number, number][] = [p1];
+      if (Math.hypot(snap1.point[0] - p1[0], snap1.point[1] - p1[1]) > 0.8) {
+        path.push(snap1.point);
+      }
       for (const idx of chosenIndices) {
         path.push([contour[idx][0], contour[idx][1]]);
       }
-      path.push(snap2.point, p2);
+      if (Math.hypot(p2[0] - snap2.point[0], p2[1] - snap2.point[1]) > 0.8) {
+        path.push(snap2.point);
+      }
+      path.push(p2);
 
-      // Clean consecutive identical points
+      // Clean consecutive identical points (< 0.5 units)
       const cleaned: [number, number][] = [path[0]];
       for (let i = 1; i < path.length; i++) {
         const prev = cleaned[cleaned.length - 1];
@@ -219,7 +231,7 @@ export function traceCoastlinePath(
     }
   }
 
-  // Fallback: straight segment
+  // Fallback: direct straight segment (boundary between coast and inland polygon)
   return [p1, p2];
 }
 

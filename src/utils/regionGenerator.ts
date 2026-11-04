@@ -6,10 +6,12 @@ import {
   blurMask,
   applyShapeMaskElevation,
 } from './regionShape';
+import { sampleElevationBicubic } from './elevationSampling';
 
 export interface GenerateRegionOptions {
   kind?: 'region' | 'town';
   detailScale?: number;
+  coastFidelity?: number;
 }
 
 /**
@@ -78,46 +80,29 @@ export function generateRegionalMap(
   const parentCols = parent.gridCols;
   const parentRows = parent.gridRows;
 
-  // Helper for bicubic sampling of the parent elevation
+  // Helper for bicubic sampling of the parent elevation (with ringing clamp)
   const sampleParentElev = (wx: number, wy: number): number => {
-    const clampedX = Math.max(0, Math.min(parent.width, wx));
-    const clampedY = Math.max(0, Math.min(parent.height, wy));
-
-    const u = (clampedX / parent.width) * (parentCols - 1);
-    const v = (clampedY / parent.height) * (parentRows - 1);
-
-    const c1 = Math.floor(u);
-    const r1 = Math.floor(v);
-    const tx = u - c1;
-    const ty = v - r1;
-
-    const getVal = (c: number, r: number) => {
-      const cc = Math.max(0, Math.min(parentCols - 1, c));
-      const rr = Math.max(0, Math.min(parentRows - 1, r));
-      return parent.elevationGrid[rr * parentCols + cc];
-    };
-
-    const hermite = (p0: number, p1: number, p2: number, p3: number, t: number) => {
-      const a = -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3;
-      const b = p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3;
-      const c = -0.5 * p0 + 0.5 * p2;
-      const d = p1;
-      return a * t * t * t + b * t * t + c * t + d;
-    };
-
-    const rows: number[] = new Array(4);
-    for (let i = 0; i < 4; i++) {
-      const r = r1 - 1 + i;
-      rows[i] = hermite(getVal(c1 - 1, r), getVal(c1, r), getVal(c1 + 1, r), getVal(c1 + 2, r), tx);
-    }
-
-    return hermite(rows[0], rows[1], rows[2], rows[3], ty);
+    return sampleElevationBicubic(
+      parent.elevationGrid,
+      parentCols,
+      parentRows,
+      parent.width,
+      parent.height,
+      wx,
+      wy,
+      true
+    );
   };
 
   const isTown = options?.kind === 'town';
   const detailScale = typeof options?.detailScale === 'number'
     ? options.detailScale
     : (isTown ? 0.15 : 1.0);
+
+  const defaultCoastFidelity = isTown ? 0.9 : 0.8;
+  const coastFidelity = typeof options?.coastFidelity === 'number'
+    ? Math.max(0, Math.min(1, options.coastFidelity))
+    : defaultCoastFidelity;
 
   const noiseScale = zoomScale === 16 ? 0.03 : 0.012;
   const baseDetailAmp = zoomScale === 16 ? 4.5 : 2.8;
@@ -135,9 +120,10 @@ export function generateRegionalMap(
       const baseElev = sampleParentElev(wx, wy);
 
       // 2. Add resolution-dependent micro-fractal detail
-      // Fades smoothly to zero at seaLevel so regional map coastline exactly matches parent map
-      const dCoast = Math.abs(baseElev - parent.seaLevel);
-      const coastFade = Math.min(1.0, Math.max(0.0, dCoast / 2.5));
+      // d = |baseElev - seaLevel|
+      // noiseMul = 1 - coastFidelity * exp(-d / 3)
+      const d = Math.abs(baseElev - parent.seaLevel);
+      const noiseMul = 1.0 - coastFidelity * Math.exp(-d / 3.0);
 
       const n1 = microNoise.fbm(wx * noiseScale, wy * noiseScale, 3);
       const n2 = detailNoise.sample(wx * noiseScale * 3.5, wy * noiseScale * 3.5);
@@ -148,8 +134,24 @@ export function generateRegionalMap(
         mountainBonus = microNoise.ridged(wx * noiseScale * 2.0, wy * noiseScale * 2.0, 3) * (detailAmp * 1.5);
       }
 
-      const microElev = ((n1 - 0.5) * detailAmp + n2 * (detailAmp * 0.4) + mountainBonus) * coastFade;
-      const finalElev = Math.max(0, Math.min(100, baseElev + microElev));
+      // Base micro noise with zero-mean (n1 instead of n1 - 0.5) and coast fidelity factor
+      const baseMicro = (n1 * detailAmp + n2 * (detailAmp * 0.4)) * noiseMul;
+      const microElev = baseMicro + mountainBonus;
+
+      let rawElev = baseElev + microElev;
+
+      // 3. Prevent small spurious land/sea islands/holes within ±3 of seaLevel:
+      // If parent is on one side of sea level, child stays on the same side.
+      // If noise pushes it across, clamp to edge of sea level (seaLevel ± 0.05).
+      if (coastFidelity > 0 && d <= 3.0) {
+        if (baseElev > parent.seaLevel && rawElev < parent.seaLevel) {
+          rawElev = parent.seaLevel + 0.05;
+        } else if (baseElev < parent.seaLevel && rawElev >= parent.seaLevel) {
+          rawElev = parent.seaLevel - 0.05;
+        }
+      }
+
+      const finalElev = Math.max(0, Math.min(100, rawElev));
 
       const idx = r * gridCols + c;
       elevationGrid[idx] = finalElev;

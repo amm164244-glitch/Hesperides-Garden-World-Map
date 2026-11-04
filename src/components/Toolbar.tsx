@@ -17,7 +17,6 @@ import {
   Eye,
   Grid,
   Compass,
-  Square,
   Sparkles,
   MapPin,
   Paintbrush,
@@ -57,8 +56,6 @@ interface ToolbarProps {
   onToggleRipples: () => void;
   showCompass: boolean;
   onToggleCompass: () => void;
-  showBorder: boolean;
-  onToggleBorder: () => void;
   isSymbolPaletteOpen: boolean;
   onToggleSymbolPalette: () => void;
   onOpenImageToPixel?: () => void;
@@ -108,8 +105,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onToggleRipples,
   showCompass,
   onToggleCompass,
-  showBorder,
-  onToggleBorder,
   isSymbolPaletteOpen,
   onToggleSymbolPalette,
   onOpenImageToPixel,
@@ -864,20 +859,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <Compass className="w-3.5 h-3.5" />
             <span>羅針盤</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleBorder}
-            className={`px-2 py-1 rounded text-xs flex items-center gap-1 transition-all ${
-              showBorder
-                ? 'bg-amber-900/60 text-amber-300 border border-amber-600/60'
-                : 'bg-stone-800 text-stone-500'
-            }`}
-            title="アンティーク二重装飾枠とコーナー金具の表示切り替え"
-          >
-            <Square className="w-3.5 h-3.5" />
-            <span>装飾枠</span>
           </button>
 
           {onToggleAutoRegionSwitch && (

@@ -13,7 +13,7 @@ self.onmessage = (e: MessageEvent<{
   zoomScale?: 4 | 16;
   name?: string;
   shapeMask?: ShapeMaskConfig;
-  options?: { kind?: 'region' | 'town'; detailScale?: number };
+  options?: { kind?: 'region' | 'town'; detailScale?: number; coastFidelity?: number };
 }>) => {
   const { action = 'generateWorld', width, height, config, worldMap, parentMap, bounds, zoomScale, name, shapeMask, options } = e.data;
 

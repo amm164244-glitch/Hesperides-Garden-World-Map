@@ -10,13 +10,13 @@ interface RegionSelectorProps {
   wasAdjusted?: boolean;
   shapePolygon?: [number, number][];
   initialName?: string;
-  options?: { kind?: 'region' | 'town'; detailScale?: number };
+  options?: { kind?: 'region' | 'town'; detailScale?: number; coastFidelity?: number };
   onGenerate: (
     bounds: RegionalBounds,
     zoomScale: 4 | 16,
     name: string,
     shapeMask?: ShapeMaskConfig,
-    options?: { kind?: 'region' | 'town'; detailScale?: number }
+    options?: { kind?: 'region' | 'town'; detailScale?: number; coastFidelity?: number }
   ) => void;
   onCancel: () => void;
 }
@@ -33,6 +33,10 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
   onCancel,
 }) => {
   const isTown = options?.kind === 'town';
+  const defaultCoastFidelity = isTown ? 0.9 : 0.8;
+  const [coastFidelity, setCoastFidelity] = useState<number>(
+    typeof options?.coastFidelity === 'number' ? options.coastFidelity : defaultCoastFidelity
+  );
   const [zoomScale, setZoomScale] = useState<4 | 16>(4);
   const [regionName, setRegionName] = useState<string>(
     initialName || (isTown ? '街道の宿場町' : '新地域マップ')
@@ -244,6 +248,29 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
         </div>
       )}
 
+      {/* Coastline Fidelity Slider */}
+      <div className="flex flex-col gap-1.5 bg-stone-950/60 p-2.5 rounded-lg border border-stone-800">
+        <div className="flex justify-between items-center text-[11px]">
+          <span className="text-stone-300 font-medium flex items-center gap-1.5">
+            <Waves className="w-3.5 h-3.5 text-cyan-400" />
+            海岸線の忠実度:
+          </span>
+          <span className="font-mono text-cyan-300 font-bold">{Math.round(coastFidelity * 100)}%</span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={coastFidelity}
+          onChange={(e) => setCoastFidelity(parseFloat(e.target.value))}
+          className="w-full accent-cyan-500 h-1.5 bg-stone-800 rounded-lg cursor-pointer"
+        />
+        <span className="text-[10px] text-stone-400">
+          高いほど、親マップの海岸線・陸地の形が保たれます。低いほど、細部の起伏が自由に加わります
+        </span>
+      </div>
+
       <div className="flex justify-end gap-2 mt-1">
         <button
           type="button"
@@ -265,6 +292,7 @@ export const RegionSelector: React.FC<RegionSelectorProps> = ({
             onGenerate(bounds, zoomScale, regionName, maskConfig, {
               kind: isTown ? 'town' : 'region',
               detailScale,
+              coastFidelity,
             });
           }}
           className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-lg transition active:scale-95"

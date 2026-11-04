@@ -31,6 +31,7 @@ uniform int u_view_mode;  // 0: elevation, 3: landSea
 uniform float u_show_shading;
 uniform float u_shallows_width;
 uniform float u_show_ripples;
+uniform float u_texel_screen_px;
 
 // Fast hardware-friendly PRNG hash without slow trigonometric sin()
 float fastHash(vec2 p) {
@@ -51,15 +52,75 @@ float noise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Hardware bilinear sampling with Hermite cubic UV curve for smooth C1 interpolation
+// Catmull-Rom cubic weights for Hermite spline with a = -0.5
+vec4 catmullRomWeights(float t) {
+  float t2 = t * t;
+  float t3 = t2 * t;
+  return vec4(
+    -0.5 * t3 + t2 - 0.5 * t,
+     1.5 * t3 - 2.5 * t2 + 1.0,
+    -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+     0.5 * t3 - 0.5 * t2
+  );
+}
+
+// Consistent elevation sampling:
+// - Zoomed out (< 1.5 screen pixels per texel): fast single-tap bilinear with exact node alignment (n + 0.5) / size
+// - Zoomed in (>= 1.5 screen pixels per texel): 4-tap bilinear Catmull-Rom bicubic with 2x2 neighborhood clamp
 float sampleSmoothElev(vec2 uv) {
-  vec2 gridPos = uv * (u_grid_size - vec2(1.0));
-  vec2 pixelCoord = clamp(gridPos, vec2(0.0), u_grid_size - vec2(1.0));
-  vec2 i = floor(pixelCoord);
-  vec2 f = pixelCoord - i;
-  f = f * f * (3.0 - 2.0 * f); // Hermite cubic curve
-  vec2 smoothUV = (i + f + vec2(0.5)) / u_grid_size;
-  return texture(u_elevation_tex, clamp(smoothUV, 0.0, 1.0)).r * 100.0;
+  // Node coordinates n in [0, u_grid_size - 1.0]
+  vec2 n = uv * (u_grid_size - vec2(1.0));
+  vec2 clampedN = clamp(n, vec2(0.0), u_grid_size - vec2(1.0));
+
+  if (u_texel_screen_px < 1.5) {
+    // Single bilinear tap: texCoord = (n + 0.5) / u_grid_size
+    vec2 texUV = (clampedN + vec2(0.5)) / u_grid_size;
+    return texture(u_elevation_tex, clamp(texUV, vec2(0.0), vec2(1.0))).r * 100.0;
+  }
+
+  vec2 i = floor(clampedN);
+  vec2 f = clampedN - i;
+
+  vec4 wx = catmullRomWeights(f.x);
+  vec4 wy = catmullRomWeights(f.y);
+
+  vec2 W0 = vec2(wx.x + wx.y, wy.x + wy.y);
+  vec2 W1 = vec2(wx.z + wx.w, wy.z + wy.w);
+
+  // Safe division to guard against zero weights
+  vec2 safeW0 = mix(W0, vec2(1.0), lessThan(abs(W0), vec2(1e-6)));
+  vec2 safeW1 = mix(W1, vec2(1.0), lessThan(abs(W1), vec2(1e-6)));
+
+  vec2 offset0 = -vec2(wx.x, wy.x) / safeW0;
+  vec2 offset1 = vec2(1.0) + vec2(wx.w, wy.w) / safeW1;
+
+  vec2 pos0 = (i + offset0 + vec2(0.5)) / u_grid_size;
+  vec2 pos1 = (i + offset1 + vec2(0.5)) / u_grid_size;
+
+  pos0 = clamp(pos0, vec2(0.0), vec2(1.0));
+  pos1 = clamp(pos1, vec2(0.0), vec2(1.0));
+
+  float s00 = texture(u_elevation_tex, vec2(pos0.x, pos0.y)).r * 100.0;
+  float s10 = texture(u_elevation_tex, vec2(pos1.x, pos0.y)).r * 100.0;
+  float s01 = texture(u_elevation_tex, vec2(pos0.x, pos1.y)).r * 100.0;
+  float s11 = texture(u_elevation_tex, vec2(pos1.x, pos1.y)).r * 100.0;
+
+  float row0 = W0.x * s00 + W1.x * s10;
+  float row1 = W0.x * s01 + W1.x * s11;
+  float elev = W0.y * row0 + W1.y * row1;
+
+  // Clamp to surrounding 2x2 grid points to prevent overshoot/undershoot ringing
+  ivec2 iCoord0 = ivec2(i);
+  ivec2 iCoord1 = ivec2(min(i + vec2(1.0), u_grid_size - vec2(1.0)));
+  float v00 = texelFetch(u_elevation_tex, iCoord0, 0).r * 100.0;
+  float v10 = texelFetch(u_elevation_tex, ivec2(iCoord1.x, iCoord0.y), 0).r * 100.0;
+  float v01 = texelFetch(u_elevation_tex, ivec2(iCoord0.x, iCoord1.y), 0).r * 100.0;
+  float v11 = texelFetch(u_elevation_tex, iCoord1, 0).r * 100.0;
+
+  float minVal = min(min(v00, v10), min(v01, v11));
+  float maxVal = max(max(v00, v10), max(v01, v11));
+
+  return clamp(elev, minVal, maxVal);
 }
 
 // Antique Parchment & Portolan Palette
@@ -253,6 +314,7 @@ export class WebGLMapRenderer {
   private uShowRipplesLoc: WebGLUniformLocation | null = null;
   private uShallowsWidthLoc: WebGLUniformLocation | null = null;
   private uElevationTexLoc: WebGLUniformLocation | null = null;
+  private uTexelScreenPxLoc: WebGLUniformLocation | null = null;
 
   private currentCols: number = 0;
   private currentRows: number = 0;
@@ -316,6 +378,7 @@ export class WebGLMapRenderer {
     this.uShowRipplesLoc = gl.getUniformLocation(program, 'u_show_ripples');
     this.uShallowsWidthLoc = gl.getUniformLocation(program, 'u_shallows_width');
     this.uElevationTexLoc = gl.getUniformLocation(program, 'u_elevation_tex');
+    this.uTexelScreenPxLoc = gl.getUniformLocation(program, 'u_texel_screen_px');
   }
 
   private initGeometry() {
@@ -480,6 +543,9 @@ export class WebGLMapRenderer {
     gl.uniform1f(this.uShowShadingLoc, options.showShading ? 1.0 : 0.0);
     gl.uniform1f(this.uShowRipplesLoc, options.showRipples !== false ? 1.0 : 0.0);
     gl.uniform1f(this.uShallowsWidthLoc, 3.2);
+
+    const texelScreenPx = viewport.zoom * dpr * (mapWidth / gridCols);
+    gl.uniform1f(this.uTexelScreenPxLoc, texelScreenPx);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.elevationTexture);

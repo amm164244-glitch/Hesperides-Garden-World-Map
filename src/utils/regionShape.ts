@@ -97,8 +97,12 @@ export function simplifyPolyline(points: [number, number][], tolerance: number):
 }
 
 /**
- * Catmull-Rom closed spline smoothing for polygons.
- * Returns a smoothed polygon with segmentsPerEdge interpolated points per vertex.
+ * Centripetal Catmull-Rom (alpha = 0.5) closed spline smoothing for polygons.
+ * Unlike standard uniform Catmull-Rom, centripetal parameterization mathematically
+ * prevents cusps, self-intersections, and wild overshoot spikes when adjacent segments
+ * have widely varying lengths (e.g. connecting a long polygon edge to a dense coastline contour).
+ *
+ * Returns a smoothed polygon with up to segmentsPerEdge interpolated points per vertex.
  */
 export function smoothPolygon(
   points: [number, number][],
@@ -109,35 +113,68 @@ export function smoothPolygon(
     return [...points];
   }
 
+  // Deduplicate consecutive identical points (< 0.5 units) to avoid zero-length segments
+  const cleaned: [number, number][] = [points[0]];
+  for (let i = 1; i < n; i++) {
+    const prev = cleaned[cleaned.length - 1];
+    if (Math.hypot(points[i][0] - prev[0], points[i][1] - prev[1]) > 0.5) {
+      cleaned.push(points[i]);
+    }
+  }
+  if (cleaned.length >= 3) {
+    const first = cleaned[0];
+    const last = cleaned[cleaned.length - 1];
+    if (Math.hypot(last[0] - first[0], last[1] - first[1]) < 0.5) {
+      cleaned.pop();
+    }
+  }
+
+  const m = cleaned.length;
+  if (m < 3) return [...points];
+
   const result: [number, number][] = [];
+  const alpha = 0.5; // Centripetal parameterization
 
-  for (let i = 0; i < n; i++) {
-    const p0 = points[(i - 1 + n) % n];
-    const p1 = points[i];
-    const p2 = points[(i + 1) % n];
-    const p3 = points[(i + 2) % n];
+  for (let i = 0; i < m; i++) {
+    const p0 = cleaned[(i - 1 + m) % m];
+    const p1 = cleaned[i];
+    const p2 = cleaned[(i + 1) % m];
+    const p3 = cleaned[(i + 2) % m];
 
-    for (let s = 0; s < segmentsPerEdge; s++) {
-      const t = s / segmentsPerEdge;
-      const t2 = t * t;
-      const t3 = t2 * t;
+    const segLen = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+    // For already dense micro-segments (< 3.0 units, like raw coastline contour vertices),
+    // 1 sample is sufficient to preserve exact geometry without bloat or wiggling.
+    const subs = segLen < 3.0 ? 1 : segmentsPerEdge;
 
-      // Standard Catmull-Rom spline formula
-      const x =
-        0.5 *
-        (2 * p1[0] +
-          (-p0[0] + p2[0]) * t +
-          (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 +
-          (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+    const d01 = Math.max(1e-4, Math.hypot(p1[0] - p0[0], p1[1] - p0[1]));
+    const d12 = Math.max(1e-4, segLen);
+    const d23 = Math.max(1e-4, Math.hypot(p3[0] - p2[0], p3[1] - p2[1]));
 
-      const y =
-        0.5 *
-        (2 * p1[1] +
-          (-p0[1] + p2[1]) * t +
-          (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 +
-          (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+    const t0 = 0;
+    const t1 = t0 + Math.pow(d01, alpha);
+    const t2 = t1 + Math.pow(d12, alpha);
+    const t3 = t2 + Math.pow(d23, alpha);
 
-      result.push([x, y]);
+    for (let s = 0; s < subs; s++) {
+      const t = t1 + (s / subs) * (t2 - t1);
+
+      // Barry and Goldman pyramidal formulation of centripetal Catmull-Rom
+      const a1x = ((t1 - t) * p0[0] + (t - t0) * p1[0]) / (t1 - t0);
+      const a1y = ((t1 - t) * p0[1] + (t - t0) * p1[1]) / (t1 - t0);
+      const a2x = ((t2 - t) * p1[0] + (t - t1) * p2[0]) / (t2 - t1);
+      const a2y = ((t2 - t) * p1[1] + (t - t1) * p2[1]) / (t2 - t1);
+      const a3x = ((t3 - t) * p2[0] + (t - t2) * p3[0]) / (t3 - t2);
+      const a3y = ((t3 - t) * p2[1] + (t - t2) * p3[1]) / (t3 - t2);
+
+      const b1x = ((t2 - t) * a1x + (t - t0) * a2x) / (t2 - t0);
+      const b1y = ((t2 - t) * a1y + (t - t0) * a2y) / (t2 - t0);
+      const b2x = ((t3 - t) * a2x + (t - t1) * a3x) / (t3 - t1);
+      const b2y = ((t3 - t) * a2y + (t - t1) * a3y) / (t3 - t1);
+
+      const cx = ((t2 - t) * b1x + (t - t1) * b2x) / (t2 - t1);
+      const cy = ((t2 - t) * b1y + (t - t1) * b2y) / (t2 - t1);
+
+      result.push([cx, cy]);
     }
   }
 
