@@ -29,7 +29,7 @@ export interface GeneratorConfig {
   erosionIterations?: number; // 0 - 50 (熱侵食・水侵食の反復回数)
   erosionStrength?: number; // 1 - 10 (侵食強度)
   cellCount?: number;
-  coastlineComplexity?: number; // 1 - 10 (リアス式海岸・フラクタルギザギザ海岸線の複雑さ、標準: 8)
+  coastlineComplexity?: number; // 1 - 10 (海岸線の複雑さ・湾曲度、標準: 4)
 }
 
 export interface RegionalBounds {

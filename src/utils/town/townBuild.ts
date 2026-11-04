@@ -7,6 +7,7 @@
 import {
   Pt,
   TownBuilding,
+  TownBuildingKind,
   TownClipboardData,
   TownDistrict,
   TownObject,
@@ -647,5 +648,50 @@ export function minAreaRect(polygon: Pt[]): Pt[] {
   return corners.map(([rx, ry]) => [
     rx * cosB - ry * sinB,
     rx * sinB + ry * cosB,
+  ]);
+}
+
+/**
+ * Deterministically generates a roof tone (0 to 1) based on a building's unique id.
+ */
+export function deterministicRoofTone(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  }
+  return (hash % 1000) / 1000;
+}
+
+/**
+ * Generates polygon points for a preset building size (widthM x depthM) or 12-sided tower.
+ * Rotated by angleRad and centered on center.
+ */
+export function generatePresetPolygon(
+  center: Pt,
+  kind: TownBuildingKind,
+  widthM: number,
+  depthM: number,
+  angleRad: number,
+  metersPerUnit: number
+): Pt[] {
+  if (kind === 'tower') {
+    const radiusUnits = (widthM / metersPerUnit) / 2;
+    return circlePolygon(center, radiusUnits, 12);
+  }
+
+  const hw = (widthM / metersPerUnit) / 2;
+  const hd = (depthM / metersPerUnit) / 2;
+  const cosA = Math.cos(angleRad);
+  const sinA = Math.sin(angleRad);
+  const localCorners: Pt[] = [
+    [-hw, -hd],
+    [hw, -hd],
+    [hw, hd],
+    [-hw, hd],
+  ];
+
+  return localCorners.map(([lx, ly]) => [
+    center[0] + lx * cosA - ly * sinA,
+    center[1] + lx * sinA + ly * cosA,
   ]);
 }

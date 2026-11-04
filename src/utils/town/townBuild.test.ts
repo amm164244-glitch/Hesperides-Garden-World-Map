@@ -14,6 +14,8 @@ import {
   distributeEvenly,
   minAreaRect,
   hasEdgeLessThanM,
+  deterministicRoofTone,
+  generatePresetPolygon,
 } from './townBuild';
 import {
   TownBuilding,
@@ -349,5 +351,33 @@ describe('townBuild pure geometric & alignment utilities', () => {
     const origArea = Math.abs(polygonArea(original));
     const obbArea = Math.abs(polygonArea(obb));
     assert.ok(Math.abs(origArea - obbArea) < 1e-3);
+  });
+
+  it('deterministicRoofTone produces stable numbers in [0, 1)', () => {
+    const tone1 = deterministicRoofTone('house_123');
+    const tone2 = deterministicRoofTone('house_123');
+    const tone3 = deterministicRoofTone('house_456');
+
+    assert.equal(tone1, tone2);
+    assert.ok(tone1 >= 0 && tone1 <= 1);
+    assert.ok(tone3 >= 0 && tone3 <= 1);
+  });
+
+  it('generatePresetPolygon creates correct rectangular and tower polygons', () => {
+    // Preset House 10m x 6m at 1m/unit
+    const housePoly = generatePresetPolygon([50, 50], 'house', 10, 6, 0, 1);
+    assert.equal(housePoly.length, 4);
+    assert.deepEqual(housePoly[0], [45, 47]);
+    assert.deepEqual(housePoly[1], [55, 47]);
+    assert.deepEqual(housePoly[2], [55, 53]);
+    assert.deepEqual(housePoly[3], [45, 53]);
+
+    // Preset Tower: 12-gon circle
+    const towerPoly = generatePresetPolygon([100, 100], 'tower', 8, 8, 0, 1);
+    assert.equal(towerPoly.length, 12);
+    for (const p of towerPoly) {
+      const d = Math.hypot(p[0] - 100, p[1] - 100);
+      assert.ok(Math.abs(d - 4) < 1e-5);
+    }
   });
 });

@@ -325,15 +325,14 @@ export function generateTectonicWorld(
     );
   }
 
-  // 6. RIA COASTLINE & SERRATED SHORELINE SYNTHESIS (リアス式海岸・ギザギザ海岸線の自動生成)
-  // Real coastlines feature dendritic drowned valleys (rias), rocky jagged headlands,
-  // narrow fjords, and chains of coastal barrier islets.
-  // Using horizontal coordinate domain warping + dendritic ridged carving + multi-scale fractal serration.
-  onProgress?.(78, 'リアス海岸・複雑な海岸線フラクタルを刻み込み中...');
+  // 6. NATURAL CARTOGRAPHIC COASTLINE SYNTHESIS (自然で美しい海岸線の形成)
+  // Produces organic, natural bays, capes, and gentle indentations matching authentic fantasy cartography.
+  // Avoids high-frequency jagged noise / micro-pixel clutter.
+  onProgress?.(78, '自然な海岸線の形状を調整中...');
   const riaNoise = new Noise2D(seed + 8819);
   const riaWarpNoise = new Noise2D(seed + 2047);
   const riaDetailNoise = new Noise2D(seed + 4127);
-  const riaComplexity = config.coastlineComplexity !== undefined ? config.coastlineComplexity : 8;
+  const riaComplexity = config.coastlineComplexity !== undefined ? config.coastlineComplexity : 4;
   const riaIntensity = Math.max(0.1, Math.min(1.0, riaComplexity / 10.0));
 
   // Copy post-erosion base elevation for domain-warped resampling along coastal margins
@@ -348,19 +347,16 @@ export function generateTectonicWorld(
       const curElev = baseElevations[idx];
       const dCoast = Math.abs(curElev - STANDARD_SEA_LEVEL);
 
-      // Apply ria fractal displacement specifically along the coastal margin (shallow water to coastal hills)
-      if (dCoast < 22.0) {
+      // Apply natural coastal shaping along coastal margin
+      if (dCoast < 20.0) {
         const wx = c * cellW;
-        // Peak influence right at sea level (dCoast = 0), smoothly tapering inland and offshore
-        const coastWeight = Math.pow(Math.max(0.0, 1.0 - dCoast / 22.0), 1.15);
+        const coastWeight = Math.pow(Math.max(0.0, 1.0 - dCoast / 20.0), 1.2);
 
-        // 1. Horizontal Coordinate Domain Warping (水平領域歪曲):
-        // Warps the sampling position across the coastline so straight contours fold into winding, rugged capes and bays
-        const warpAng = riaWarpNoise.sample(wx * 0.0035, wy * 0.0035) * Math.PI * 4;
+        // 1. Organic Domain Warping (自然なうねり・湾曲)
+        const warpAng = riaWarpNoise.sample(wx * 0.0024, wy * 0.0024) * Math.PI * 2;
         const warpMag =
-          (riaWarpNoise.sample(wx * 0.007 + 19.3, wy * 0.007 + 41.7) * 0.65 +
-            riaDetailNoise.sample(wx * 0.022, wy * 0.022) * 0.35) *
-          (cellW * 8.5) *
+          riaWarpNoise.sample(wx * 0.005 + 19.3, wy * 0.005 + 41.7) *
+          (cellW * 4.5) *
           riaIntensity *
           coastWeight;
         const dispX = Math.cos(warpAng) * warpMag;
@@ -386,29 +382,17 @@ export function generateTectonicWorld(
         const sx = wx + dispX;
         const sy = wy + dispY;
 
-        // 2. Meso bays and rugged peninsulas (中規模の湾・半島)
-        const bayNoise = (riaNoise.fbm(sx * 0.0045, sy * 0.0045, 3, 0.52, 2.1) - 0.5) * 2.0;
+        // 2. Smooth meso bays and sweeping peninsulas (穏やかな湾と岬)
+        const bayNoise = (riaNoise.fbm(sx * 0.0035, sy * 0.0035, 3, 0.5, 2.0) - 0.5) * 2.0;
 
-        // 3. Dendritic ria fjords & drowned river valleys (樹状のリアス式入り江と海に突き出る岩山尾根)
-        const fjordRidge = riaNoise.ridged(sx * 0.0135, sy * 0.0135, 3, 0.56, 2.2);
-        const dendriticCarving = (fjordRidge - 0.44) * 11.5;
+        // 3. Gentle coastal undulation without harsh spiky ridges
+        const coastalRidge = (riaNoise.sample(sx * 0.009, sy * 0.009) - 0.5) * 3.8;
 
-        // 4. High-frequency fractal serrations (海岸線のギザギザ・鋸歯状フラクタル)
-        const s1 = riaDetailNoise.sample(sx * 0.035, sy * 0.035);
-        const s2 = riaDetailNoise.sample(sx * 0.085, sy * 0.085);
-        const s3 = riaDetailNoise.sample(sx * 0.19, sy * 0.19);
-        const fineSerration = (s1 * 0.50 + s2 * 0.35 + s3 * 0.15 - 0.5) * 7.5;
+        // 4. Subtle, smooth organic variation (clean, non-pixelated)
+        const s1 = (riaDetailNoise.sample(sx * 0.018, sy * 0.018) - 0.5) * 2.4;
 
-        // 5. Chains of coastal barrier skerries & islets (沿岸の岩礁・小島群)
-        const skerryNoise = riaDetailNoise.sample(sx * 0.024, sy * 0.024);
-        const isShallowOffshore = warpedElev < STANDARD_SEA_LEVEL && warpedElev > STANDARD_SEA_LEVEL - 7.5;
-        const skerryBoost = (isShallowOffshore && skerryNoise > 0.58)
-          ? ((skerryNoise - 0.58) * 22.0 + 3.5)
-          : 0.0;
-
-        // Combined ria perturbation
         const riaDelta =
-          (bayNoise * 6.0 + dendriticCarving + fineSerration + skerryBoost) *
+          (bayNoise * 5.0 + coastalRidge + s1) *
           coastWeight *
           riaIntensity;
 

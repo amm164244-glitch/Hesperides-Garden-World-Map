@@ -51,27 +51,29 @@ float noise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Hardware bilinear sampling with Hermite cubic UV curve for smooth C1 interpolation (1 single texture fetch)
+// Hardware bilinear sampling with Hermite cubic UV curve for smooth C1 interpolation
 float sampleSmoothElev(vec2 uv) {
-  vec2 pixelCoord = uv * (u_grid_size - vec2(1.0)) - 0.5;
-  vec2 f = fract(pixelCoord);
+  vec2 gridPos = uv * (u_grid_size - vec2(1.0));
+  vec2 pixelCoord = clamp(gridPos, vec2(0.0), u_grid_size - vec2(1.0));
+  vec2 i = floor(pixelCoord);
+  vec2 f = pixelCoord - i;
   f = f * f * (3.0 - 2.0 * f); // Hermite cubic curve
-  vec2 smoothUV = (floor(pixelCoord) + 0.5 + f) / (u_grid_size - vec2(1.0));
+  vec2 smoothUV = (i + f + vec2(0.5)) / u_grid_size;
   return texture(u_elevation_tex, clamp(smoothUV, 0.0, 1.0)).r * 100.0;
 }
 
 // Antique Parchment & Portolan Palette
-// Matches high-end fantasy cartography (Wonderdraft/Tolkien style):
-// Teal sea-green ocean, multi-tier ripples, ink coastline, parchment planes
+// Matches authentic fantasy cartography (reference antique map style):
+// Teal sea-green ocean, clean shallow coastal aura, crisp dark ink coastline, warm ochre halo, parchment planes
 vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDistToCoast, float slope) {
   // Ocean colors
   if (elev < seaLevel) {
     float depth = (seaLevel - elev);
 
-    // Antique Fantasy Teal / Sea-Green Ocean Palette (matching the reference map)
-    vec3 deepSea      = vec3(0.09, 0.22, 0.26); // #173842 deep sea-green / teal abyss
-    vec3 midSea       = vec3(0.16, 0.35, 0.38); // #295961 rich ocean teal
-    vec3 coastalSea   = vec3(0.24, 0.49, 0.52); // #3d7d85 sea-green shallows
+    // Antique Fantasy Teal / Sea-Green Ocean Palette
+    vec3 deepSea      = vec3(0.10, 0.23, 0.27); // #1a3b45 deep sea-green
+    vec3 midSea       = vec3(0.17, 0.36, 0.40); // #2b5c66 rich ocean teal
+    vec3 coastalSea   = vec3(0.25, 0.50, 0.53); // #408087 sea-green shallows
     vec3 paleShallow  = vec3(0.48, 0.77, 0.77); // #7bc5c5 luminous turquoise shallows
     vec3 crestWhite   = vec3(0.85, 0.95, 0.95); // pale froth ripple crest
 
@@ -83,29 +85,20 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
       waterCol = mix(midSea, coastalSea, (seaT - 0.5) / 0.5);
     }
 
-    // Pale turquoise shallow water coastal aura (海側の淡い水色の浅瀬の帯)
-    float shallowsFactor = smoothstep(u_shallows_width * 1.8, 0.0, depth);
-    waterCol = mix(waterCol, paleShallow, shallowsFactor * 0.72);
+    // Gentle turquoise coastal shallows aura (海側の淡い水色の浅瀬の帯 - 自然な単一グラデーション)
+    float shallowsFactor = smoothstep(12.0, 1.0, pixelDistToCoast);
+    waterCol = mix(waterCol, paleShallow, shallowsFactor * 0.55);
 
-    // Multi-tier Concentric Echo Waves / Ripples (同心円状の沿岸波紋)
+    // Single subtle, clean coastal wave echo (穏やかで控えめな単一波紋)
     if (u_show_ripples > 0.5) {
-      // 1st ripple (closest to coast)
-      float r1 = smoothstep(1.3, 0.0, abs(pixelDistToCoast - 3.8));
-      // 2nd ripple
-      float r2 = smoothstep(1.4, 0.0, abs(pixelDistToCoast - 8.5));
-      // 3rd ripple
-      float r3 = smoothstep(1.6, 0.0, abs(pixelDistToCoast - 14.5));
-      // 4th ripple (faintest outer echo)
-      float r4 = smoothstep(1.8, 0.0, abs(pixelDistToCoast - 22.0));
-
-      float ripplesVal = r1 * 0.55 + r2 * 0.36 + r3 * 0.22 + r4 * 0.12;
-      waterCol = mix(waterCol, crestWhite, clamp(ripplesVal, 0.0, 0.85));
+      float r1 = smoothstep(1.3, 0.0, abs(pixelDistToCoast - 5.0)) * 0.32;
+      waterCol = mix(waterCol, crestWhite, r1);
     }
 
     // Crisp ink coastline edge on ocean side (海岸線エッジにクッキリとした暗色インクのアウトライン)
-    if (pixelDistToCoast < 1.4) {
+    if (pixelDistToCoast < 1.8) {
       vec3 inkDark = vec3(0.12, 0.10, 0.08); // dark drawing ink
-      float inkAlpha = smoothstep(1.4, 0.0, pixelDistToCoast) * 0.92;
+      float inkAlpha = smoothstep(1.8, 0.1, pixelDistToCoast) * 0.95;
       waterCol = mix(waterCol, inkDark, inkAlpha);
     }
 
@@ -115,7 +108,7 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
   // Land (seaLevel to 100)
   float landH = elev - seaLevel;
 
-  // Parchment color planes requested:
+  // Parchment color planes:
   // 低地（黄緑〜黄土）、丘陵（茶）、高地（灰茶）、岩山（灰）、雪（白）
   vec3 beachSand          = vec3(0.85, 0.79, 0.65); // #d9c9a6 parchment dune sand
   vec3 lowlandGreen       = vec3(0.63, 0.67, 0.46); // #a1ab75 antique muted yellow-green
@@ -165,17 +158,18 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
     landCol = mix(landCol, cliffCol, rockExposure * 0.70);
   }
 
-  // Crisp ink coastline edge on land side
-  if (pixelDistToCoast < 1.4) {
-    vec3 inkDark = vec3(0.12, 0.10, 0.08);
-    float inkAlpha = smoothstep(1.4, 0.0, pixelDistToCoast) * 0.92;
-    landCol = mix(landCol, inkDark, inkAlpha);
-  }
-  // Antique warm sepia/ochre vignette halo bordering the coast inside the land
-  else if (pixelDistToCoast < 12.0) {
-    vec3 coastalSepia = vec3(0.55, 0.44, 0.30); // #8c704d warm antique sepia border
-    float haloAlpha = smoothstep(12.0, 1.4, pixelDistToCoast) * 0.55;
+  // Antique warm ochre/sepia vignette halo bordering the coast inside the land (reference style)
+  if (pixelDistToCoast < 8.0) {
+    vec3 coastalSepia = vec3(0.70, 0.56, 0.36); // #b38f5c warm antique ochre/sepia border
+    float haloAlpha = smoothstep(8.0, 1.2, pixelDistToCoast) * 0.50;
     landCol = mix(landCol, coastalSepia, haloAlpha);
+  }
+
+  // Crisp ink coastline edge on land side
+  if (pixelDistToCoast < 1.8) {
+    vec3 inkDark = vec3(0.12, 0.10, 0.08);
+    float inkAlpha = smoothstep(1.8, 0.1, pixelDistToCoast) * 0.95;
+    landCol = mix(landCol, inkDark, inkAlpha);
   }
 
   return landCol;
@@ -192,22 +186,19 @@ void main() {
   }
 
   vec2 uv = worldPos / u_world_size;
-  float baseElev = sampleSmoothElev(uv);
-
-  // High-frequency procedural detail evaluated at continuous world coordinates
-  float microDetail = noise(worldPos * 0.04) * 1.5 + noise(worldPos * 0.12) * 0.65;
-
-  float elev = clamp(baseElev + microDetail, 0.0, 100.0);
+  // Elevation sampled directly from the grid data without synthetic procedural noise
+  float elev = clamp(sampleSmoothElev(uv), 0.0, 100.0);
   float seaLevel = u_viewport.w;
 
-  // Rate of elevation change per screen pixel
-  float deltaElevPerPixel = max(0.01, fwidth(elev));
-  float pixelDistToCoast = abs(elev - seaLevel) / deltaElevPerPixel;
+  // Accurate screen-space gradient for distance to isocontour (seaLevel)
+  vec2 dF = vec2(dFdx(elev), dFdy(elev));
+  float gradLen = length(dF);
+  float pixelDistToCoast = abs(elev - seaLevel) / max(0.0001, gradLen);
 
   // Instantaneous hardware screen-space derivatives for terrain slope and hillshading
-  float slopeX = dFdx(elev) * 1.5;
-  float slopeY = dFdy(elev) * 1.5;
-  float slope = length(vec2(slopeX, slopeY));
+  float slopeX = dF.x * 1.5;
+  float slopeY = dF.y * 1.5;
+  float slope = gradLen * 1.5;
 
   vec3 col = vec3(0.0);
 
@@ -231,12 +222,16 @@ void main() {
         }
       }
     }
-
-    // Overlay subtle paper fiber / parchment noise texture
-    float paperNoise = noise(worldPos * 0.8) * 0.5;
   } else if (u_view_mode == 3) {
-    // 3: Land / Sea mask
-    col = elev <= seaLevel ? vec3(0.18, 0.35, 0.45) : vec3(0.72, 0.68, 0.52);
+    // 3: Land / Sea mask with crisp ink coastline
+    vec3 inkDark = vec3(0.12, 0.10, 0.08);
+    vec3 baseCol = elev <= seaLevel ? vec3(0.18, 0.35, 0.45) : vec3(0.72, 0.68, 0.52);
+    if (pixelDistToCoast < 1.8) {
+      float inkAlpha = smoothstep(1.8, 0.1, pixelDistToCoast) * 0.95;
+      col = mix(baseCol, inkDark, inkAlpha);
+    } else {
+      col = baseCol;
+    }
   }
 
   fragColor = vec4(col, 1.0);

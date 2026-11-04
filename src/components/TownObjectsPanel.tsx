@@ -209,7 +209,7 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
     const rad = (degrees * Math.PI) / 180;
     const selectedSet = new Set(selectedTownObjectIds);
     const next = townObjects.map((o) =>
-      selectedSet.has(o.id) ? rotateObject(o, rad, center) : o
+      selectedSet.has(o.id) ? rotateObject(o, center, rad) : o
     );
     onApplyTownObjects(next, `町部品の回転 (${degrees > 0 ? `+${degrees}` : degrees}°)`);
   };
@@ -219,7 +219,7 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
     const center = getObjectsCentroid(selectedObjects);
     const selectedSet = new Set(selectedTownObjectIds);
     const next = townObjects.map((o) =>
-      selectedSet.has(o.id) ? flipObject(o, axis, center) : o
+      selectedSet.has(o.id) ? flipObject(o, center, axis) : o
     );
     onApplyTownObjects(next, `町部品の${axis === 'x' ? '左右反転' : '上下反転'}`);
   };
@@ -239,34 +239,48 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
   };
 
   const handleAlignParallel = () => {
+    const selectedSet = new Set(selectedTownObjectIds);
+    const selectedBlds = townObjects.filter((o) => selectedSet.has(o.id) && o.kind === 'building') as TownBuilding[];
+    if (selectedBlds.length === 0) return;
     const roadAndWalls = townObjects.filter((o) => o.kind === 'road' || o.kind === 'wall');
-    const next = alignParallel(townObjects, selectedTownObjectIds, roadAndWalls, metersPerUnit);
+    const alignedBlds = alignParallel(selectedBlds, roadAndWalls, metersPerUnit);
+    const alignedMap = new Map(alignedBlds.map((b) => [b.id, b]));
+    const next = townObjects.map((o) => alignedMap.get(o.id) || o);
     onApplyTownObjects(next, '建物を道に平行に整列');
   };
 
   const handleAlignToLine = () => {
-    if (selectedObjects.length < 2) return;
-    const next = alignToLine(townObjects, selectedTownObjectIds);
-    onApplyTownObjects(next, '部品を一列に整列');
+    const selectedSet = new Set(selectedTownObjectIds);
+    const selectedBlds = townObjects.filter((o) => selectedSet.has(o.id) && o.kind === 'building') as TownBuilding[];
+    if (selectedBlds.length < 2) return;
+    const alignedBlds = alignToLine(selectedBlds);
+    const alignedMap = new Map(alignedBlds.map((b) => [b.id, b]));
+    const next = townObjects.map((o) => alignedMap.get(o.id) || o);
+    onApplyTownObjects(next, '建物を一列に整列');
   };
 
   const handleDistributeEvenly = () => {
-    if (selectedObjects.length < 3) return;
-    const next = distributeEvenly(townObjects, selectedTownObjectIds);
-    onApplyTownObjects(next, '部品を等間隔に整列');
+    const selectedSet = new Set(selectedTownObjectIds);
+    const selectedBlds = townObjects.filter((o) => selectedSet.has(o.id) && o.kind === 'building') as TownBuilding[];
+    if (selectedBlds.length < 3) return;
+    const distributedBlds = distributeEvenly(selectedBlds);
+    const distMap = new Map(distributedBlds.map((b) => [b.id, b]));
+    const next = townObjects.map((o) => distMap.get(o.id) || o);
+    onApplyTownObjects(next, '建物を等間隔に整列');
   };
 
   const handleMinAreaRect = () => {
-    const singleBld =
-      selectedObjects.length === 1 && selectedObjects[0].kind === 'building'
-        ? selectedObjects[0]
-        : null;
-    if (!singleBld || singleBld.buildingKind === 'tower') return;
-    const next = townObjects.map((o) =>
-      o.id === singleBld.id && o.kind === 'building'
-        ? { ...o, polygon: minAreaRect(o.polygon) }
-        : o
+    const selectedSet = new Set(selectedTownObjectIds);
+    const hasEligible = townObjects.some(
+      (o) => selectedSet.has(o.id) && o.kind === 'building' && o.buildingKind !== 'tower'
     );
+    if (!hasEligible) return;
+    const next = townObjects.map((o) => {
+      if (selectedSet.has(o.id) && o.kind === 'building' && o.buildingKind !== 'tower') {
+        return { ...o, polygon: minAreaRect(o.polygon) };
+      }
+      return o;
+    });
     onApplyTownObjects(next, '建物を長方形に整列');
   };
 

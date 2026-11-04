@@ -135,9 +135,9 @@ export function generateRegionalMap(
       const baseElev = sampleParentElev(wx, wy);
 
       // 2. Add resolution-dependent micro-fractal detail
-      // More detail on land and coastal shallows than deep ocean abyss
+      // Fades smoothly to zero at seaLevel so regional map coastline exactly matches parent map
       const dCoast = Math.abs(baseElev - parent.seaLevel);
-      const shoreFactor = Math.exp(-dCoast * 0.12);
+      const coastFade = Math.min(1.0, Math.max(0.0, dCoast / 2.5));
 
       const n1 = microNoise.fbm(wx * noiseScale, wy * noiseScale, 3);
       const n2 = detailNoise.sample(wx * noiseScale * 3.5, wy * noiseScale * 3.5);
@@ -148,7 +148,7 @@ export function generateRegionalMap(
         mountainBonus = microNoise.ridged(wx * noiseScale * 2.0, wy * noiseScale * 2.0, 3) * (detailAmp * 1.5);
       }
 
-      const microElev = (n1 - 0.5) * detailAmp + n2 * (detailAmp * 0.4) * shoreFactor + mountainBonus;
+      const microElev = ((n1 - 0.5) * detailAmp + n2 * (detailAmp * 0.4) + mountainBonus) * coastFade;
       const finalElev = Math.max(0, Math.min(100, baseElev + microElev));
 
       const idx = r * gridCols + c;
