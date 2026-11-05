@@ -153,6 +153,7 @@ interface MapCanvasProps {
   isAddingGateMode?: boolean;
   onToggleAddingGateMode?: (enabled: boolean) => void;
   onUpdateTownObjects?: (objects: TownObject[]) => void;
+  autoFillPreviewBuildings?: TownBuilding[] | null;
   dimOutsideRegion?: boolean;
   rivers?: RiverData[];
   lakes?: LakeData[];
@@ -223,6 +224,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   isAddingGateMode = false,
   onToggleAddingGateMode,
   onUpdateTownObjects,
+  autoFillPreviewBuildings = null,
   dimOutsideRegion = true,
   biomeSettings,
   onCommitHistory,
@@ -1606,6 +1608,34 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       });
     }
 
+    // 3.55 Town Building Auto-Fill Preview (Amber dashed outline, translucent amber fill)
+    if (
+      showTownObjects &&
+      autoFillPreviewBuildings &&
+      autoFillPreviewBuildings.length > 0 &&
+      activeRegionalMap?.kind === 'town'
+    ) {
+      ctx.save();
+      const zoomPx = viewport.zoom * dpr;
+      ctx.strokeStyle = '#f59e0b';
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
+      ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
+      ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+
+      for (const bld of autoFillPreviewBuildings) {
+        if (!bld.polygon || bld.polygon.length < 3) continue;
+        ctx.beginPath();
+        ctx.moveTo(bld.polygon[0][0], bld.polygon[0][1]);
+        for (let i = 1; i < bld.polygon.length; i++) {
+          ctx.lineTo(bld.polygon[i][0], bld.polygon[i][1]);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     // 3.6 Town Editing Interactive Overlays (Handles, In-progress Drawing, Marquee, Snap Target)
     if (activeRegionalMap?.kind === 'town') {
       const zoomPx = viewport.zoom * dpr;
@@ -2165,6 +2195,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     drawingLakeStart,
     drawingLakePolygon,
     waterSettings,
+    autoFillPreviewBuildings,
   ]);
 
   // Keep water bodies overlay in sync
@@ -2175,7 +2206,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, or vertex/gate selection updates
   useEffect(() => {
     renderOverlay();
-  }, [showTownObjects, townObjects, selectedVertex, selectedGate, activeRegionalMap?.townStyle?.roofTheme, renderOverlay]);
+  }, [showTownObjects, townObjects, autoFillPreviewBuildings, selectedVertex, selectedGate, activeRegionalMap?.townStyle?.roofTheme, renderOverlay]);
 
   // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
   useEffect(() => {

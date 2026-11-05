@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Castle,
   Eye,
@@ -61,6 +61,12 @@ import {
   minAreaRect,
   getObjectsCentroid,
 } from '../utils/town/townBuild';
+import {
+  AutoFillConfig,
+  AutoFillResult,
+  autoFillDistrict,
+  getAutoFillDefaults,
+} from '../utils/town/townAutoFill';
 
 interface TownObjectsPanelProps {
   mapWidth: number;
@@ -88,6 +94,8 @@ interface TownObjectsPanelProps {
   onChangeTownToolConfig?: (patch: Partial<TownToolConfig>) => void;
   isAddingGateMode?: boolean;
   onToggleAddingGateMode?: (enabled: boolean) => void;
+  autoFillPreviewBuildings?: TownBuilding[] | null;
+  onUpdateAutoFillPreview?: (buildings: TownBuilding[] | null) => void;
 }
 
 export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
@@ -114,6 +122,8 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
   onChangeTownToolConfig,
   isAddingGateMode = false,
   onToggleAddingGateMode,
+  autoFillPreviewBuildings = null,
+  onUpdateAutoFillPreview,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<'sample' | 'clear' | null>(null);
@@ -208,6 +218,167 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
   const selectedBuildings = useMemo(() => {
     return selectedObjects.filter((o) => o.kind === 'building') as TownBuilding[];
   }, [selectedObjects]);
+
+  // Auto-fill state for selected districts
+  const selectedDistricts = useMemo(() => {
+    return selectedObjects.filter((o): o is TownDistrict => o.kind === 'district');
+  }, [selectedObjects]);
+
+  const firstDistrict = selectedDistricts[0];
+  const firstNonPark = selectedDistricts.find((d) => d.districtKind !== 'park');
+
+  const [autoFillConfig, setAutoFillConfig] = useState<AutoFillConfig | null>(null);
+  const [autoFillSeed, setAutoFillSeed] = useState<number>(townSeed);
+  const [autoFillStats, setAutoFillStats] = useState<AutoFillResult['stats'] | null>(null);
+  const [previewDismissed, setPreviewDismissed] = useState<boolean>(false);
+
+  // Reset or initialize config when district kind changes
+  const prevDistrictKindRef = useRef<string | null>(null);
+  useEffect(() => {
+    const currentKind = firstDistrict ? firstDistrict.districtKind : null;
+    if (currentKind !== prevDistrictKindRef.current) {
+      prevDistrictKindRef.current = currentKind;
+      if (currentKind && currentKind !== 'park') {
+        const defaults = getAutoFillDefaults(currentKind as TownDistrictKind);
+        setAutoFillConfig(defaults);
+        setPreviewDismissed(false);
+      } else {
+        setAutoFillConfig(null);
+        setAutoFillStats(null);
+        onUpdateAutoFillPreview?.(null);
+      }
+    }
+  }, [firstDistrict, onUpdateAutoFillPreview]);
+
+  // Reset preview on selection or tool change
+  useEffect(() => {
+    onUpdateAutoFillPreview?.(null);
+    setAutoFillStats(null);
+    setPreviewDismissed(false);
+  }, [activeTool, selectedTownObjectIds, onUpdateAutoFillPreview]);
+
+  // Clean up preview on unmount
+  useEffect(() => {
+    return () => {
+      onUpdateAutoFillPreview?.(null);
+    };
+  }, [onUpdateAutoFillPreview]);
+
+  // Debounced preview calculation (150ms)
+  useEffect(() => {
+    if (selectedDistricts.length === 0 || !firstNonPark || !autoFillConfig || previewDismissed) {
+      if (autoFillStats !== null) {
+        setAutoFillStats(null);
+        onUpdateAutoFillPreview?.(null);
+      }
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      const sampler =
+        elevationGrid && gridCols && gridRows && mapWidth && mapHeight && seaLevel !== undefined
+          ? createTerrainWaterSampler(
+              elevationGrid,
+              gridCols,
+              gridRows,
+              mapWidth,
+              mapHeight,
+              seaLevel,
+              rivers,
+              lakes
+            )
+          : undefined;
+
+      let accumulatedBuildings: TownBuilding[] = [];
+      const combinedStats: AutoFillResult['stats'] = {
+        placed: 0,
+        rejectedOutside: 0,
+        rejectedRoad: 0,
+        rejectedOverlap: 0,
+        rejectedWater: 0,
+        rejectedWall: 0,
+        hitLimit: false,
+      };
+
+      let curSeed = autoFillSeed;
+      const nonParkDistricts = selectedDistricts.filter((d) => d.districtKind !== 'park');
+
+      for (const dist of nonParkDistricts) {
+        const currentObjects = [...townObjects, ...accumulatedBuildings];
+        const res = autoFillDistrict({
+          district: dist,
+          objects: currentObjects,
+          metersPerUnit,
+          config: autoFillConfig,
+          seed: curSeed,
+          waterSampler: sampler,
+        });
+
+        accumulatedBuildings.push(...res.buildings);
+        combinedStats.placed += res.stats.placed;
+        combinedStats.rejectedOutside += res.stats.rejectedOutside;
+        combinedStats.rejectedRoad += res.stats.rejectedRoad;
+        combinedStats.rejectedOverlap += res.stats.rejectedOverlap;
+        combinedStats.rejectedWater += res.stats.rejectedWater;
+        combinedStats.rejectedWall += res.stats.rejectedWall;
+        if (res.stats.hitLimit) combinedStats.hitLimit = true;
+
+        curSeed = (curSeed * 1664525 + 1013904223) >>> 0;
+      }
+
+      setAutoFillStats(combinedStats);
+      onUpdateAutoFillPreview?.(accumulatedBuildings);
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [
+    selectedDistricts,
+    firstNonPark,
+    autoFillConfig,
+    autoFillSeed,
+    previewDismissed,
+    townObjects,
+    metersPerUnit,
+    elevationGrid,
+    gridCols,
+    gridRows,
+    mapWidth,
+    mapHeight,
+    seaLevel,
+    rivers,
+    lakes,
+    onUpdateAutoFillPreview,
+  ]);
+
+  const handleCommitAutoFill = () => {
+    if (!autoFillPreviewBuildings || autoFillPreviewBuildings.length === 0) return;
+    const count = autoFillPreviewBuildings.length;
+    const newBuildingIds = autoFillPreviewBuildings.map((b) => b.id);
+    onApplyTownObjects(
+      [...townObjects, ...autoFillPreviewBuildings],
+      `建物を自動配置 (${count}棟)`
+    );
+    onSelectTownObjectIds?.(newBuildingIds);
+    setAutoFillStats(null);
+    setPreviewDismissed(true);
+    onUpdateAutoFillPreview?.(null);
+  };
+
+  const handleCancelAutoFill = () => {
+    setAutoFillStats(null);
+    setPreviewDismissed(true);
+    onUpdateAutoFillPreview?.(null);
+  };
+
+  const updateConfig = (patch: Partial<AutoFillConfig>) => {
+    setPreviewDismissed(false);
+    setAutoFillConfig((prev) => (prev ? { ...prev, ...patch } : null));
+  };
+
+  const handleRerollSeed = () => {
+    setPreviewDismissed(false);
+    setAutoFillSeed(Math.floor(Math.random() * 1000000) + 1);
+  };
 
   const handleRotateSelected = (degrees: number) => {
     if (selectedObjects.length === 0) return;
@@ -1281,6 +1452,261 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                         </select>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* District Auto-Fill Section (when 1 or more districts selected) */}
+                {selectedDistricts.length > 0 && (
+                  <div className="pt-2 border-t border-amber-800/40 space-y-2">
+                    <div className="flex items-center justify-between text-amber-300 font-semibold text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <Wand2 className="w-3.5 h-3.5 text-amber-400" />
+                        <span>建物の自動敷き詰め</span>
+                      </div>
+                      {selectedDistricts.length > 1 && (
+                        <span className="text-[10px] text-amber-400/80 font-mono">
+                          ({selectedDistricts.length}区画)
+                        </span>
+                      )}
+                    </div>
+
+                    {!firstNonPark ? (
+                      <div className="bg-stone-900 border border-stone-800 rounded p-2 text-stone-400 text-xs">
+                        公園には配置できません
+                      </div>
+                    ) : autoFillConfig ? (
+                      <div className="bg-stone-900/90 border border-stone-800 rounded p-2 space-y-2 text-[11px]">
+                        {/* 密度 */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-stone-400 shrink-0">
+                            密度: {Math.round(autoFillConfig.density * 100)}%
+                          </span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={autoFillConfig.density}
+                            onChange={(e) => updateConfig({ density: Number(e.target.value) })}
+                            className="flex-1 h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                          />
+                        </div>
+
+                        {/* 道沿い & 内部チェックボックス */}
+                        <div className="flex items-center gap-4 pt-0.5">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={autoFillConfig.frontage}
+                              onChange={(e) => updateConfig({ frontage: e.target.checked })}
+                              className="w-3.5 h-3.5 rounded border-stone-700 bg-stone-800 text-amber-500 focus:ring-0"
+                            />
+                            <span className="text-stone-300">道沿いに並べる</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={autoFillConfig.interior}
+                              onChange={(e) => updateConfig({ interior: e.target.checked })}
+                              className="w-3.5 h-3.5 rounded border-stone-700 bg-stone-800 text-amber-500 focus:ring-0"
+                            />
+                            <span className="text-stone-300">内部を埋める</span>
+                          </label>
+                        </div>
+
+                        {/* 道からの距離 & 建物の間隔 */}
+                        <div className="grid grid-cols-2 gap-2 pt-0.5">
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">
+                              道からの距離: {autoFillConfig.roadSetbackM}m
+                            </span>
+                            <input
+                              type="range"
+                              min={0.5}
+                              max={10}
+                              step={0.5}
+                              value={autoFillConfig.roadSetbackM}
+                              onChange={(e) => updateConfig({ roadSetbackM: Number(e.target.value) })}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">
+                              建物の間隔: {autoFillConfig.gapM}m
+                            </span>
+                            <input
+                              type="range"
+                              min={1}
+                              max={15}
+                              step={0.5}
+                              value={autoFillConfig.gapM}
+                              onChange={(e) => updateConfig({ gapM: Number(e.target.value) })}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                        </div>
+
+                        {/* 区画の端からの距離 & 向きのばらつき */}
+                        <div className="grid grid-cols-2 gap-2 pt-0.5">
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">
+                              区画の端から: {autoFillConfig.edgeSetbackM}m
+                            </span>
+                            <input
+                              type="range"
+                              min={0.5}
+                              max={10}
+                              step={0.5}
+                              value={autoFillConfig.edgeSetbackM}
+                              onChange={(e) => updateConfig({ edgeSetbackM: Number(e.target.value) })}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                          <div>
+                            <span className="text-stone-400 block mb-0.5">
+                              向きのばらつき: ±{autoFillConfig.angleJitterDeg}°
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={30}
+                              step={1}
+                              value={autoFillConfig.angleJitterDeg}
+                              onChange={(e) => updateConfig({ angleJitterDeg: Number(e.target.value) })}
+                              className="w-full h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                            />
+                          </div>
+                        </div>
+
+                        {/* 内部の列の向き */}
+                        <div className="space-y-1 pt-0.5 border-t border-stone-800">
+                          <div className="flex items-center justify-between">
+                            <span className="text-stone-400">内部の列の向き:</span>
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="autoFillOrient"
+                                  checked={autoFillConfig.orientationMode === 'auto'}
+                                  onChange={() => updateConfig({ orientationMode: 'auto' })}
+                                  className="text-amber-500 bg-stone-800"
+                                />
+                                <span>自動</span>
+                              </label>
+                              <label className="flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="autoFillOrient"
+                                  checked={autoFillConfig.orientationMode === 'fixed'}
+                                  onChange={() => updateConfig({ orientationMode: 'fixed' })}
+                                  className="text-amber-500 bg-stone-800"
+                                />
+                                <span>固定角度</span>
+                              </label>
+                            </div>
+                          </div>
+
+                          {autoFillConfig.orientationMode === 'fixed' && (
+                            <div className="flex items-center justify-between gap-2 pt-0.5">
+                              <span className="text-stone-400 shrink-0">
+                                角度: {autoFillConfig.fixedAngleDeg}°
+                              </span>
+                              <input
+                                type="range"
+                                min={0}
+                                max={345}
+                                step={15}
+                                value={autoFillConfig.fixedAngleDeg}
+                                onChange={(e) => updateConfig({ fixedAngleDeg: Number(e.target.value) })}
+                                className="flex-1 h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 広場の割合 */}
+                        <div className="flex items-center justify-between gap-2 pt-0.5">
+                          <span className="text-stone-400 shrink-0">
+                            広場の割合: {Math.round(autoFillConfig.plazaRatio * 100)}%
+                          </span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={0.6}
+                            step={0.05}
+                            value={autoFillConfig.plazaRatio}
+                            onChange={(e) => updateConfig({ plazaRatio: Number(e.target.value) })}
+                            className="flex-1 h-1 bg-stone-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                          />
+                        </div>
+
+                        {/* シード */}
+                        <div className="flex items-center justify-between gap-2 pt-0.5 border-t border-stone-800">
+                          <span className="text-stone-400 shrink-0">シード:</span>
+                          <input
+                            type="number"
+                            value={autoFillSeed}
+                            onChange={(e) => {
+                              setPreviewDismissed(false);
+                              setAutoFillSeed(Number(e.target.value) || 0);
+                            }}
+                            className="w-24 bg-stone-800 border border-stone-700 rounded px-1.5 py-0.5 text-stone-200 font-mono text-[10px]"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleRerollSeed}
+                            className="px-2 py-0.5 bg-stone-800 hover:bg-stone-750 text-stone-200 rounded text-[10px] flex items-center gap-1 border border-stone-700 cursor-pointer transition"
+                            title="別のシードで再生成"
+                          >
+                            <RotateCw className="w-3 h-3 text-amber-400" />
+                            <span>別のシード</span>
+                          </button>
+                        </div>
+
+                        {/* プレビュー結果表示 */}
+                        {autoFillStats && (
+                          <div className="bg-stone-950/80 border border-stone-800 rounded p-1.5 space-y-1 text-[10px]">
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-amber-300">
+                                プレビュー: {autoFillStats.placed}棟
+                              </span>
+                              {autoFillStats.hitLimit && (
+                                <span className="text-amber-400 bg-amber-950/80 border border-amber-800 px-1 py-0.2 rounded text-[9px] font-bold">
+                                  上限に達しました
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-stone-400 text-[9px] leading-tight">
+                              却下: 道 {autoFillStats.rejectedRoad}・重なり {autoFillStats.rejectedOverlap}・水 {autoFillStats.rejectedWater}・城壁 {autoFillStats.rejectedWall}
+                              {autoFillStats.rejectedOutside > 0 && `・区画外 ${autoFillStats.rejectedOutside}`}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 確定 & キャンセル ボタン */}
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={!autoFillPreviewBuildings || autoFillPreviewBuildings.length === 0}
+                            onClick={handleCommitAutoFill}
+                            className="flex-1 px-3 py-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-stone-950 font-bold rounded text-xs flex items-center justify-center gap-1 shadow cursor-pointer transition"
+                            title="プレビューの建物を町マップに追加"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>確定 ({autoFillPreviewBuildings?.length || 0}棟)</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCancelAutoFill}
+                            className="px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded text-xs flex items-center justify-center gap-1 border border-stone-700 cursor-pointer transition"
+                            title="プレビューを破棄"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>キャンセル</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

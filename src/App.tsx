@@ -31,6 +31,7 @@ import { InspectorBar } from './components/InspectorBar';
 import { TownObjectsPanel } from './components/TownObjectsPanel';
 import {
   DEFAULT_TOWN_TOOL_CONFIG,
+  TownBuilding,
   TownObject,
   TownRoofTheme,
   TownToolConfig,
@@ -244,6 +245,7 @@ export default function App() {
   const [selectedTownObjectIds, setSelectedTownObjectIds] = useState<string[]>([]);
   const [townToolConfig, setTownToolConfig] = useState<TownToolConfig>(DEFAULT_TOWN_TOOL_CONFIG);
   const [isAddingGateMode, setIsAddingGateMode] = useState<boolean>(false);
+  const [townAutoFillPreview, setTownAutoFillPreview] = useState<TownBuilding[] | null>(null);
 
   const selectedTownObjectId = selectedTownObjectIds[0] ?? null;
   const setSelectedTownObjectId = useCallback((id: string | null) => {
@@ -1093,7 +1095,10 @@ export default function App() {
     if (lastRecord.townChanges) {
       handleUpdateTownObjects(lastRecord.townChanges.prevObjects);
       setSelectedTownObjectId(null);
+      setSelectedTownObjectIds([]);
     }
+
+    setTownAutoFillPreview(null);
 
     if (lastRecord.waterChanges) {
       if (lastRecord.waterChanges.prevRivers !== undefined) {
@@ -1147,7 +1152,10 @@ export default function App() {
     if (nextRecord.townChanges) {
       handleUpdateTownObjects(nextRecord.townChanges.newObjects);
       setSelectedTownObjectId(null);
+      setSelectedTownObjectIds([]);
     }
+
+    setTownAutoFillPreview(null);
 
     if (nextRecord.waterChanges) {
       if (nextRecord.waterChanges.newRivers !== undefined) {
@@ -1290,6 +1298,8 @@ export default function App() {
       setActiveRegionId(targetId);
       setSelectedSymbolId(null);
       setSelectedTownObjectId(null);
+      setSelectedTownObjectIds([]);
+      setTownAutoFillPreview(null);
       setUndoStack([]);
       setRedoStack([]);
       handleResetView();
@@ -1465,6 +1475,9 @@ export default function App() {
           showTownObjects={showTownObjects}
           selectedTownObjectId={selectedTownObjectId}
           onSelectTownObjectId={setSelectedTownObjectId}
+          selectedTownObjectIds={selectedTownObjectIds}
+          onSelectTownObjectIds={setSelectedTownObjectIds}
+          autoFillPreviewBuildings={townAutoFillPreview}
           onUpdateTownObjects={handleUpdateTownObjects}
           biomeSettings={biomeSettings}
           biomeTypes={biomeTypes}
@@ -1746,6 +1759,15 @@ export default function App() {
               onChangeRoofTheme={handleChangeRoofTheme}
               rivers={currentRivers}
               lakes={currentLakes}
+              activeTool={brushSettings.mode}
+              selectedTownObjectIds={selectedTownObjectIds}
+              onSelectTownObjectIds={setSelectedTownObjectIds}
+              townToolConfig={townToolConfig}
+              onChangeTownToolConfig={(patch) => setTownToolConfig((prev) => ({ ...prev, ...patch }))}
+              isAddingGateMode={isAddingGateMode}
+              onToggleAddingGateMode={setIsAddingGateMode}
+              autoFillPreviewBuildings={townAutoFillPreview}
+              onUpdateAutoFillPreview={setTownAutoFillPreview}
             />
           </div>
         )}
