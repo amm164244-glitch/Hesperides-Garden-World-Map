@@ -253,6 +253,16 @@ function distanceToPolygonEdges(p: Pt, poly: Pt[]): number {
 }
 
 /**
+ * Computes exact minimum distance from point p to a polygon.
+ * If p is strictly inside or on the boundary of poly, returns 0.
+ * Otherwise returns minimum distance to any edge of poly.
+ */
+function distancePointToPolygon(p: Pt, poly: Pt[]): number {
+  if (pointInPolygon(p, poly)) return 0;
+  return distanceToPolygonEdges(p, poly);
+}
+
+/**
  * Checks if any edge of polyA intersects any edge of polyB.
  */
 function polygonEdgesIntersect(polyA: Pt[], polyB: Pt[]): boolean {
@@ -439,6 +449,13 @@ export function autoFillDistrict(params: AutoFillParams): AutoFillResult {
     const BIN_SIZE = Math.PI / 2 / BIN_COUNT;
     const angleBins = new Float64Array(BIN_COUNT);
 
+    interface SampledEdge {
+      ang: number;
+      len: number;
+      bin: number;
+    }
+    const sampledEdges: SampledEdge[] = [];
+
     const checkEdge = (p0: Pt, p1: Pt) => {
       // Bbox overlap test of segment
       const segMinX = Math.min(p0[0], p1[0]);
@@ -460,6 +477,7 @@ export function autoFillDistrict(params: AutoFillParams): AutoFillResult {
       const bin = Math.min(BIN_COUNT - 1, Math.floor(ang / BIN_SIZE));
       angleBins[bin] += len;
       totalWeight += len;
+      sampledEdges.push({ ang, len, bin });
     };
 
     for (const r of roads) {
@@ -485,7 +503,28 @@ export function autoFillDistrict(params: AutoFillParams): AutoFillResult {
           bestBin = b;
         }
       }
-      interiorAngleRad = (bestBin + 0.5) * BIN_SIZE;
+
+      // Connect periodically (bin 17 neighbor is bin 0)
+      const prevBin = (bestBin - 1 + BIN_COUNT) % BIN_COUNT;
+      const nextBin = (bestBin + 1) % BIN_COUNT;
+
+      let sumX = 0;
+      let sumY = 0;
+      for (const e of sampledEdges) {
+        if (e.bin === bestBin || e.bin === prevBin || e.bin === nextBin) {
+          sumX += e.len * Math.cos(4 * e.ang);
+          sumY += e.len * Math.sin(4 * e.ang);
+        }
+      }
+
+      if (Math.hypot(sumX, sumY) > 1e-6) {
+        let avgAng = Math.atan2(sumY, sumX) / 4;
+        avgAng = avgAng % (Math.PI / 2);
+        if (avgAng < 0) avgAng += Math.PI / 2;
+        interiorAngleRad = avgAng;
+      } else {
+        interiorAngleRad = (bestBin + 0.5) * BIN_SIZE;
+      }
     } else {
       // (b) Fallback to long edge of minAreaRect
       const obb = minAreaRect(distPoly);
@@ -591,6 +630,19 @@ export function autoFillDistrict(params: AutoFillParams): AutoFillResult {
       if (d < requiredDistUnits - 1e-4) {
         stats.rejectedWall++;
         return false;
+      }
+
+      // 6b. Tower Setback (for walls with watchtowers at vertices)
+      if (wall.towers) {
+        const towerRadiusM = typeof wall.towerRadiusM === 'number' ? wall.towerRadiusM : 4;
+        const requiredTowerDistUnits = metersToUnits(towerRadiusM + 2.0, metersPerUnit);
+        for (const pt of wall.points) {
+          const dTower = distancePointToPolygon(pt, polygon);
+          if (dTower < requiredTowerDistUnits - 1e-4) {
+            stats.rejectedWall++;
+            return false;
+          }
+        }
       }
     }
 
@@ -770,11 +822,14 @@ export function autoFillDistrict(params: AutoFillParams): AutoFillResult {
         const angleL = tangentAngle + jitterRadL;
         const polyL = generatePresetPolygon(centerL, kindL, widthML, depthML, angleL, metersPerUnit);
 
-        if (validateCandidate(centerL, polyL, widthML, depthML, pr.road.id)) {
-          commitBuilding(kindL, polyL);
-          if (buildings.length >= config.maxBuildings) {
-            stats.hitLimit = true;
-            break;
+        const rollL = rng();
+        if (config.density > 0 && rollL <= config.density) {
+          if (validateCandidate(centerL, polyL, widthML, depthML, pr.road.id)) {
+            commitBuilding(kindL, polyL);
+            if (buildings.length >= config.maxBuildings) {
+              stats.hitLimit = true;
+              break;
+            }
           }
         }
 
@@ -794,11 +849,14 @@ export function autoFillDistrict(params: AutoFillParams): AutoFillResult {
         const angleR = tangentAngle + jitterRadR;
         const polyR = generatePresetPolygon(centerR, kindR, widthMR, depthMR, angleR, metersPerUnit);
 
-        if (validateCandidate(centerR, polyR, widthMR, depthMR, pr.road.id)) {
-          commitBuilding(kindR, polyR);
-          if (buildings.length >= config.maxBuildings) {
-            stats.hitLimit = true;
-            break;
+        const rollR = rng();
+        if (config.density > 0 && rollR <= config.density) {
+          if (validateCandidate(centerR, polyR, widthMR, depthMR, pr.road.id)) {
+            commitBuilding(kindR, polyR);
+            if (buildings.length >= config.maxBuildings) {
+              stats.hitLimit = true;
+              break;
+            }
           }
         }
 

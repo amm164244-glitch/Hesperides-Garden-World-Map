@@ -100,6 +100,7 @@ import {
 } from '../utils/waterRenderer';
 import { createOrganicLake, smoothRiverPath } from '../utils/waterGenerator';
 import { WaterPanel } from './WaterPanel';
+import { TownTemplatePlacement, instantiateTemplate } from '../utils/town/townTemplate';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -166,6 +167,9 @@ interface MapCanvasProps {
   onChangeWaterSettings?: (patch: Partial<WaterToolSettings>) => void;
   onClearAllWater?: () => void;
   onUpdateBrush?: (patch: Partial<BrushSettings>) => void;
+  templatePlacement?: TownTemplatePlacement | null;
+  onUpdateTemplatePlacement?: (patch: Partial<TownTemplatePlacement>) => void;
+  onCancelTemplatePlacement?: () => void;
 }
 
 const BUILDING_KIND_LABELS: Record<string, string> = {
@@ -246,6 +250,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   onChangeWaterSettings,
   onClearAllWater,
   onUpdateBrush,
+  templatePlacement = null,
+  onUpdateTemplatePlacement,
+  onCancelTemplatePlacement,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -1636,6 +1643,74 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.restore();
     }
 
+    // 3.56 Town Template Placement Preview (Translucent amber preview following cursor)
+    if (
+      showTownObjects &&
+      templatePlacement &&
+      cursorPosRef.current &&
+      activeRegionalMap?.kind === 'town'
+    ) {
+      ctx.save();
+      const zoomPx = viewport.zoom * dpr;
+      const curPos: Pt = [cursorPosRef.current.x, cursorPosRef.current.y];
+      const previewObjs = instantiateTemplate(
+        templatePlacement.template,
+        curPos,
+        metersPerUnit,
+        {
+          angleDeg: templatePlacement.angleDeg,
+          flipX: templatePlacement.flipX,
+        }
+      );
+
+      ctx.strokeStyle = '#f59e0b';
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
+      ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
+      ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+
+      for (const obj of previewObjs) {
+        if (obj.kind === 'building' || obj.kind === 'district') {
+          if (!obj.polygon || obj.polygon.length < 3) continue;
+          ctx.beginPath();
+          ctx.moveTo(obj.polygon[0][0], obj.polygon[0][1]);
+          for (let i = 1; i < obj.polygon.length; i++) {
+            ctx.lineTo(obj.polygon[i][0], obj.polygon[i][1]);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (obj.kind === 'road' || obj.kind === 'wall' || obj.kind === 'pier') {
+          if (!obj.points || obj.points.length < 2) continue;
+          ctx.beginPath();
+          ctx.moveTo(obj.points[0][0], obj.points[0][1]);
+          for (let i = 1; i < obj.points.length; i++) {
+            ctx.lineTo(obj.points[i][0], obj.points[i][1]);
+          }
+          if (obj.kind === 'wall' && obj.closed) {
+            ctx.closePath();
+          }
+          const wM = obj.kind === 'wall' ? obj.thicknessM : obj.widthM;
+          ctx.lineWidth = Math.max(2 / zoomPx, metersToUnits(wM || 3, metersPerUnit));
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // Draw anchor indicator
+      const crossSize = 6 / zoomPx;
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.5 / zoomPx;
+      ctx.strokeStyle = '#f59e0b';
+      ctx.beginPath();
+      ctx.moveTo(curPos[0] - crossSize, curPos[1]);
+      ctx.lineTo(curPos[0] + crossSize, curPos[1]);
+      ctx.moveTo(curPos[0], curPos[1] - crossSize);
+      ctx.lineTo(curPos[0], curPos[1] + crossSize);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
     // 3.6 Town Editing Interactive Overlays (Handles, In-progress Drawing, Marquee, Snap Target)
     if (activeRegionalMap?.kind === 'town') {
       const zoomPx = viewport.zoom * dpr;
@@ -2196,6 +2271,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     drawingLakePolygon,
     waterSettings,
     autoFillPreviewBuildings,
+    templatePlacement,
   ]);
 
   // Keep water bodies overlay in sync
@@ -2203,10 +2279,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     renderOverlay();
   }, [effectiveRivers, effectiveLakes, selectedWaterId, selectedWaterType, activeWaterVertexIndex, renderOverlay]);
 
-  // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, or vertex/gate selection updates
+  // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, templatePlacement, or vertex/gate selection updates
   useEffect(() => {
     renderOverlay();
-  }, [showTownObjects, townObjects, autoFillPreviewBuildings, selectedVertex, selectedGate, activeRegionalMap?.townStyle?.roofTheme, renderOverlay]);
+  }, [showTownObjects, townObjects, autoFillPreviewBuildings, templatePlacement, selectedVertex, selectedGate, activeRegionalMap?.townStyle?.roofTheme, renderOverlay]);
 
   // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
   useEffect(() => {
@@ -2618,6 +2694,31 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       // Town Tools Keyboard Controls
       if (activeRegionalMap?.kind === 'town') {
+        // Template placement keyboard controls: Esc to exit, [ / ] to rotate (15 deg, shift 5 deg), F to flip
+        if (templatePlacement) {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancelTemplatePlacement?.();
+            renderOverlay();
+            return;
+          }
+          if (e.key === '[' || e.key === ']') {
+            e.preventDefault();
+            const step = e.shiftKey ? 5 : 15;
+            const delta = e.key === '[' ? -step : step;
+            const newAngle = (templatePlacement.angleDeg + delta + 360) % 360;
+            onUpdateTemplatePlacement?.({ angleDeg: newAngle });
+            renderOverlay();
+            return;
+          }
+          if (e.key === 'f' || e.key === 'F') {
+            e.preventDefault();
+            onUpdateTemplatePlacement?.({ flipX: !templatePlacement.flipX });
+            renderOverlay();
+            return;
+          }
+        }
+
         // Drawing tools: Enter to finish, Escape to cancel, Backspace to pop point
         if (
           brushSettings.mode === 'townRoad' ||
@@ -3240,6 +3341,47 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
     // Town Tools: Line Drawing (townRoad, townWall, townPier) and Selection (townSelect)
     if (activeRegionalMap?.kind === 'town') {
+      // 0. Town Template Placement
+      if (templatePlacement) {
+        if (e.button === 2) {
+          e.preventDefault();
+          onCancelTemplatePlacement?.();
+          renderOverlay();
+          return;
+        }
+
+        if (e.button === 0) {
+          const anchor: Pt = [worldPos.x, worldPos.y];
+          const placed = instantiateTemplate(
+            templatePlacement.template,
+            anchor,
+            metersPerUnit,
+            {
+              angleDeg: templatePlacement.angleDeg,
+              flipX: templatePlacement.flipX,
+              existingIds: new Set(townObjects.map((o) => o.id)),
+            }
+          );
+          const nextTownObjects = [...townObjects, ...placed];
+          const newIds = placed.map((o) => o.id);
+
+          onCommitHistory({
+            description: `テンプレート「${templatePlacement.template.name}」を配置`,
+            timestamp: Date.now(),
+            townChanges: {
+              prevObjects: townObjects,
+              newObjects: nextTownObjects,
+            },
+          });
+          onUpdateTownObjects?.(nextTownObjects);
+          onSelectTownObjectIds?.(newIds);
+          onSelectTownObjectId?.(newIds[0] ?? null);
+          showToast(`テンプレート「${templatePlacement.template.name}」を配置しました`);
+          renderOverlay();
+          return;
+        }
+      }
+
       const dpr = glCanvasRef.current ? glCanvasRef.current.width / (glCanvasRef.current.clientWidth || 1) : 1;
       const zoomPx = viewport.zoom * dpr;
       const toleranceUnits = 8 / zoomPx;
@@ -4447,12 +4589,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       // Update rubberband line or preset preview when mouse moves
       if (
-        (brushSettings.mode === 'townRoad' ||
+        templatePlacement ||
+        ((brushSettings.mode === 'townRoad' ||
           brushSettings.mode === 'townWall' ||
           brushSettings.mode === 'townPier' ||
           brushSettings.mode === 'townBuilding' ||
           brushSettings.mode === 'townDistrict') &&
-        (drawingTownPoints.length > 0 || (brushSettings.mode === 'townBuilding' && townToolConfig.buildingDrawMode === 'preset'))
+        (drawingTownPoints.length > 0 || (brushSettings.mode === 'townBuilding' && townToolConfig.buildingDrawMode === 'preset')))
       ) {
         renderOverlay();
       }
@@ -5059,7 +5202,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     redraw();
   };
 
-  const cursorClass = isDraggingCompassRef.current || isDraggingSymbolRef.current
+  const cursorClass = templatePlacement
+    ? 'cursor-crosshair'
+    : isDraggingCompassRef.current || isDraggingSymbolRef.current
     ? 'cursor-move'
     : isPanningRef.current
     ? 'cursor-grabbing'

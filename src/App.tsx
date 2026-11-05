@@ -36,6 +36,13 @@ import {
   TownRoofTheme,
   TownToolConfig,
 } from './types/town';
+import {
+  TownTemplate,
+  TownTemplatePlacement,
+  createTemplate,
+  mergeTemplates,
+} from './utils/town/townTemplate';
+import { loadTemplates, saveTemplates } from './utils/town/townTemplateStorage';
 import { MapStorageModal } from './components/MapStorageModal';
 import { RegionManagerModal } from './components/RegionManagerModal';
 import { RegionSelector } from './components/RegionSelector';
@@ -281,6 +288,80 @@ export default function App() {
     [activeRegionId]
   );
 
+  // Town Templates (Persistent in localStorage, cross-map)
+  const [townTemplates, setTownTemplates] = useState<TownTemplate[]>(() => loadTemplates());
+  const [templatePlacement, setTemplatePlacement] = useState<TownTemplatePlacement | null>(null);
+
+  const handleSaveTemplates = useCallback((updater: (prev: TownTemplate[]) => TownTemplate[]) => {
+    setTownTemplates((prev) => {
+      const next = updater(prev);
+      saveTemplates(next);
+      return next;
+    });
+  }, []);
+
+  const handleSaveTemplate = useCallback(
+    (name: string) => {
+      if (!activeRegionId || mapData.regionalMaps[activeRegionId]?.kind !== 'town') return;
+      const targetMap = mapData.regionalMaps[activeRegionId];
+      const selectedSet = new Set(selectedTownObjectIds);
+      const selectedObjs = currentTownObjects.filter((o) => selectedSet.has(o.id));
+      if (selectedObjs.length === 0) return;
+      const metersPerUnit = (targetMap.widthKm * 1000) / targetMap.width;
+      try {
+        const tmpl = createTemplate(name, selectedObjs, metersPerUnit);
+        handleSaveTemplates((prev) => mergeTemplates(prev, [tmpl]));
+      } catch (err) {
+        console.error('[App] Failed to create template:', err);
+      }
+    },
+    [activeRegionId, mapData.regionalMaps, selectedTownObjectIds, currentTownObjects, handleSaveTemplates]
+  );
+
+  const handleDeleteTemplate = useCallback(
+    (id: string) => {
+      handleSaveTemplates((prev) => prev.filter((t) => t.id !== id));
+      if (templatePlacement?.template.id === id) {
+        setTemplatePlacement(null);
+      }
+    },
+    [handleSaveTemplates, templatePlacement]
+  );
+
+  const handleRenameTemplate = useCallback(
+    (id: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed) return;
+      handleSaveTemplates((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, name: trimmed.slice(0, 60) } : t))
+      );
+    },
+    [handleSaveTemplates]
+  );
+
+  const handleStartTemplatePlacement = useCallback((template: TownTemplate) => {
+    setTemplatePlacement({
+      template,
+      angleDeg: 0,
+      flipX: false,
+    });
+  }, []);
+
+  const handleCancelTemplatePlacement = useCallback(() => {
+    setTemplatePlacement(null);
+  }, []);
+
+  const handleUpdateTemplatePlacement = useCallback((patch: Partial<TownTemplatePlacement>) => {
+    setTemplatePlacement((prev) => (prev ? { ...prev, ...patch } : null));
+  }, []);
+
+  const handleImportTemplates = useCallback(
+    (incoming: TownTemplate[]) => {
+      handleSaveTemplates((prev) => mergeTemplates(prev, incoming));
+    },
+    [handleSaveTemplates]
+  );
+
   // Water Bodies (Rivers & Lakes) state & selection
   const [waterSettings, setWaterSettings] = useState<WaterToolSettings>(DEFAULT_WATER_TOOL_SETTINGS);
   const [selectedWaterId, setSelectedWaterId] = useState<string | null>(null);
@@ -395,13 +476,17 @@ export default function App() {
     return { x, y, zoom };
   });
 
-  // Tool & Brush settings
   const [brushSettings, setBrushSettings] = useState<BrushSettings>({
     mode: 'elevate',
     radius: 75,
     strength: 0.35,
     flattenTarget: 50,
   });
+
+  // Clear template placement when switching maps or tool changes
+  useEffect(() => {
+    setTemplatePlacement(null);
+  }, [activeRegionId, brushSettings.mode]);
 
   // Automatically switch away from town-specific tools when exiting town map
   useEffect(() => {
@@ -1508,6 +1593,9 @@ export default function App() {
           onChangeWaterSettings={(patch) => setWaterSettings((prev) => ({ ...prev, ...patch }))}
           onClearAllWater={handleClearAllWater}
           onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
+          templatePlacement={templatePlacement}
+          onUpdateTemplatePlacement={handleUpdateTemplatePlacement}
+          onCancelTemplatePlacement={handleCancelTemplatePlacement}
         />
 
         {/* Floating Toolbar (Top Left) */}
@@ -1768,6 +1856,15 @@ export default function App() {
               onToggleAddingGateMode={setIsAddingGateMode}
               autoFillPreviewBuildings={townAutoFillPreview}
               onUpdateAutoFillPreview={setTownAutoFillPreview}
+              townTemplates={townTemplates}
+              onSaveTemplate={handleSaveTemplate}
+              onDeleteTemplate={handleDeleteTemplate}
+              onRenameTemplate={handleRenameTemplate}
+              onStartTemplatePlacement={handleStartTemplatePlacement}
+              templatePlacement={templatePlacement}
+              onUpdateTemplatePlacement={handleUpdateTemplatePlacement}
+              onCancelTemplatePlacement={handleCancelTemplatePlacement}
+              onImportTemplates={handleImportTemplates}
             />
           </div>
         )}

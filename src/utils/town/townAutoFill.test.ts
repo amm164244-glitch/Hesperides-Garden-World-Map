@@ -637,3 +637,286 @@ test('multi-district sequential autofill accumulates placed buildings to prevent
     }
   }
 });
+
+test('interior row orientation aligns with parallel road (0 deg)', () => {
+  const district = makeRectDistrict(50, 50, 150, 150, 'residential');
+  const metersPerUnit = 1;
+  const road: TownRoad = {
+    id: 'road_parallel_0',
+    kind: 'road',
+    style: 'main',
+    points: [
+      [30, 45],
+      [220, 45],
+    ],
+    widthM: 4,
+    smooth: false,
+  };
+  const config: AutoFillConfig = {
+    ...getAutoFillDefaults('residential')!,
+    orientationMode: 'auto',
+    frontage: false,
+    interior: true,
+    angleJitterDeg: 0,
+  };
+
+  const res = autoFillDistrict({
+    district,
+    objects: [road],
+    metersPerUnit,
+    config,
+    seed: 12345,
+  });
+
+  assert.ok(res.buildings.length > 0);
+  for (const bld of res.buildings) {
+    const dx = bld.polygon[1][0] - bld.polygon[0][0];
+    const dy = bld.polygon[1][1] - bld.polygon[0][1];
+    const angleDeg = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    const rem = ((angleDeg % 90) + 90) % 90;
+    const diffTo90 = Math.min(rem, 90 - rem);
+    assert.ok(
+      diffTo90 <= 0.5,
+      `Building angle ${angleDeg.toFixed(2)} deg deviates from 90 deg multiple by ${diffTo90.toFixed(2)} deg > 0.5 deg`
+    );
+  }
+});
+
+test('interior row orientation aligns with diagonal road (17 deg)', () => {
+  const district = makeRectDistrict(50, 50, 150, 150, 'residential');
+  const metersPerUnit = 1;
+  const rad17 = (17 * Math.PI) / 180;
+  const road17: TownRoad = {
+    id: 'road_diagonal_17',
+    kind: 'road',
+    style: 'main',
+    points: [
+      [30, 40],
+      [30 + 200 * Math.cos(rad17), 40 + 200 * Math.sin(rad17)],
+    ],
+    widthM: 4,
+    smooth: false,
+  };
+  const config: AutoFillConfig = {
+    ...getAutoFillDefaults('residential')!,
+    orientationMode: 'auto',
+    frontage: false,
+    interior: true,
+    angleJitterDeg: 0,
+  };
+
+  const res = autoFillDistrict({
+    district,
+    objects: [road17],
+    metersPerUnit,
+    config,
+    seed: 12345,
+  });
+
+  assert.ok(res.buildings.length > 0);
+  for (const bld of res.buildings) {
+    const dx = bld.polygon[1][0] - bld.polygon[0][0];
+    const dy = bld.polygon[1][1] - bld.polygon[0][1];
+    const angleDeg = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    const rem = (((angleDeg - 17) % 90) + 90) % 90;
+    const diff = Math.min(rem, 90 - rem);
+    assert.ok(
+      diff <= 0.5,
+      `Building angle ${angleDeg.toFixed(2)} deg deviates from 17 deg multiple by ${diff.toFixed(2)} deg > 0.5 deg`
+    );
+  }
+});
+
+test('interior row orientation aligns across periodic boundary (1 deg and 89 deg)', () => {
+  const district = makeRectDistrict(50, 50, 150, 150, 'residential');
+  const metersPerUnit = 1;
+  const rad1 = (1 * Math.PI) / 180;
+  const rad89 = (89 * Math.PI) / 180;
+  const road1: TownRoad = {
+    id: 'road_1deg',
+    kind: 'road',
+    style: 'main',
+    points: [
+      [30, 40],
+      [30 + 150 * Math.cos(rad1), 40 + 150 * Math.sin(rad1)],
+    ],
+    widthM: 4,
+    smooth: false,
+  };
+  const road89: TownRoad = {
+    id: 'road_89deg',
+    kind: 'road',
+    style: 'main',
+    points: [
+      [40, 30],
+      [40 + 150 * Math.cos(rad89), 30 + 150 * Math.sin(rad89)],
+    ],
+    widthM: 4,
+    smooth: false,
+  };
+  const config: AutoFillConfig = {
+    ...getAutoFillDefaults('residential')!,
+    orientationMode: 'auto',
+    frontage: false,
+    interior: true,
+    angleJitterDeg: 0,
+  };
+
+  const res = autoFillDistrict({
+    district,
+    objects: [road1, road89],
+    metersPerUnit,
+    config,
+    seed: 12345,
+  });
+
+  assert.ok(res.buildings.length > 0);
+  for (const bld of res.buildings) {
+    const dx = bld.polygon[1][0] - bld.polygon[0][0];
+    const dy = bld.polygon[1][1] - bld.polygon[0][1];
+    const angleDeg = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    const rem = ((angleDeg % 90) + 90) % 90;
+    const diff = Math.min(rem, 90 - rem);
+    assert.ok(
+      diff <= 1.5,
+      `Building angle ${angleDeg.toFixed(2)} deg deviates from 0 deg multiple by ${diff.toFixed(2)} deg > 1.5 deg`
+    );
+  }
+});
+
+test('wall watchtower setback respects tower radius + 2m buffer', () => {
+  const district = makeRectDistrict(60, 60, 160, 160, 'residential');
+  const wallPoints: Pt[] = [
+    [50, 50],
+    [230, 50],
+    [230, 230],
+    [50, 230],
+  ];
+  const wallWithTowers: TownWall = {
+    id: 'wall_with_towers',
+    kind: 'wall',
+    points: wallPoints,
+    closed: true,
+    thicknessM: 2,
+    towers: true,
+    towerRadiusM: 6,
+    gates: [],
+  };
+
+  const metersPerUnit = 1;
+  const config = getAutoFillDefaults('residential')!;
+
+  const resTowers = autoFillDistrict({
+    district,
+    objects: [wallWithTowers],
+    metersPerUnit,
+    config,
+    seed: 444,
+  });
+
+  assert.ok(resTowers.buildings.length > 0);
+  const minRequiredTowerDist = 6 + 2 - 0.01; // 7.99m
+
+  for (const bld of resTowers.buildings) {
+    for (const pt of wallPoints) {
+      assert.equal(pointInPolygon(pt, bld.polygon), false);
+      let minDist = Infinity;
+      const poly = bld.polygon;
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i];
+        const b = poly[(i + 1) % poly.length];
+        const hit = pointToSegmentDistance(pt, a, b);
+        if (hit.distance < minDist) minDist = hit.distance;
+      }
+      assert.ok(
+        minDist >= minRequiredTowerDist,
+        `Building ${bld.id} is too close to tower at ${pt}: distance ${minDist.toFixed(3)}m < ${minRequiredTowerDist}m`
+      );
+    }
+  }
+
+  const wallWithoutTowers: TownWall = {
+    ...wallWithTowers,
+    towers: false,
+  };
+
+  const resNoTowers = autoFillDistrict({
+    district,
+    objects: [wallWithoutTowers],
+    metersPerUnit,
+    config,
+    seed: 444,
+  });
+
+  assert.ok(
+    resNoTowers.buildings.length >= resTowers.buildings.length,
+    `Without towers (${resNoTowers.buildings.length}) should not have fewer buildings than with towers (${resTowers.buildings.length})`
+  );
+});
+
+test('frontage density check modulates building counts deterministically', () => {
+  const district = makeRectDistrict(50, 50, 200, 200, 'residential');
+  const road: TownRoad = {
+    id: 'road_frontage_test',
+    kind: 'road',
+    style: 'main',
+    points: [
+      [30, 50],
+      [270, 50],
+    ],
+    widthM: 6,
+    smooth: false,
+  };
+  const metersPerUnit = 1;
+  const baseConfig: AutoFillConfig = {
+    ...getAutoFillDefaults('residential')!,
+    interior: false,
+    frontage: true,
+  };
+
+  // 1. density 0 produces 0 buildings
+  const resDensity0 = autoFillDistrict({
+    district,
+    objects: [road],
+    metersPerUnit,
+    config: { ...baseConfig, density: 0 },
+    seed: 555,
+  });
+  assert.equal(resDensity0.buildings.length, 0);
+
+  // 2. density 0.1 produces fewer buildings than density 1.0 with same seed
+  const resDensityLow = autoFillDistrict({
+    district,
+    objects: [road],
+    metersPerUnit,
+    config: { ...baseConfig, density: 0.1 },
+    seed: 555,
+  });
+
+  const resDensityHigh1 = autoFillDistrict({
+    district,
+    objects: [road],
+    metersPerUnit,
+    config: { ...baseConfig, density: 1.0 },
+    seed: 555,
+  });
+
+  const resDensityHigh2 = autoFillDistrict({
+    district,
+    objects: [road],
+    metersPerUnit,
+    config: { ...baseConfig, density: 1.0 },
+    seed: 555,
+  });
+
+  assert.ok(
+    resDensityLow.buildings.length < resDensityHigh1.buildings.length,
+    `density 0.1 count (${resDensityLow.buildings.length}) should be strictly less than density 1.0 count (${resDensityHigh1.buildings.length})`
+  );
+
+  // 3. deterministic result when called twice with same input
+  assert.equal(resDensityHigh1.buildings.length, resDensityHigh2.buildings.length);
+  assert.deepEqual(resDensityHigh1.buildings, resDensityHigh2.buildings);
+  assert.deepEqual(resDensityHigh1.stats, resDensityHigh2.stats);
+});
+
