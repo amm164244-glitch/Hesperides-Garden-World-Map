@@ -58,6 +58,8 @@ import {
   TownWall,
 } from '../types/town';
 import { drawTownObjects } from '../utils/town/townRenderer';
+import { townTextureCache } from '../utils/town/townTextureCache';
+import { resolveTextureFill } from '../utils/town/townTextures';
 import {
   addGate,
   alignParallel,
@@ -437,6 +439,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
   const currentTownObjectsRef = useRef<TownObject[]>(townObjects);
   currentTownObjectsRef.current = townObjects;
+
+  const [textureCacheVersion, setTextureCacheVersion] = useState(0);
+  useEffect(() => {
+    return townTextureCache.subscribe(() => {
+      setTextureCacheVersion((v) => v + 1);
+    });
+  }, []);
 
   // Effective Rivers and Lakes (passed as props or from active map / world map)
   const effectiveRivers: RiverData[] = useMemo(() => {
@@ -1609,6 +1618,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       };
 
       const metersPerUnit = (effectiveWidthKm * 1000) / currentWidth;
+      const textures = activeRegionalMap?.townStyle?.textures;
       drawTownObjects(ctx, townObjects, {
         metersPerUnit,
         zoomPx: viewport.zoom * dpr,
@@ -1616,6 +1626,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         selectedId: selectedTownObjectId,
         selectedIds: effectiveTownSelectedIds,
         roofTheme: activeRegionalMap?.townStyle?.roofTheme ?? 'terracotta',
+        textures,
+        textureResolver: (slot, extra) =>
+          resolveTextureFill(ctx, slot, textures, metersPerUnit, viewport.zoom * dpr, extra, townTextureCache),
       });
     }
 
@@ -2267,6 +2280,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     selectedVertex,
     selectedGate,
     activeRegionalMap?.townStyle?.roofTheme,
+    activeRegionalMap?.townStyle?.textures,
+    textureCacheVersion,
     effectiveRivers,
     effectiveLakes,
     selectedWaterId,
@@ -2285,10 +2300,21 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     renderOverlay();
   }, [effectiveRivers, effectiveLakes, selectedWaterId, selectedWaterType, activeWaterVertexIndex, renderOverlay]);
 
-  // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, templatePlacement, or vertex/gate selection updates
+  // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, textures, textureCacheVersion, templatePlacement, or vertex/gate selection updates
   useEffect(() => {
     renderOverlay();
-  }, [showTownObjects, townObjects, autoFillPreviewBuildings, templatePlacement, selectedVertex, selectedGate, activeRegionalMap?.townStyle?.roofTheme, renderOverlay]);
+  }, [
+    showTownObjects,
+    townObjects,
+    autoFillPreviewBuildings,
+    templatePlacement,
+    selectedVertex,
+    selectedGate,
+    activeRegionalMap?.townStyle?.roofTheme,
+    activeRegionalMap?.townStyle?.textures,
+    textureCacheVersion,
+    renderOverlay,
+  ]);
 
   // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
   useEffect(() => {

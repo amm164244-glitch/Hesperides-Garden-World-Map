@@ -6,8 +6,34 @@ export type TownRoadStyle = 'main' | 'street' | 'path';
 
 export type TownRoofTheme = 'terracotta' | 'thatch' | 'slate' | 'stone';
 
+export type TownTextureSlot =
+  | `roof:${TownBuildingKind}`      // roof:house, roof:shop, roof:hall, roof:church, roof:keep, roof:tower, roof:barn
+  | `road:${TownRoadStyle}`         // road:main, road:street, road:path
+  | 'wall'                          // 城壁の壁面と塔
+  | `ground:${TownDistrictKind}`;   // ground:residential, ... ground:farmland (計 17 スロット)
+
+export interface TownTextureAssignment {
+  textureId: string;
+  tileSizeM: number;        // 画像の「幅」が、実寸で何 m か。0.25〜64。既定 4
+  tintStrength?: number;    // 0〜1。屋根のみ有効。既定 0.25
+  opacity?: number;         // 0.1〜1。地面(区画)のみ有効。既定 0.55
+  alignToObject?: boolean;  // 屋根のみ有効。既定 true
+}
+
+export interface TownTexture {
+  id: string;
+  name: string;           // 1〜60文字
+  mime: 'image/png' | 'image/jpeg' | 'image/webp';
+  width: number;
+  height: number;
+  dataUrl: string;        // base64 の data URL
+  pixelated: boolean;     // ドット絵として補間せずに描画するか(既定 false)
+  createdAt: number;
+}
+
 export interface TownStyle {
   roofTheme: TownRoofTheme;
+  textures?: Partial<Record<TownTextureSlot, TownTextureAssignment>>;
 }
 
 interface TownObjectBase {

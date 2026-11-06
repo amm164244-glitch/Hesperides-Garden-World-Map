@@ -2,6 +2,7 @@ import { MapData, RegionalMapData } from '../types/map';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { TownObject } from '../types/town';
 import { biomeGridToBase64, base64ToBiomeGrid } from './biomePainter';
+import { sanitizeTownTextures } from './town/townTextures';
 
 export {
   serializeMapDataToFwm,
@@ -160,13 +161,18 @@ export function sanitizeTownStyle(
   raw: any,
   kind?: string
 ): import('../types/town').TownStyle | undefined {
-  if (kind !== 'town' && (!raw || typeof raw !== 'object')) return undefined;
+  if (kind !== undefined && kind !== 'town') return undefined;
+  if (!raw || typeof raw !== 'object') {
+    return kind === 'town' ? { roofTheme: 'terracotta' } : undefined;
+  }
   const validThemes = new Set(['terracotta', 'thatch', 'slate', 'stone']);
   const roofTheme =
     raw && typeof raw === 'object' && validThemes.has(raw.roofTheme)
       ? (raw.roofTheme as import('../types/town').TownRoofTheme)
       : 'terracotta';
-  return { roofTheme };
+  const textures =
+    raw && typeof raw === 'object' ? sanitizeTownTextures(raw.textures) : undefined;
+  return textures ? { roofTheme, textures } : { roofTheme };
 }
 
 function sanitizeBiomeGrid(grid: Uint8Array | undefined, validSlots: Set<number>): Uint8Array | undefined {

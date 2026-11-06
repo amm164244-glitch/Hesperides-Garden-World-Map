@@ -34,6 +34,9 @@ import {
   TownBuilding,
   TownObject,
   TownRoofTheme,
+  TownTexture,
+  TownTextureAssignment,
+  TownTextureSlot,
   TownToolConfig,
 } from './types/town';
 import {
@@ -44,6 +47,21 @@ import {
   uniqueTemplateName,
 } from './utils/town/townTemplate';
 import { loadTemplates, saveTemplates } from './utils/town/townTemplateStorage';
+import {
+  deleteTexture,
+  loadTextures,
+  MAX_TEXTURE_COUNT,
+  putTexture,
+} from './utils/town/townTextureStorage';
+import {
+  importTextureFile,
+  townTextureCache,
+} from './utils/town/townTextureCache';
+import {
+  mergeTextures,
+  parseTextureLibrary,
+  serializeTextureLibrary,
+} from './utils/town/townTextures';
 import { MapStorageModal } from './components/MapStorageModal';
 import { RegionManagerModal } from './components/RegionManagerModal';
 import { RegionSelector } from './components/RegionSelector';
@@ -408,6 +426,208 @@ export default function App() {
       });
     },
     [showTemplateMessage]
+  );
+
+  // Town Textures Library (IndexedDB 'HesperidesTownTexturesDB', max 40)
+  const [townTextures, setTownTextures] = useState<TownTexture[]>([]);
+  const [textureMessage, setTextureMessage] = useState<{
+    text: string;
+    kind: 'info' | 'error' | 'success';
+  } | null>(null);
+  const textureMessageTimerRef = useRef<number | null>(null);
+
+  const showTextureMessage = useCallback(
+    (text: string, kind: 'info' | 'error' | 'success' = 'info') => {
+      if (textureMessageTimerRef.current) {
+        clearTimeout(textureMessageTimerRef.current);
+      }
+      setTextureMessage({ text, kind });
+      textureMessageTimerRef.current = window.setTimeout(() => {
+        setTextureMessage(null);
+        textureMessageTimerRef.current = null;
+      }, 5000);
+    },
+    []
+  );
+
+  // Load textures on mount from IndexedDB
+  useEffect(() => {
+    loadTextures().then((loaded) => {
+      setTownTextures(loaded);
+      townTextureCache.setTextures(loaded);
+    });
+  }, []);
+
+  // Add multiple textures
+  const handleAddTownTextures = useCallback(
+    async (files: File[]) => {
+      let addedCount = 0;
+      let latestList = [...townTextures];
+
+      for (const file of files) {
+        if (latestList.length >= MAX_TEXTURE_COUNT) {
+          showTextureMessage(
+            `テクスチャの登録上限(${MAX_TEXTURE_COUNT}件)に達しているため、一部の画像は登録できませんでした。`,
+            'error'
+          );
+          break;
+        }
+
+        try {
+          const imported = await importTextureFile(file);
+          // Deduplicate name
+          const currentNames = latestList.map((t) => t.name);
+          imported.name = uniqueTemplateName(imported.name, currentNames);
+
+          const putRes = await putTexture(imported);
+          if (putRes.ok) {
+            latestList = [...latestList, imported];
+            addedCount++;
+          } else {
+            showTextureMessage(putRes.error || `${file.name} の保存に失敗しました。`, 'error');
+          }
+        } catch (err: any) {
+          showTextureMessage(err?.message || `${file.name} の読み込みに失敗しました。`, 'error');
+        }
+      }
+
+      if (addedCount > 0) {
+        setTownTextures(latestList);
+        townTextureCache.setTextures(latestList);
+        showTextureMessage(`${addedCount}件のテクスチャを登録しました。`, 'success');
+      }
+    },
+    [townTextures, showTextureMessage]
+  );
+
+  // Delete texture
+  const handleDeleteTownTexture = useCallback(
+    async (id: string) => {
+      await deleteTexture(id);
+      const nextList = townTextures.filter((t) => t.id !== id);
+      setTownTextures(nextList);
+      townTextureCache.setTextures(nextList);
+
+      // Clean up assignments using this texture across regional maps
+      setMapData((prev) => {
+        let changed = false;
+        const nextRegs = { ...prev.regionalMaps };
+        for (const [rid, reg] of Object.entries(nextRegs)) {
+          if (reg.townStyle?.textures) {
+            let mapChanged = false;
+            const nextTextures = { ...reg.townStyle.textures };
+            for (const [slot, assign] of Object.entries(nextTextures)) {
+              if (assign?.textureId === id) {
+                delete nextTextures[slot as TownTextureSlot];
+                mapChanged = true;
+              }
+            }
+            if (mapChanged) {
+              nextRegs[rid] = {
+                ...reg,
+                townStyle: {
+                  ...reg.townStyle,
+                  textures: nextTextures,
+                },
+              };
+              changed = true;
+            }
+          }
+        }
+        return changed ? { ...prev, regionalMaps: nextRegs } : prev;
+      });
+
+      showTextureMessage('テクスチャを削除しました。', 'info');
+    },
+    [townTextures, showTextureMessage]
+  );
+
+  // Rename texture
+  const handleRenameTownTexture = useCallback(
+    async (id: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed) return;
+      const target = townTextures.find((t) => t.id === id);
+      if (!target) return;
+
+      const otherNames = townTextures.filter((t) => t.id !== id).map((t) => t.name);
+      const finalName = uniqueTemplateName(trimmed, otherNames);
+
+      const updated: TownTexture = { ...target, name: finalName };
+      await putTexture(updated);
+
+      const nextList = townTextures.map((t) => (t.id === id ? updated : t));
+      setTownTextures(nextList);
+      townTextureCache.setTextures(nextList);
+    },
+    [townTextures]
+  );
+
+  // Toggle pixelated
+  const handleToggleTownTexturePixelated = useCallback(
+    async (id: string, pixelated: boolean) => {
+      const target = townTextures.find((t) => t.id === id);
+      if (!target) return;
+
+      const updated: TownTexture = { ...target, pixelated };
+      await putTexture(updated);
+
+      const nextList = townTextures.map((t) => (t.id === id ? updated : t));
+      setTownTextures(nextList);
+      townTextureCache.setTextures(nextList);
+    },
+    [townTextures]
+  );
+
+  // Export texture library JSON
+  const handleExportTownTextures = useCallback(() => {
+    if (townTextures.length === 0) {
+      showTextureMessage('書き出すテクスチャがありません。', 'error');
+      return;
+    }
+    const json = serializeTextureLibrary(townTextures);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `town-textures-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showTextureMessage('テクスチャライブラリを書き出しました。', 'success');
+  }, [townTextures, showTextureMessage]);
+
+  // Import texture library JSON
+  const handleImportTownTextures = useCallback(
+    async (file: File) => {
+      try {
+        const text = await file.text();
+        const parsed = parseTextureLibrary(text);
+        if (parsed.error) {
+          showTextureMessage(parsed.error, 'error');
+          return;
+        }
+
+        const merged = mergeTextures(townTextures, parsed.textures, MAX_TEXTURE_COUNT);
+        for (const tex of merged) {
+          await putTexture(tex);
+        }
+
+        const addedCount = merged.length - townTextures.length;
+        setTownTextures(merged);
+        townTextureCache.setTextures(merged);
+
+        let msg = `${parsed.textures.length}件中、${addedCount}件をインポートしました。`;
+        if (parsed.skipped > 0) {
+          msg += ` (${parsed.skipped}件をスキップ)`;
+        }
+        showTextureMessage(msg, 'success');
+      } catch (err: any) {
+        showTextureMessage(err?.message || 'テクスチャのインポートに失敗しました。', 'error');
+      }
+    },
+    [townTextures, showTextureMessage]
   );
 
   // Water Bodies (Rivers & Lakes) state & selection
@@ -1199,6 +1419,98 @@ export default function App() {
     [activeRegionId]
   );
 
+  // Change texture assignment for active town map (not recorded in undo/redo history)
+  const handleChangeTownTextureAssignment = useCallback(
+    (slot: TownTextureSlot, assignment: TownTextureAssignment | null) => {
+      if (!activeRegionId) return;
+      setMapData((prev) => {
+        const reg = prev.regionalMaps[activeRegionId];
+        if (!reg) return prev;
+        const currentTextures = reg.townStyle?.textures ? { ...reg.townStyle.textures } : {};
+        if (assignment) {
+          currentTextures[slot] = assignment;
+        } else {
+          delete currentTextures[slot];
+        }
+        return {
+          ...prev,
+          regionalMaps: {
+            ...prev.regionalMaps,
+            [activeRegionId]: {
+              ...reg,
+              townStyle: {
+                roofTheme: reg.townStyle?.roofTheme ?? 'terracotta',
+                ...reg.townStyle,
+                textures: currentTextures,
+              },
+            },
+          },
+        };
+      });
+    },
+    [activeRegionId]
+  );
+
+  // Apply source slot's texture assignment to all slots in group
+  const handleApplyTownTextureGroup = useCallback(
+    (group: 'roof' | 'road' | 'wall' | 'ground', sourceSlot: TownTextureSlot) => {
+      if (!activeRegionId) return;
+      const groupSlots: Record<'roof' | 'road' | 'wall' | 'ground', TownTextureSlot[]> = {
+        roof: [
+          'roof:house',
+          'roof:shop',
+          'roof:hall',
+          'roof:church',
+          'roof:keep',
+          'roof:tower',
+          'roof:barn',
+        ],
+        road: ['road:main', 'road:street', 'road:path'],
+        wall: ['wall'],
+        ground: [
+          'ground:residential',
+          'ground:market',
+          'ground:noble',
+          'ground:poor',
+          'ground:park',
+          'ground:farmland',
+        ],
+      };
+
+      setMapData((prev) => {
+        const reg = prev.regionalMaps[activeRegionId];
+        if (!reg) return prev;
+        const currentTextures = reg.townStyle?.textures ? { ...reg.townStyle.textures } : {};
+        const sourceAssignment = currentTextures[sourceSlot];
+
+        const targetSlots = groupSlots[group];
+        for (const slot of targetSlots) {
+          if (sourceAssignment) {
+            currentTextures[slot] = { ...sourceAssignment };
+          } else {
+            delete currentTextures[slot];
+          }
+        }
+
+        return {
+          ...prev,
+          regionalMaps: {
+            ...prev.regionalMaps,
+            [activeRegionId]: {
+              ...reg,
+              townStyle: {
+                roofTheme: reg.townStyle?.roofTheme ?? 'terracotta',
+                ...reg.townStyle,
+                textures: currentTextures,
+              },
+            },
+          },
+        };
+      });
+    },
+    [activeRegionId]
+  );
+
   // Undo
   const handleUndo = useCallback(() => {
     if (undoStack.length === 0) return;
@@ -1921,6 +2233,17 @@ export default function App() {
               onCancelTemplatePlacement={handleCancelTemplatePlacement}
               onImportTemplates={handleImportTemplates}
               templateMessage={templateMessage}
+              townTextures={townTextures}
+              onAddTextures={handleAddTownTextures}
+              onDeleteTexture={handleDeleteTownTexture}
+              onRenameTexture={handleRenameTownTexture}
+              onToggleTexturePixelated={handleToggleTownTexturePixelated}
+              onExportTextures={handleExportTownTextures}
+              onImportTextures={handleImportTownTextures}
+              textureAssignments={activeRegionalMap.townStyle?.textures}
+              onChangeTextureAssignment={handleChangeTownTextureAssignment}
+              onApplyTextureGroup={handleApplyTownTextureGroup}
+              textureMessage={textureMessage}
             />
           </div>
         )}

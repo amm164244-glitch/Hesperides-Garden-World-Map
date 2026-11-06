@@ -34,6 +34,9 @@ import {
   Sparkles,
   Edit2,
   Stamp,
+  Image as ImageIcon,
+  Check,
+  Copy,
 } from 'lucide-react';
 import { BrushMode } from '../types/map';
 import {
@@ -47,6 +50,9 @@ import {
   TownRoad,
   TownRoadStyle,
   TownRoofTheme,
+  TownTexture,
+  TownTextureAssignment,
+  TownTextureSlot,
   TownToolConfig,
   TownWall,
   TownPier,
@@ -56,7 +62,9 @@ import {
   TownTemplatePlacement,
   serializeTemplateLibrary,
   parseTemplateLibrary,
+  uniqueTemplateName,
 } from '../utils/town/townTemplate';
+import { getSlotLabel, TOWN_TEXTURE_SLOTS } from '../utils/town/townTextures';
 import {
   createTerrainWaterSampler,
   generateSampleTown,
@@ -120,6 +128,19 @@ interface TownObjectsPanelProps {
   onCancelTemplatePlacement?: () => void;
   onImportTemplates?: (res: { templates: TownTemplate[]; skipped: number; error?: string }) => void;
   templateMessage?: { text: string; kind: 'info' | 'error' } | null;
+
+  // Town textures additions
+  townTextures?: TownTexture[];
+  onAddTextures?: (files: File[]) => void;
+  onDeleteTexture?: (id: string) => void;
+  onRenameTexture?: (id: string, newName: string) => void;
+  onToggleTexturePixelated?: (id: string, pixelated: boolean) => void;
+  onExportTextures?: () => void;
+  onImportTextures?: (file: File) => void;
+  textureAssignments?: Partial<Record<TownTextureSlot, TownTextureAssignment>>;
+  onChangeTextureAssignment?: (slot: TownTextureSlot, assignment: TownTextureAssignment | null) => void;
+  onApplyTextureGroup?: (group: 'roof' | 'road' | 'wall' | 'ground', sourceSlot: TownTextureSlot) => void;
+  textureMessage?: { text: string; kind: 'info' | 'error' | 'success' } | null;
 }
 
 export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
@@ -158,9 +179,28 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
   onCancelTemplatePlacement,
   onImportTemplates,
   templateMessage = null,
+  townTextures = [],
+  onAddTextures,
+  onDeleteTexture,
+  onRenameTexture,
+  onToggleTexturePixelated,
+  onExportTextures,
+  onImportTextures,
+  textureAssignments = {},
+  onChangeTextureAssignment,
+  onApplyTextureGroup,
+  textureMessage = null,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isTemplatesCollapsed, setIsTemplatesCollapsed] = useState(false);
+  const [isTexturesCollapsed, setIsTexturesCollapsed] = useState(false);
+  const [activeTextureTab, setActiveTextureTab] = useState<'assignments' | 'library'>('assignments');
+  const [editingTextureId, setEditingTextureId] = useState<string | null>(null);
+  const [editingTextureName, setEditingTextureName] = useState('');
+  const [deleteConfirmTextureId, setDeleteConfirmTextureId] = useState<string | null>(null);
+  const textureUploadInputRef = useRef<HTMLInputElement>(null);
+  const textureImportInputRef = useRef<HTMLInputElement>(null);
+
   const [newTemplateName, setNewTemplateName] = useState('');
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
@@ -2230,6 +2270,555 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                 <option value="slate">スレート (青灰色)</option>
                 <option value="stone">石 (淡い石色)</option>
               </select>
+            </div>
+
+            {/* Custom Textures Section (Collapsible) */}
+            <div className="bg-stone-950/60 border border-stone-800/80 rounded overflow-hidden">
+              <div className="flex items-center justify-between px-2.5 py-1.5 bg-stone-900/60 border-b border-stone-800/60">
+                <div className="flex items-center gap-1.5 text-stone-300">
+                  <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[11px] font-semibold text-stone-200">テクスチャ (自作タイル)</span>
+                  <span className="text-[10px] text-amber-400/80 font-mono">
+                    {townTextures.length > 0 ? `${townTextures.length}件` : ''}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => textureUploadInputRef.current?.click()}
+                    className="p-1 hover:bg-stone-800 text-stone-400 hover:text-amber-300 rounded transition cursor-pointer"
+                    title="テクスチャ画像を追加 (PNG, JPEG, WebP)"
+                  >
+                    <Plus className="w-3 h-3" />
+                  </button>
+                  <input
+                    type="file"
+                    ref={textureUploadInputRef}
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files.length > 0) {
+                        onAddTextures?.(Array.from(e.target.files));
+                        e.target.value = '';
+                      }
+                    }}
+                    multiple
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                  />
+                  <input
+                    type="file"
+                    ref={textureImportInputRef}
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        onImportTextures?.(e.target.files[0]);
+                        e.target.value = '';
+                      }
+                    }}
+                    accept=".json"
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setIsTexturesCollapsed(!isTexturesCollapsed)}
+                    className="p-1 hover:bg-stone-800 text-stone-400 hover:text-stone-200 rounded transition cursor-pointer"
+                    title={isTexturesCollapsed ? '展開' : '折りたたむ'}
+                  >
+                    {isTexturesCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              {!isTexturesCollapsed && (
+                <div className="p-2 space-y-2">
+                  {/* Status / feedback message */}
+                  {textureMessage && (
+                    <div
+                      className={`text-[10px] px-2 py-1 rounded flex items-center gap-1.5 ${
+                        textureMessage.kind === 'error'
+                          ? 'bg-red-950/80 border border-red-800 text-red-200'
+                          : textureMessage.kind === 'success'
+                          ? 'bg-emerald-950/80 border border-emerald-800 text-emerald-200'
+                          : 'bg-amber-950/80 border border-amber-800 text-amber-200'
+                      }`}
+                    >
+                      <Sparkles className="w-3 h-3 shrink-0" />
+                      <span>{textureMessage.text}</span>
+                    </div>
+                  )}
+
+                  {/* Sub-tab switcher */}
+                  <div className="grid grid-cols-2 gap-1 bg-stone-900/80 p-0.5 rounded border border-stone-800/80 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTextureTab('assignments')}
+                      className={`py-1 rounded font-medium transition cursor-pointer ${
+                        activeTextureTab === 'assignments'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      部品への割り当て
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTextureTab('library')}
+                      className={`py-1 rounded font-medium transition cursor-pointer flex items-center justify-center gap-1 ${
+                        activeTextureTab === 'library'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      <span>画像ライブラリ</span>
+                      <span className="font-mono text-[9px] opacity-80">({townTextures.length})</span>
+                    </button>
+                  </div>
+
+                  {/* SUBSECTION 1: Slot Assignments */}
+                  {activeTextureTab === 'assignments' && (
+                    <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
+                      {[
+                        {
+                          id: 'roof' as const,
+                          name: '屋根 (建物)',
+                          defaultTileM: 8,
+                          slots: [
+                            'roof:house',
+                            'roof:shop',
+                            'roof:hall',
+                            'roof:church',
+                            'roof:keep',
+                            'roof:tower',
+                            'roof:barn',
+                          ] as TownTextureSlot[],
+                        },
+                        {
+                          id: 'road' as const,
+                          name: '道路',
+                          defaultTileM: 6,
+                          slots: ['road:main', 'road:street', 'road:path'] as TownTextureSlot[],
+                        },
+                        {
+                          id: 'wall' as const,
+                          name: '城壁',
+                          defaultTileM: 10,
+                          slots: ['wall'] as TownTextureSlot[],
+                        },
+                        {
+                          id: 'ground' as const,
+                          name: '地面 (区画)',
+                          defaultTileM: 8,
+                          slots: [
+                            'ground:residential',
+                            'ground:market',
+                            'ground:noble',
+                            'ground:poor',
+                            'ground:park',
+                            'ground:farmland',
+                          ] as TownTextureSlot[],
+                        },
+                      ].map((group) => {
+                        // Find representative slot in group with assignment, or first slot
+                        const representativeSlot =
+                          group.slots.find((s) => textureAssignments[s]?.textureId) || group.slots[0];
+
+                        return (
+                          <div
+                            key={group.id}
+                            className="bg-stone-900/70 border border-stone-800/80 rounded p-2 space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between border-b border-stone-800/60 pb-1">
+                              <span className="text-[11px] font-semibold text-stone-200">
+                                {group.name}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => onApplyTextureGroup?.(group.id, representativeSlot)}
+                                className="flex items-center gap-1 text-[9px] text-amber-300 hover:text-amber-200 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-800/70 rounded px-1.5 py-0.5 transition cursor-pointer"
+                                title="代表スロットの設定をグループ内の全スロットに一括コピーします"
+                              >
+                                <Copy className="w-2.5 h-2.5" />
+                                <span>グループ全体に適用</span>
+                              </button>
+                            </div>
+
+                            <div className="space-y-1.5 pt-0.5">
+                              {group.slots.map((slot) => {
+                                const assign = textureAssignments[slot];
+                                const label = getSlotLabel(slot);
+
+                                return (
+                                  <div
+                                    key={slot}
+                                    className="bg-stone-950/60 border border-stone-800/60 rounded p-1.5 text-[10px] space-y-1.5"
+                                  >
+                                    <div className="flex items-center justify-between gap-1.5">
+                                      <span className="font-medium text-stone-300 shrink-0">
+                                        {label}
+                                      </span>
+                                      <div className="flex items-center gap-1 flex-1 justify-end min-w-0">
+                                        <select
+                                          value={assign?.textureId || ''}
+                                          onChange={(e) => {
+                                            const val = e.target.value;
+                                            if (!val) {
+                                              onChangeTextureAssignment?.(slot, null);
+                                            } else {
+                                              onChangeTextureAssignment?.(slot, {
+                                                textureId: val,
+                                                tileSizeM: assign?.tileSizeM || group.defaultTileM,
+                                                tintStrength:
+                                                  group.id === 'roof'
+                                                    ? assign?.tintStrength ?? 0.25
+                                                    : undefined,
+                                                alignToObject:
+                                                  group.id === 'roof'
+                                                    ? assign?.alignToObject ?? true
+                                                    : undefined,
+                                                opacity:
+                                                  group.id === 'ground'
+                                                    ? assign?.opacity ?? 0.6
+                                                    : undefined,
+                                              });
+                                            }
+                                          }}
+                                          className="bg-stone-800 hover:bg-stone-750 border border-stone-700 rounded px-1.5 py-0.5 text-[10px] text-stone-200 font-medium truncate max-w-[140px] focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer"
+                                        >
+                                          <option value="">なし (標準色)</option>
+                                          {townTextures.map((tex) => (
+                                            <option key={tex.id} value={tex.id}>
+                                              {tex.name}
+                                            </option>
+                                          ))}
+                                        </select>
+
+                                        {assign && (
+                                          <button
+                                            type="button"
+                                            onClick={() => onChangeTextureAssignment?.(slot, null)}
+                                            className="p-0.5 text-stone-500 hover:text-red-400 rounded transition cursor-pointer"
+                                            title="割り当てをクリア"
+                                          >
+                                            <X className="w-3 h-3" />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {/* Assignment details when texture is selected */}
+                                    {assign && (
+                                      <div className="pt-1 border-t border-stone-800/50 space-y-1 pl-1">
+                                        {/* Tile size */}
+                                        <div className="flex items-center justify-between gap-2 text-stone-400">
+                                          <span>タイル幅:</span>
+                                          <div className="flex items-center gap-1">
+                                            <input
+                                              type="number"
+                                              min="0.5"
+                                              max="100"
+                                              step="0.5"
+                                              value={assign.tileSizeM}
+                                              onChange={(e) => {
+                                                const val = parseFloat(e.target.value);
+                                                if (Number.isFinite(val) && val > 0) {
+                                                  onChangeTextureAssignment?.(slot, {
+                                                    ...assign,
+                                                    tileSizeM: Math.min(100, Math.max(0.5, val)),
+                                                  });
+                                                }
+                                              }}
+                                              className="w-14 bg-stone-800 border border-stone-700 rounded px-1 py-0.5 text-right font-mono text-stone-200 text-[10px]"
+                                            />
+                                            <span className="text-[9px] text-stone-400">m</span>
+                                          </div>
+                                        </div>
+
+                                        {/* Roof options */}
+                                        {group.id === 'roof' && (
+                                          <>
+                                            <div className="flex items-center justify-between gap-2 text-stone-400">
+                                              <span>色合いの濃淡:</span>
+                                              <div className="flex items-center gap-1.5">
+                                                <input
+                                                  type="range"
+                                                  min="0"
+                                                  max="1"
+                                                  step="0.05"
+                                                  value={assign.tintStrength ?? 0.25}
+                                                  onChange={(e) => {
+                                                    onChangeTextureAssignment?.(slot, {
+                                                      ...assign,
+                                                      tintStrength: parseFloat(e.target.value),
+                                                    });
+                                                  }}
+                                                  className="w-16 accent-amber-500 h-1 cursor-pointer"
+                                                />
+                                                <span className="w-7 text-right font-mono text-[9px] text-stone-300">
+                                                  {Math.round((assign.tintStrength ?? 0.25) * 100)}%
+                                                </span>
+                                              </div>
+                                            </div>
+
+                                            <div className="flex items-center justify-between gap-2 text-stone-400">
+                                              <span>建物に向きを合わせる:</span>
+                                              <input
+                                                type="checkbox"
+                                                checked={assign.alignToObject !== false}
+                                                onChange={(e) => {
+                                                  onChangeTextureAssignment?.(slot, {
+                                                    ...assign,
+                                                    alignToObject: e.target.checked,
+                                                  });
+                                                }}
+                                                className="accent-amber-500 cursor-pointer"
+                                              />
+                                            </div>
+                                          </>
+                                        )}
+
+                                        {/* Ground options */}
+                                        {group.id === 'ground' && (
+                                          <div className="flex items-center justify-between gap-2 text-stone-400">
+                                            <span>不透明度:</span>
+                                            <div className="flex items-center gap-1.5">
+                                              <input
+                                                type="range"
+                                                min="0.1"
+                                                max="1"
+                                                step="0.05"
+                                                value={assign.opacity ?? 0.6}
+                                                onChange={(e) => {
+                                                  onChangeTextureAssignment?.(slot, {
+                                                    ...assign,
+                                                    opacity: parseFloat(e.target.value),
+                                                  });
+                                                }}
+                                                className="w-16 accent-amber-500 h-1 cursor-pointer"
+                                              />
+                                              <span className="w-7 text-right font-mono text-[9px] text-stone-300">
+                                                {Math.round((assign.opacity ?? 0.6) * 100)}%
+                                              </span>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* SUBSECTION 2: Library */}
+                  {activeTextureTab === 'library' && (
+                    <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                      {/* Library Action Bar */}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => textureUploadInputRef.current?.click()}
+                          className="flex-1 flex items-center justify-center gap-1 bg-amber-700/80 hover:bg-amber-600 text-amber-100 font-medium py-1 px-2 rounded text-[10px] transition cursor-pointer"
+                          title="画像ファイル(PNG, JPEG, WebP)を追加"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>画像を追加</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={onExportTextures}
+                          disabled={townTextures.length === 0}
+                          className="flex items-center gap-1 bg-stone-800 hover:bg-stone-750 disabled:opacity-40 disabled:pointer-events-none text-stone-300 py-1 px-2 rounded text-[10px] border border-stone-700 transition cursor-pointer"
+                          title="テクスチャライブラリを書き出し (JSON)"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>書出</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => textureImportInputRef.current?.click()}
+                          className="flex items-center gap-1 bg-stone-800 hover:bg-stone-750 text-stone-300 py-1 px-2 rounded text-[10px] border border-stone-700 transition cursor-pointer"
+                          title="テクスチャライブラリを読み込み (JSON)"
+                        >
+                          <Upload className="w-3 h-3" />
+                          <span>読込</span>
+                        </button>
+                      </div>
+
+                      {/* Helpful tip */}
+                      <div className="bg-stone-900/80 border border-stone-800/80 rounded p-1.5 text-[9px] text-stone-400 leading-tight">
+                        💡 シームレス（継ぎ目のない）な画像を使うと、綺麗に敷き詰められます。最大40件まで登録できます。
+                      </div>
+
+                      {/* Texture Items List */}
+                      {townTextures.length === 0 ? (
+                        <div className="text-center py-4 text-stone-500 text-[10px] bg-stone-900/50 rounded border border-dashed border-stone-800">
+                          登録されたテクスチャ画像はありません。<br />
+                          「画像を追加」から登録してください。
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {townTextures.map((tex) => {
+                            const isEditing = editingTextureId === tex.id;
+                            const isDeleting = deleteConfirmTextureId === tex.id;
+
+                            return (
+                              <div
+                                key={tex.id}
+                                className="bg-stone-900/80 border border-stone-800/80 rounded p-1.5 flex items-center gap-2"
+                              >
+                                {/* 32x32 Thumbnail with checkerboard background */}
+                                <div
+                                  className="w-8 h-8 rounded shrink-0 overflow-hidden border border-stone-700 bg-stone-950 relative"
+                                  style={{
+                                    backgroundImage:
+                                      'linear-gradient(45deg, #374151 25%, transparent 25%), linear-gradient(-45deg, #374151 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #374151 75%), linear-gradient(-45deg, transparent 75%, #374151 75%)',
+                                    backgroundSize: '8px 8px',
+                                    backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+                                  }}
+                                >
+                                  <img
+                                    src={tex.dataUrl}
+                                    alt={tex.name}
+                                    className="w-full h-full object-cover"
+                                    style={tex.pixelated ? { imageRendering: 'pixelated' } : undefined}
+                                  />
+                                </div>
+
+                                {/* Name & Details / Edit */}
+                                <div className="flex-1 min-w-0">
+                                  {isEditing ? (
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="text"
+                                        value={editingTextureName}
+                                        onChange={(e) => setEditingTextureName(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            if (editingTextureName.trim()) {
+                                              onRenameTexture?.(tex.id, editingTextureName.trim());
+                                            }
+                                            setEditingTextureId(null);
+                                          } else if (e.key === 'Escape') {
+                                            setEditingTextureId(null);
+                                          }
+                                        }}
+                                        autoFocus
+                                        className="bg-stone-800 border border-stone-600 rounded px-1.5 py-0.5 text-[10px] text-stone-100 w-full focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (editingTextureName.trim()) {
+                                            onRenameTexture?.(tex.id, editingTextureName.trim());
+                                          }
+                                          setEditingTextureId(null);
+                                        }}
+                                        className="p-1 text-emerald-400 hover:text-emerald-300 rounded"
+                                        title="保存"
+                                      >
+                                        <Check className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setEditingTextureId(null)}
+                                        className="p-1 text-stone-500 hover:text-stone-300 rounded"
+                                        title="キャンセル"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex flex-col">
+                                      <div className="flex items-center gap-1">
+                                        <span
+                                          className="text-[11px] font-medium text-stone-200 truncate cursor-pointer hover:text-amber-300"
+                                          onClick={() => {
+                                            setEditingTextureId(tex.id);
+                                            setEditingTextureName(tex.name);
+                                          }}
+                                          title="クリックして名前を変更"
+                                        >
+                                          {tex.name}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingTextureId(tex.id);
+                                            setEditingTextureName(tex.name);
+                                          }}
+                                          className="text-stone-500 hover:text-stone-300 p-0.5"
+                                          title="名前を変更"
+                                        >
+                                          <Edit2 className="w-2.5 h-2.5" />
+                                        </button>
+                                      </div>
+                                      <span className="text-[9px] text-stone-500 font-mono">
+                                        {tex.width} × {tex.height}px
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Actions: Pixelated toggle & Delete */}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      onToggleTexturePixelated?.(tex.id, !tex.pixelated)
+                                    }
+                                    className={`px-1.5 py-0.5 rounded text-[9px] font-mono transition cursor-pointer ${
+                                      tex.pixelated
+                                        ? 'bg-amber-950/80 text-amber-300 border border-amber-800'
+                                        : 'bg-stone-800 text-stone-400 hover:text-stone-200 border border-stone-700/60'
+                                    }`}
+                                    title="ピクセルアート風の補間（最近傍補間）を切り替えます"
+                                  >
+                                    {tex.pixelated ? 'PXL:ON' : 'PXL:OFF'}
+                                  </button>
+
+                                  {isDeleting ? (
+                                    <div className="flex items-center gap-1 bg-red-950/90 border border-red-800 rounded px-1 py-0.5 text-[9px]">
+                                      <span className="text-red-300 font-medium">削除?</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          onDeleteTexture?.(tex.id);
+                                          setDeleteConfirmTextureId(null);
+                                        }}
+                                        className="text-red-200 hover:text-white font-bold px-0.5"
+                                      >
+                                        はい
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeleteConfirmTextureId(null)}
+                                        className="text-stone-400 hover:text-stone-200 px-0.5"
+                                      >
+                                        いいえ
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setDeleteConfirmTextureId(tex.id)}
+                                      className="p-1 text-stone-500 hover:text-red-400 rounded transition cursor-pointer"
+                                      title="テクスチャを削除 (割り当ては解除されます)"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Counts Breakdown Grid */}

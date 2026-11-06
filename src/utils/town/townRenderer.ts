@@ -14,6 +14,8 @@ import {
   TownPier,
   TownRoad,
   TownRoofTheme,
+  TownStyle,
+  TownTextureSlot,
   TownWall,
 } from '../../types/town';
 import { hatchPoly, makeRng, roughen } from '../penSymbols';
@@ -31,6 +33,7 @@ import {
   getRoofColor,
   TOWN_STYLE,
 } from './townStyle';
+import { ResolvedFill } from './townTextures';
 
 export interface DrawTownOptions {
   metersPerUnit: number;
@@ -39,6 +42,16 @@ export interface DrawTownOptions {
   selectedId?: string | null;
   selectedIds?: string[];
   roofTheme?: TownRoofTheme;
+  textures?: TownStyle['textures'];
+  textureResolver?: (
+    slot: TownTextureSlot,
+    extra?: {
+      centroid?: Pt;
+      firstEdgeAngleRad?: number;
+      wUnits?: number;
+      hUnits?: number;
+    }
+  ) => ResolvedFill | null;
 }
 
 // In-memory cache for roughened polygon/polyline coordinates to ensure deterministic, zero-jitter rendering.
@@ -110,7 +123,15 @@ export function drawTownObjects(
 ): void {
   if (!objects || objects.length === 0) return;
 
-  const { metersPerUnit, zoomPx, viewBounds, selectedId, selectedIds, roofTheme = 'terracotta' } = opts;
+  const {
+    metersPerUnit,
+    zoomPx,
+    viewBounds,
+    selectedId,
+    selectedIds,
+    roofTheme = 'terracotta',
+    textureResolver,
+  } = opts;
 
   // Filter visible objects via viewport AABB check
   const visible = objects.filter((obj) => {
@@ -124,7 +145,7 @@ export function drawTownObjects(
   ctx.save();
   for (const obj of visible) {
     if (obj.kind === 'district') {
-      drawDistrict(ctx, obj);
+      drawDistrict(ctx, obj, textureResolver);
     }
   }
   ctx.restore();
@@ -133,7 +154,7 @@ export function drawTownObjects(
   ctx.save();
   for (const obj of visible) {
     if (obj.kind === 'road') {
-      drawRoad(ctx, obj, metersPerUnit, zoomPx);
+      drawRoad(ctx, obj, metersPerUnit, zoomPx, textureResolver);
     }
   }
   ctx.restore();
@@ -157,7 +178,7 @@ export function drawTownObjects(
 
   ctx.save();
   for (const bld of buildings) {
-    drawBuilding(ctx, bld, metersPerUnit, zoomPx, roofTheme);
+    drawBuilding(ctx, bld, metersPerUnit, zoomPx, roofTheme, textureResolver);
   }
   ctx.restore();
 
@@ -165,7 +186,7 @@ export function drawTownObjects(
   ctx.save();
   for (const obj of visible) {
     if (obj.kind === 'wall') {
-      drawWall(ctx, obj, metersPerUnit, zoomPx);
+      drawWall(ctx, obj, metersPerUnit, zoomPx, textureResolver);
     }
   }
   ctx.restore();
@@ -189,22 +210,49 @@ export function drawTownObjects(
 // Component Renderers
 // -----------------------------------------------------------------------------
 
-function drawDistrict(ctx: CanvasRenderingContext2D, district: TownDistrict): void {
+function drawDistrict(
+  ctx: CanvasRenderingContext2D,
+  district: TownDistrict,
+  textureResolver?: DrawTownOptions['textureResolver']
+): void {
   const pts = district.polygon;
   if (!pts || pts.length < 3) return;
 
-  const fillColor =
-    TOWN_STYLE.districtColors[district.districtKind] ||
-    TOWN_STYLE.districtColors.residential;
+  const slot: TownTextureSlot = `ground:${district.districtKind}`;
+  const fill = textureResolver?.(slot);
 
-  ctx.fillStyle = fillColor;
-  ctx.beginPath();
-  ctx.moveTo(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) {
-    ctx.lineTo(pts[i][0], pts[i][1]);
+  if (fill) {
+    ctx.save();
+    const opacity = fill.opacity ?? 0.55;
+    ctx.globalAlpha = opacity;
+    if (fill.kind === 'pattern') {
+      if (fill.pixelated) ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = fill.pattern;
+    } else {
+      ctx.fillStyle = fill.color;
+    }
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i][0], pts[i][1]);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  } else {
+    const fillColor =
+      TOWN_STYLE.districtColors[district.districtKind] ||
+      TOWN_STYLE.districtColors.residential;
+
+    ctx.fillStyle = fillColor;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i][0], pts[i][1]);
+    }
+    ctx.closePath();
+    ctx.fill();
   }
-  ctx.closePath();
-  ctx.fill();
 
   // Subtle antique border with dashed ink
   ctx.strokeStyle = 'rgba(43, 33, 24, 0.12)';
@@ -218,7 +266,8 @@ function drawRoad(
   ctx: CanvasRenderingContext2D,
   road: TownRoad,
   metersPerUnit: number,
-  zoomPx: number
+  zoomPx: number,
+  textureResolver?: DrawTownOptions['textureResolver']
 ): void {
   const rawPts = road.points;
   if (!rawPts || rawPts.length < 2) return;
@@ -257,9 +306,25 @@ function drawRoad(
   ctx.stroke();
 
   // Thinner lighter road surface on top
-  ctx.strokeStyle = color;
-  ctx.lineWidth = roadWidth;
-  ctx.stroke();
+  const slot: TownTextureSlot = `road:${road.style}`;
+  const fill = textureResolver?.(slot);
+
+  if (fill) {
+    ctx.save();
+    if (fill.kind === 'pattern') {
+      if (fill.pixelated) ctx.imageSmoothingEnabled = false;
+      ctx.strokeStyle = fill.pattern;
+    } else {
+      ctx.strokeStyle = fill.color;
+    }
+    ctx.lineWidth = roadWidth;
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = roadWidth;
+    ctx.stroke();
+  }
 }
 
 function drawPier(
@@ -347,7 +412,8 @@ function drawBuilding(
   bld: TownBuilding,
   metersPerUnit: number,
   zoomPx: number,
-  roofTheme: TownRoofTheme = 'terracotta'
+  roofTheme: TownRoofTheme = 'terracotta',
+  textureResolver?: DrawTownOptions['textureResolver']
 ): void {
   const rawPoly = bld.polygon;
   if (!rawPoly || rawPoly.length < 3) return;
@@ -399,17 +465,61 @@ function drawBuilding(
   ctx.fill();
 
   // Roof Base Fill
-  ctx.fillStyle = roofColor;
-  ctx.beginPath();
-  ctx.moveTo(poly[0][0], poly[0][1]);
-  for (let i = 1; i < poly.length; i++) {
-    ctx.lineTo(poly[i][0], poly[i][1]);
+  const slot: TownTextureSlot = `roof:${bld.buildingKind}`;
+  const firstEdgeAngleRad =
+    rawPoly.length >= 2
+      ? Math.atan2(rawPoly[1][1] - rawPoly[0][1], rawPoly[1][0] - rawPoly[0][0])
+      : 0;
+  const centroid = polygonCentroid(poly);
+
+  const fill = textureResolver?.(slot, {
+    centroid,
+    firstEdgeAngleRad,
+    wUnits,
+    hUnits,
+  });
+
+  if (fill) {
+    ctx.save();
+    if (fill.kind === 'pattern') {
+      if (fill.pixelated) ctx.imageSmoothingEnabled = false;
+      ctx.fillStyle = fill.pattern;
+    } else {
+      ctx.fillStyle = fill.color;
+    }
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0], poly[i][1]);
+    }
+    ctx.closePath();
+    ctx.fill();
+
+    const tintStrength = fill.tintStrength ?? 0.25;
+    if (tintStrength > 0) {
+      ctx.globalAlpha = tintStrength;
+      ctx.fillStyle = roofColor;
+      ctx.beginPath();
+      ctx.moveTo(poly[0][0], poly[0][1]);
+      for (let i = 1; i < poly.length; i++) {
+        ctx.lineTo(poly[i][0], poly[i][1]);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  } else {
+    ctx.fillStyle = roofColor;
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0], poly[i][1]);
+    }
+    ctx.closePath();
+    ctx.fill();
   }
-  ctx.closePath();
-  ctx.fill();
 
   // Shading from North-West light: South-East half hatch lines
-  const centroid = polygonCentroid(poly);
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(poly[0][0], poly[0][1]);
@@ -457,7 +567,8 @@ function drawWall(
   ctx: CanvasRenderingContext2D,
   wall: TownWall,
   metersPerUnit: number,
-  zoomPx: number
+  zoomPx: number,
+  textureResolver?: DrawTownOptions['textureResolver']
 ): void {
   const pts = wall.points;
   if (!pts || pts.length < 2) return;
@@ -524,14 +635,33 @@ function drawWall(
   ctx.stroke();
 
   // 2. Stone masonry surface
-  ctx.strokeStyle = TOWN_STYLE.stoneWall;
-  ctx.lineWidth = wallWidth;
-  ctx.beginPath();
-  for (const seg of segments) {
-    ctx.moveTo(seg.p0[0], seg.p0[1]);
-    ctx.lineTo(seg.p1[0], seg.p1[1]);
+  const wallFill = textureResolver?.('wall');
+  if (wallFill) {
+    ctx.save();
+    if (wallFill.kind === 'pattern') {
+      if (wallFill.pixelated) ctx.imageSmoothingEnabled = false;
+      ctx.strokeStyle = wallFill.pattern;
+    } else {
+      ctx.strokeStyle = wallFill.color;
+    }
+    ctx.lineWidth = wallWidth;
+    ctx.beginPath();
+    for (const seg of segments) {
+      ctx.moveTo(seg.p0[0], seg.p0[1]);
+      ctx.lineTo(seg.p1[0], seg.p1[1]);
+    }
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.strokeStyle = TOWN_STYLE.stoneWall;
+    ctx.lineWidth = wallWidth;
+    ctx.beginPath();
+    for (const seg of segments) {
+      ctx.moveTo(seg.p0[0], seg.p0[1]);
+      ctx.lineTo(seg.p1[0], seg.p1[1]);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
 
   // Corner towers
   if (wall.towers) {
@@ -542,8 +672,21 @@ function drawWall(
       const tp = pts[i];
       ctx.beginPath();
       ctx.arc(tp[0], tp[1], radius, 0, Math.PI * 2);
-      ctx.fillStyle = TOWN_STYLE.stoneTower;
-      ctx.fill();
+
+      if (wallFill) {
+        ctx.save();
+        if (wallFill.kind === 'pattern') {
+          if (wallFill.pixelated) ctx.imageSmoothingEnabled = false;
+          ctx.fillStyle = wallFill.pattern;
+        } else {
+          ctx.fillStyle = wallFill.color;
+        }
+        ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.fillStyle = TOWN_STYLE.stoneTower;
+        ctx.fill();
+      }
 
       ctx.strokeStyle = TOWN_STYLE.ink;
       ctx.lineWidth = 1.0 / Math.max(0.001, zoomPx);
