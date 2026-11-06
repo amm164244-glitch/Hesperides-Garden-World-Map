@@ -118,7 +118,8 @@ interface TownObjectsPanelProps {
   templatePlacement?: TownTemplatePlacement | null;
   onUpdateTemplatePlacement?: (patch: Partial<TownTemplatePlacement>) => void;
   onCancelTemplatePlacement?: () => void;
-  onImportTemplates?: (templates: TownTemplate[]) => void;
+  onImportTemplates?: (res: { templates: TownTemplate[]; skipped: number; error?: string }) => void;
+  templateMessage?: { text: string; kind: 'info' | 'error' } | null;
 }
 
 export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
@@ -156,6 +157,7 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
   onUpdateTemplatePlacement,
   onCancelTemplatePlacement,
   onImportTemplates,
+  templateMessage = null,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isTemplatesCollapsed, setIsTemplatesCollapsed] = useState(false);
@@ -528,18 +530,26 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
 
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (event) => {
-      const content = event.target?.result as string;
-      const res = parseTemplateLibrary(content);
-      if (res.error) {
-        alert(res.error);
-        return;
+      try {
+        const content = event.target?.result as string;
+        const res = parseTemplateLibrary(content);
+        onImportTemplates?.(res);
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
-      if (res.templates.length > 0) {
-        onImportTemplates?.(res.templates);
-      }
+    };
+    reader.onerror = () => {
+      onImportTemplates?.({
+        templates: [],
+        skipped: 0,
+        error: 'ファイルの読み込みに失敗しました。',
+      });
       if (fileInputRef.current) fileInputRef.current.value = '';
     };
     reader.readAsText(file);
@@ -1951,6 +1961,22 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                     ) : null}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Template Notification Message Banner */}
+            {templateMessage && (
+              <div
+                className={`text-xs px-2.5 py-1.5 rounded border flex items-start gap-1.5 transition-all ${
+                  templateMessage.kind === 'error'
+                    ? 'bg-red-950/80 border-red-500/60 text-red-200'
+                    : 'bg-amber-950/80 border-amber-500/60 text-amber-200'
+                }`}
+              >
+                <span className="shrink-0 mt-0.5 font-bold">
+                  {templateMessage.kind === 'error' ? '⚠' : 'ℹ'}
+                </span>
+                <span className="leading-snug">{templateMessage.text}</span>
               </div>
             )}
 

@@ -41,6 +41,7 @@ import {
   TownTemplatePlacement,
   createTemplate,
   mergeTemplates,
+  uniqueTemplateName,
 } from './utils/town/townTemplate';
 import { loadTemplates, saveTemplates } from './utils/town/townTemplateStorage';
 import { MapStorageModal } from './components/MapStorageModal';
@@ -291,13 +292,39 @@ export default function App() {
   // Town Templates (Persistent in localStorage, cross-map)
   const [townTemplates, setTownTemplates] = useState<TownTemplate[]>(() => loadTemplates());
   const [templatePlacement, setTemplatePlacement] = useState<TownTemplatePlacement | null>(null);
+  const [templateMessage, setTemplateMessage] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
+  const templateMessageTimerRef = useRef<number | null>(null);
+  const lastSavedTemplatesRef = useRef<TownTemplate[]>(townTemplates);
+
+  const showTemplateMessage = useCallback((text: string, kind: 'info' | 'error' = 'info') => {
+    if (templateMessageTimerRef.current) {
+      clearTimeout(templateMessageTimerRef.current);
+    }
+    setTemplateMessage({ text, kind });
+    templateMessageTimerRef.current = window.setTimeout(() => {
+      setTemplateMessage(null);
+      templateMessageTimerRef.current = null;
+    }, 5000);
+  }, []);
+
+  // Save templates in useEffect without mutating state setter
+  useEffect(() => {
+    if (townTemplates === lastSavedTemplatesRef.current) {
+      return;
+    }
+    const res = saveTemplates(townTemplates);
+    if (res.ok) {
+      lastSavedTemplatesRef.current = townTemplates;
+    } else {
+      showTemplateMessage(
+        'テンプレートを保存できませんでした(ブラウザの保存容量の可能性があります)。書き出しでバックアップしてください。',
+        'error'
+      );
+    }
+  }, [townTemplates, showTemplateMessage]);
 
   const handleSaveTemplates = useCallback((updater: (prev: TownTemplate[]) => TownTemplate[]) => {
-    setTownTemplates((prev) => {
-      const next = updater(prev);
-      saveTemplates(next);
-      return next;
-    });
+    setTownTemplates(updater);
   }, []);
 
   const handleSaveTemplate = useCallback(
@@ -332,9 +359,12 @@ export default function App() {
     (id: string, newName: string) => {
       const trimmed = newName.trim();
       if (!trimmed) return;
-      handleSaveTemplates((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, name: trimmed.slice(0, 60) } : t))
-      );
+      const sliced = trimmed.slice(0, 60);
+      handleSaveTemplates((prev) => {
+        const otherNames = prev.filter((t) => t.id !== id).map((t) => t.name);
+        const uniqueName = uniqueTemplateName(sliced, otherNames);
+        return prev.map((t) => (t.id === id ? { ...t, name: uniqueName } : t));
+      });
     },
     [handleSaveTemplates]
   );
@@ -345,6 +375,7 @@ export default function App() {
       angleDeg: 0,
       flipX: false,
     });
+    setBrushSettings((prev) => (prev.mode !== 'townSelect' ? { ...prev, mode: 'townSelect' } : prev));
   }, []);
 
   const handleCancelTemplatePlacement = useCallback(() => {
@@ -356,10 +387,27 @@ export default function App() {
   }, []);
 
   const handleImportTemplates = useCallback(
-    (incoming: TownTemplate[]) => {
-      handleSaveTemplates((prev) => mergeTemplates(prev, incoming));
+    (parsed: { templates: TownTemplate[]; skipped: number; error?: string }) => {
+      if (parsed.error) {
+        showTemplateMessage(parsed.error, 'error');
+        return;
+      }
+      setTownTemplates((prev) => {
+        const prevCount = prev.length;
+        const incomingCount = parsed.templates.length;
+        const next = mergeTemplates(prev, parsed.templates, 100);
+        const addedCount = next.length - prevCount;
+        const cappedCount = incomingCount - addedCount;
+
+        let msg = `テンプレートを ${addedCount} 件追加しました(スキップ ${parsed.skipped} 件)。`;
+        if (cappedCount > 0 && next.length >= 100) {
+          msg += ` 上限 100 件のため、${cappedCount} 件は追加できませんでした。`;
+        }
+        showTemplateMessage(msg, 'info');
+        return next;
+      });
     },
-    [handleSaveTemplates]
+    [showTemplateMessage]
   );
 
   // Water Bodies (Rivers & Lakes) state & selection
@@ -483,10 +531,17 @@ export default function App() {
     flattenTarget: 50,
   });
 
-  // Clear template placement when switching maps or tool changes
+  // (a) Clear template placement when switching maps
   useEffect(() => {
     setTemplatePlacement(null);
-  }, [activeRegionId, brushSettings.mode]);
+  }, [activeRegionId]);
+
+  // (b) Clear template placement when tool changes away from townSelect
+  useEffect(() => {
+    if (brushSettings.mode !== 'townSelect') {
+      setTemplatePlacement(null);
+    }
+  }, [brushSettings.mode]);
 
   // Automatically switch away from town-specific tools when exiting town map
   useEffect(() => {
@@ -1865,6 +1920,7 @@ export default function App() {
               onUpdateTemplatePlacement={handleUpdateTemplatePlacement}
               onCancelTemplatePlacement={handleCancelTemplatePlacement}
               onImportTemplates={handleImportTemplates}
+              templateMessage={templateMessage}
             />
           </div>
         )}

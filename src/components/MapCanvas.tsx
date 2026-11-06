@@ -100,7 +100,11 @@ import {
 } from '../utils/waterRenderer';
 import { createOrganicLake, smoothRiverPath } from '../utils/waterGenerator';
 import { WaterPanel } from './WaterPanel';
-import { TownTemplatePlacement, instantiateTemplate } from '../utils/town/townTemplate';
+import {
+  TownTemplatePlacement,
+  instantiateTemplate,
+  placeTemplate,
+} from '../utils/town/townTemplate';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -1671,6 +1675,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       for (const obj of previewObjs) {
         if (obj.kind === 'building' || obj.kind === 'district') {
           if (!obj.polygon || obj.polygon.length < 3) continue;
+          ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
+          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
           ctx.beginPath();
           ctx.moveTo(obj.polygon[0][0], obj.polygon[0][1]);
           for (let i = 1; i < obj.polygon.length; i++) {
@@ -1681,6 +1687,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           ctx.stroke();
         } else if (obj.kind === 'road' || obj.kind === 'wall' || obj.kind === 'pier') {
           if (!obj.points || obj.points.length < 2) continue;
+          const wM = obj.kind === 'wall' ? obj.thicknessM : obj.widthM;
+          ctx.lineWidth = Math.max(2 / zoomPx, metersToUnits(wM || 3, metersPerUnit));
+          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
           ctx.beginPath();
           ctx.moveTo(obj.points[0][0], obj.points[0][1]);
           for (let i = 1; i < obj.points.length; i++) {
@@ -1689,10 +1698,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           if (obj.kind === 'wall' && obj.closed) {
             ctx.closePath();
           }
-          const wM = obj.kind === 'wall' ? obj.thicknessM : obj.widthM;
-          ctx.lineWidth = Math.max(2 / zoomPx, metersToUnits(wM || 3, metersPerUnit));
           ctx.stroke();
-          ctx.restore();
         }
       }
 
@@ -3343,39 +3349,37 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     if (activeRegionalMap?.kind === 'town') {
       // 0. Town Template Placement
       if (templatePlacement) {
-        if (e.button === 2) {
+        if (isSpacePressed || e.button === 1) {
+          // Allow panning with Space + drag or middle click without placing template
+        } else if (e.button === 2) {
           e.preventDefault();
           onCancelTemplatePlacement?.();
           renderOverlay();
           return;
-        }
-
-        if (e.button === 0) {
+        } else if (e.button === 0) {
           const anchor: Pt = [worldPos.x, worldPos.y];
-          const placed = instantiateTemplate(
+          const { prevObjects, newObjects, placedIds } = placeTemplate(
+            townObjects,
             templatePlacement.template,
             anchor,
             metersPerUnit,
             {
               angleDeg: templatePlacement.angleDeg,
               flipX: templatePlacement.flipX,
-              existingIds: new Set(townObjects.map((o) => o.id)),
             }
           );
-          const nextTownObjects = [...townObjects, ...placed];
-          const newIds = placed.map((o) => o.id);
 
           onCommitHistory({
             description: `テンプレート「${templatePlacement.template.name}」を配置`,
             timestamp: Date.now(),
             townChanges: {
-              prevObjects: townObjects,
-              newObjects: nextTownObjects,
+              prevObjects,
+              newObjects,
             },
           });
-          onUpdateTownObjects?.(nextTownObjects);
-          onSelectTownObjectIds?.(newIds);
-          onSelectTownObjectId?.(newIds[0] ?? null);
+          onUpdateTownObjects?.(newObjects);
+          onSelectTownObjectIds?.(placedIds);
+          onSelectTownObjectId?.(placedIds[0] ?? null);
           showToast(`テンプレート「${templatePlacement.template.name}」を配置しました`);
           renderOverlay();
           return;

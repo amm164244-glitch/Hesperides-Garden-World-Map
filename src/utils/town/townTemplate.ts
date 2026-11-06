@@ -4,13 +4,37 @@
  * Completely decoupled from React, DOM, and Canvas contexts.
  */
 
-import { Pt, TownObject } from '../../types/town';
+import {
+  Pt,
+  TownObject,
+  TownDistrictKind,
+  TownBuildingKind,
+} from '../../types/town';
 import {
   clipboardToObjects,
   flipObject,
   objectsToClipboard,
   rotateObject,
 } from './townBuild';
+
+export const VALID_DISTRICT_KINDS: readonly TownDistrictKind[] = [
+  'residential',
+  'market',
+  'noble',
+  'poor',
+  'park',
+  'farmland',
+] as const;
+
+export const VALID_BUILDING_KINDS: readonly TownBuildingKind[] = [
+  'house',
+  'shop',
+  'hall',
+  'church',
+  'keep',
+  'tower',
+  'barn',
+] as const;
 
 export interface TownTemplate {
   id: string;
@@ -190,8 +214,11 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
 
   const data = raw as Record<string, unknown>;
 
-  if (typeof data.id !== 'string' || !data.id.trim()) return null;
-  const id = data.id.trim();
+  // If id is missing, empty, or not a string, assign a new ID instead of returning null
+  const id =
+    typeof data.id === 'string' && data.id.trim()
+      ? data.id.trim()
+      : `tmpl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
   let name = typeof data.name === 'string' ? data.name.trim() : 'テンプレート';
   if (!name) name = 'テンプレート';
@@ -212,6 +239,10 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
     if (typeof obj.kind !== 'string') continue;
     const kind = obj.kind;
     const objId = typeof obj.id === 'string' && obj.id.trim() ? obj.id.trim() : `${kind}_${Date.now()}`;
+    const objName =
+      typeof obj.name === 'string' && obj.name.trim().length > 0
+        ? obj.name.trim().slice(0, 100)
+        : undefined;
 
     if (kind === 'district' || kind === 'building') {
       if (!Array.isArray(obj.polygon) || obj.polygon.length < 3) continue;
@@ -227,22 +258,30 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
       if (hasNan || validPoly.length < 3) continue;
 
       if (kind === 'district') {
-        const districtKind = typeof obj.districtKind === 'string' ? obj.districtKind : 'residential';
+        const districtKind =
+          typeof obj.districtKind === 'string' && (VALID_DISTRICT_KINDS as readonly string[]).includes(obj.districtKind)
+            ? (obj.districtKind as TownDistrictKind)
+            : 'residential';
         sanitizedObjects.push({
           id: objId,
           kind: 'district',
+          ...(objName !== undefined ? { name: objName } : {}),
           polygon: validPoly,
-          districtKind: districtKind as any,
+          districtKind,
         });
       } else {
-        const buildingKind = typeof obj.buildingKind === 'string' ? obj.buildingKind : 'house';
+        const buildingKind =
+          typeof obj.buildingKind === 'string' && (VALID_BUILDING_KINDS as readonly string[]).includes(obj.buildingKind)
+            ? (obj.buildingKind as TownBuildingKind)
+            : 'house';
         const heightM = typeof obj.heightM === 'number' && !isNaN(obj.heightM) ? Math.max(1, obj.heightM) : 6;
         const tone = typeof obj.tone === 'number' && !isNaN(obj.tone) ? Math.max(0, Math.min(1, obj.tone)) : 0.5;
         sanitizedObjects.push({
           id: objId,
           kind: 'building',
+          ...(objName !== undefined ? { name: objName } : {}),
           polygon: validPoly,
-          buildingKind: buildingKind as any,
+          buildingKind,
           heightM,
           tone,
         });
@@ -269,6 +308,7 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
         sanitizedObjects.push({
           id: objId,
           kind: 'road',
+          ...(objName !== undefined ? { name: objName } : {}),
           points: validPoints,
           style,
           widthM,
@@ -280,6 +320,7 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
         sanitizedObjects.push({
           id: objId,
           kind: 'pier',
+          ...(objName !== undefined ? { name: objName } : {}),
           points: validPoints,
           variant,
           widthM,
@@ -293,11 +334,16 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
         const towers = obj.towers !== undefined ? Boolean(obj.towers) : true;
         const towerRadiusM = typeof obj.towerRadiusM === 'number' && !isNaN(obj.towerRadiusM) ? Math.max(1, obj.towerRadiusM) : 3;
         const gates: import('../../types/town').TownWallGate[] = [];
+        const maxSegments = closed ? validPoints.length : validPoints.length - 1;
         if (Array.isArray(obj.gates)) {
           for (const g of obj.gates) {
             if (!g || typeof g !== 'object') continue;
             const gate = g as Record<string, unknown>;
-            const segIdx = typeof gate.segmentIndex === 'number' ? Math.floor(gate.segmentIndex) : 0;
+            const segIdx =
+              typeof gate.segmentIndex === 'number' && Number.isInteger(gate.segmentIndex)
+                ? gate.segmentIndex
+                : -1;
+            if (segIdx < 0 || segIdx >= maxSegments) continue;
             const t = typeof gate.t === 'number' && !isNaN(gate.t) ? Math.max(0, Math.min(1, gate.t)) : 0.5;
             const gateWidthM = typeof gate.widthM === 'number' && !isNaN(gate.widthM) ? Math.max(1, gate.widthM) : 4;
             gates.push({
@@ -310,6 +356,7 @@ export function sanitizeTemplate(raw: unknown): TownTemplate | null {
         sanitizedObjects.push({
           id: objId,
           kind: 'wall',
+          ...(objName !== undefined ? { name: objName } : {}),
           points: validPoints,
           closed,
           thicknessM,
@@ -351,6 +398,7 @@ export function serializeTemplateLibrary(templates: TownTemplate[]): string {
 
 /**
  * Parses a JSON string containing template library data.
+ * Accepts only { format: 'hg-town-templates', version: 1, templates: [...] }.
  */
 export function parseTemplateLibrary(text: string): {
   templates: TownTemplate[];
@@ -359,25 +407,26 @@ export function parseTemplateLibrary(text: string): {
 } {
   try {
     const raw = JSON.parse(text);
-    if (!raw || typeof raw !== 'object') {
-      return { templates: [], skipped: 0, error: 'JSON形式が不正です。' };
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { templates: [], skipped: 0, error: 'テンプレートファイルの形式が一致しません。' };
     }
 
-    let items: unknown[] = [];
-    if (Array.isArray(raw)) {
-      items = raw;
-    } else if (raw.format === 'hg-town-templates' && Array.isArray(raw.templates)) {
-      items = raw.templates;
-    } else if (Array.isArray(raw.templates)) {
-      items = raw.templates;
-    } else {
+    if (raw.format !== 'hg-town-templates' || !Array.isArray(raw.templates)) {
       return { templates: [], skipped: 0, error: 'テンプレートファイルの形式が一致しません。' };
+    }
+
+    if (typeof raw.version !== 'number' || isNaN(raw.version) || raw.version > 1) {
+      return {
+        templates: [],
+        skipped: 0,
+        error: `このテンプレートファイルは、新しい形式(version ${raw.version})のため、読み込めません。`,
+      };
     }
 
     const valid: TownTemplate[] = [];
     let skipped = 0;
 
-    for (const item of items) {
+    for (const item of raw.templates) {
       const sanitized = sanitizeTemplate(item);
       if (sanitized) {
         valid.push(sanitized);
@@ -397,9 +446,32 @@ export function parseTemplateLibrary(text: string): {
 }
 
 /**
+ * Generates a unique template name avoiding case-insensitive collisions with existingNames.
+ * Appends " (2)", " (3)", etc. Truncates base name if resulting length exceeds 60 characters.
+ */
+export function uniqueTemplateName(name: string, existingNames: string[]): string {
+  const lowerSet = new Set(existingNames.map((n) => n.toLowerCase()));
+  if (!lowerSet.has(name.toLowerCase())) {
+    return name;
+  }
+
+  let counter = 2;
+  while (true) {
+    const suffix = ` (${counter})`;
+    const maxBaseLen = Math.max(0, 60 - suffix.length);
+    const base = name.length > maxBaseLen ? name.slice(0, maxBaseLen) : name;
+    const candidate = `${base}${suffix}`;
+    if (!lowerSet.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+    counter++;
+  }
+}
+
+/**
  * Merges incoming templates into an existing template library.
  * - Resolves ID collisions.
- * - Deduplicates names with " (2)", " (3)", etc.
+ * - Deduplicates names using uniqueTemplateName.
  * - Caps maximum total templates at maxCount (default: 100).
  */
 export function mergeTemplates(
@@ -409,7 +481,7 @@ export function mergeTemplates(
 ): TownTemplate[] {
   const result: TownTemplate[] = [...existing];
   const existingIds = new Set<string>(existing.map((t) => t.id));
-  const existingNames = new Set<string>(existing.map((t) => t.name.toLowerCase()));
+  const currentNames: string[] = existing.map((t) => t.name);
 
   for (const item of incoming) {
     if (result.length >= maxCount) break;
@@ -424,16 +496,9 @@ export function mergeTemplates(
     }
     existingIds.add(newId);
 
-    // Resolve name collision
-    let newName = item.name;
-    if (existingNames.has(newName.toLowerCase())) {
-      let counter = 2;
-      while (existingNames.has(`${newName} (${counter})`.toLowerCase())) {
-        counter++;
-      }
-      newName = `${newName} (${counter})`;
-    }
-    existingNames.add(newName.toLowerCase());
+    // Resolve name collision using uniqueTemplateName
+    const newName = uniqueTemplateName(item.name, currentNames);
+    currentNames.push(newName);
 
     result.push({
       ...item,
@@ -443,4 +508,34 @@ export function mergeTemplates(
   }
 
   return result.slice(0, maxCount);
+}
+
+/**
+ * Places a template onto townObjects at the specified anchor point, returning the updated objects array and IDs.
+ * Pure function: prevObjects is untouched; newObjects contains [...townObjects, ...placed].
+ */
+export function placeTemplate(
+  townObjects: TownObject[],
+  template: TownTemplate,
+  anchor: Pt,
+  metersPerUnit: number,
+  opts: { angleDeg: number; flipX: boolean }
+): {
+  prevObjects: TownObject[];
+  newObjects: TownObject[];
+  placedIds: string[];
+} {
+  const existingIds = new Set<string>(townObjects.map((o) => o.id));
+  const placed = instantiateTemplate(template, anchor, metersPerUnit, {
+    angleDeg: opts.angleDeg,
+    flipX: opts.flipX,
+    existingIds,
+  });
+  const placedIds = placed.map((o) => o.id);
+  const newObjects = [...townObjects, ...placed];
+  return {
+    prevObjects: townObjects,
+    newObjects,
+    placedIds,
+  };
 }
