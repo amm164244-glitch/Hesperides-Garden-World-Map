@@ -439,9 +439,16 @@ export function snapPoint(
 
   let minDistance = Infinity;
   let bestTarget: Pt | undefined = undefined;
+  const px = p[0];
+  const py = p[1];
 
-  for (const c of candidates) {
-    const d = Math.hypot(p[0] - c[0], p[1] - c[1]);
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const dx = Math.abs(px - c[0]);
+    if (dx > tolerance) continue;
+    const dy = Math.abs(py - c[1]);
+    if (dy > tolerance) continue;
+    const d = Math.hypot(dx, dy);
     if (d <= tolerance && d < minDistance) {
       minDistance = d;
       bestTarget = c;

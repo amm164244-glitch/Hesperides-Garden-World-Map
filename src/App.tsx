@@ -1823,6 +1823,56 @@ export default function App() {
     return list;
   }, [confirmDeleteTargetId, mapData.regionalMaps]);
 
+  // Memoized stable handlers to avoid re-rendering toolbar/inspector/panels on pan/zoom
+  const handleChangeTownToolConfig = useCallback(
+    (patch: Partial<TownToolConfig>) => setTownToolConfig((prev) => ({ ...prev, ...patch })),
+    []
+  );
+  const handleUpdateBrush = useCallback(
+    (patch: Partial<BrushSettings>) => setBrushSettings((prev) => ({ ...prev, ...patch })),
+    []
+  );
+  const handleToggleMesh = useCallback(() => setShowMesh((v) => !v), []);
+  const handleToggleShading = useCallback(() => setShowShading((v) => !v), []);
+  const handleToggleRipples = useCallback(() => setShowRipples((v) => !v), []);
+  const handleToggleCompass = useCallback(() => setShowCompass((v) => !v), []);
+  const handleToggleSymbolPalette = useCallback(() => setIsSymbolPaletteOpen((v) => !v), []);
+  const handleOpenImageToPixel = useCallback(() => setIsImageToPixelOpen(true), []);
+  const handleToggleGenerator = useCallback(() => setIsGeneratorOpen((v) => !v), []);
+  const handleOpenStorage = useCallback(() => setIsStorageOpen(true), []);
+  const handleOpenRegionManager = useCallback(() => setIsRegionManagerOpen(true), []);
+  const handleToggleAutoRegionSwitch = useCallback(() => setAutoRegionSwitch((v) => !v), []);
+  const handleToggleDimOutsideRegion = useCallback(() => setDimOutsideRegion((v) => !v), []);
+  const handleZoomChange = useCallback(
+    (delta: number) =>
+      setViewport((v) => ({
+        ...v,
+        zoom: Math.max(0.15, Math.min(maxZoom, v.zoom + delta)),
+      })),
+    [maxZoom]
+  );
+  const handleSelectRegionBounds = useCallback(
+    (bounds: RegionalBounds, adjusted = false, shapePolygon?: [number, number][], options?: any) => {
+      setPendingRegionInfo({ bounds, adjusted, shapePolygon, options });
+    },
+    []
+  );
+  const handleClearMapBackground = useCallback(() => setMapBackgroundUrl(null), []);
+  const handleInteractingChange = useCallback((interacting: boolean) => {
+    isInteractingRef.current = interacting;
+  }, []);
+  const handleSelectWater = useCallback((id: string | null, type: 'river' | 'lake' | null) => {
+    setSelectedWaterId(id);
+    setSelectedWaterType(type);
+  }, []);
+  const handleChangeWaterSettings = useCallback(
+    (patch: Partial<WaterToolSettings>) => setWaterSettings((prev) => ({ ...prev, ...patch })),
+    []
+  );
+  const handleDeleteCurrentRegion = useCallback(() => {
+    if (activeRegionId) setConfirmDeleteTargetId(activeRegionId);
+  }, [activeRegionId]);
+
   return (
     <div className="relative w-screen h-screen overflow-hidden flex flex-col bg-[#08111c] text-stone-100 font-sans">
       {/* Top Header */}
@@ -1905,31 +1955,24 @@ export default function App() {
           biomeTypes={biomeTypes}
           onCommitHistory={handleCommitHistory}
           onHoverCell={setHoveredCell}
-          onSelectRegionBounds={(bounds, adjusted = false, shapePolygon, options) =>
-            setPendingRegionInfo({ bounds, adjusted, shapePolygon, options })
-          }
+          onSelectRegionBounds={handleSelectRegionBounds}
           onSelectRegionMap={handleNavigateToRegion}
           mapBackgroundUrl={mapBackgroundUrl}
-          onClearMapBackground={() => setMapBackgroundUrl(null)}
+          onClearMapBackground={handleClearMapBackground}
           maxZoom={maxZoom}
           dimOutsideRegion={dimOutsideRegion}
-          onInteractingChange={(interacting) => {
-            isInteractingRef.current = interacting;
-          }}
+          onInteractingChange={handleInteractingChange}
           rivers={currentRivers}
           lakes={currentLakes}
           onUpdateRivers={handleUpdateRivers}
           onUpdateLakes={handleUpdateLakes}
           selectedWaterId={selectedWaterId}
           selectedWaterType={selectedWaterType}
-          onSelectWater={(id, type) => {
-            setSelectedWaterId(id);
-            setSelectedWaterType(type);
-          }}
+          onSelectWater={handleSelectWater}
           waterSettings={waterSettings}
-          onChangeWaterSettings={(patch) => setWaterSettings((prev) => ({ ...prev, ...patch }))}
+          onChangeWaterSettings={handleChangeWaterSettings}
           onClearAllWater={handleClearAllWater}
-          onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
+          onUpdateBrush={handleUpdateBrush}
           templatePlacement={templatePlacement}
           onUpdateTemplatePlacement={handleUpdateTemplatePlacement}
           onCancelTemplatePlacement={handleCancelTemplatePlacement}
@@ -1939,7 +1982,7 @@ export default function App() {
         <div className="absolute top-3 left-3 z-30 max-w-2xl max-h-[calc(100vh-4.5rem)] flex flex-col min-h-0">
           <Toolbar
             brushSettings={brushSettings}
-            onUpdateBrush={(patch) => setBrushSettings((prev) => ({ ...prev, ...patch }))}
+            onUpdateBrush={handleUpdateBrush}
             symbolToolSettings={symbolToolSettings}
             onUpdateSymbolToolSettings={handleUpdateSymbolToolSettings}
             canUndo={undoStack.length > 0}
@@ -1951,28 +1994,23 @@ export default function App() {
             viewMode={viewMode}
             onChangeViewMode={setViewMode}
             showMesh={showMesh}
-            onToggleMesh={() => setShowMesh((v) => !v)}
+            onToggleMesh={handleToggleMesh}
             showShading={showShading}
-            onToggleShading={() => setShowShading((v) => !v)}
+            onToggleShading={handleToggleShading}
             showRipples={showRipples}
-            onToggleRipples={() => setShowRipples((v) => !v)}
+            onToggleRipples={handleToggleRipples}
             showCompass={showCompass}
-            onToggleCompass={() => setShowCompass((v) => !v)}
+            onToggleCompass={handleToggleCompass}
             isSymbolPaletteOpen={isSymbolPaletteOpen}
-            onToggleSymbolPalette={() => setIsSymbolPaletteOpen((v) => !v)}
-            onOpenImageToPixel={() => setIsImageToPixelOpen(true)}
+            onToggleSymbolPalette={handleToggleSymbolPalette}
+            onOpenImageToPixel={handleOpenImageToPixel}
             symbolCount={currentSymbols.length}
             onResetView={handleResetView}
             zoom={viewport.zoom}
-            onZoomChange={(delta) =>
-              setViewport((v) => ({
-                ...v,
-                zoom: Math.max(0.15, Math.min(maxZoom, v.zoom + delta)),
-              }))
-            }
-            onToggleGenerator={() => setIsGeneratorOpen((v) => !v)}
+            onZoomChange={handleZoomChange}
+            onToggleGenerator={handleToggleGenerator}
             isGeneratorOpen={isGeneratorOpen}
-            onOpenStorage={() => setIsStorageOpen(true)}
+            onOpenStorage={handleOpenStorage}
             activeRegionalMap={activeRegionalMap}
             activeRegionName={activeRegionalMap?.name}
             breadcrumbs={breadcrumbs}
@@ -1981,14 +2019,14 @@ export default function App() {
             onExitRegion={handleGoBackOneLevel}
             regionList={regionList}
             onSelectRegionMap={handleNavigateToRegion}
-            onDeleteCurrentRegion={() => activeRegionId && setConfirmDeleteTargetId(activeRegionId)}
-            onOpenRegionManager={() => setIsRegionManagerOpen(true)}
+            onDeleteCurrentRegion={handleDeleteCurrentRegion}
+            onOpenRegionManager={handleOpenRegionManager}
             isCollapsed={isToolbarCollapsed}
             onToggleCollapse={handleToggleCollapse}
             autoRegionSwitch={autoRegionSwitch}
-            onToggleAutoRegionSwitch={() => setAutoRegionSwitch((v) => !v)}
+            onToggleAutoRegionSwitch={handleToggleAutoRegionSwitch}
             dimOutsideRegion={dimOutsideRegion}
-            onToggleDimOutsideRegion={() => setDimOutsideRegion((v) => !v)}
+            onToggleDimOutsideRegion={handleToggleDimOutsideRegion}
           />
         </div>
 
@@ -2188,7 +2226,7 @@ export default function App() {
               selectedTownObjectIds={selectedTownObjectIds}
               onSelectTownObjectIds={setSelectedTownObjectIds}
               townToolConfig={townToolConfig}
-              onChangeTownToolConfig={(patch) => setTownToolConfig((prev) => ({ ...prev, ...patch }))}
+              onChangeTownToolConfig={handleChangeTownToolConfig}
               isAddingGateMode={isAddingGateMode}
               onToggleAddingGateMode={setIsAddingGateMode}
               autoFillPreviewBuildings={townAutoFillPreview}

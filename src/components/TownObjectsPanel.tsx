@@ -143,7 +143,7 @@ interface TownObjectsPanelProps {
   textureMessage?: { text: string; kind: 'info' | 'error' | 'success' } | null;
 }
 
-export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
+const TownObjectsPanelComponent: React.FC<TownObjectsPanelProps> = ({
   mapWidth,
   mapHeight,
   metersPerUnit,
@@ -2982,3 +2982,5 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
     </>
   );
 };
+
+export const TownObjectsPanel = React.memo(TownObjectsPanelComponent);

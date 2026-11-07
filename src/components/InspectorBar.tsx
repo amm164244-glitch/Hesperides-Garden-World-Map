@@ -113,4 +113,11 @@ const InspectorBarComponent: React.FC<InspectorBarProps> = ({
   );
 };
 
-export const InspectorBar = React.memo(InspectorBarComponent);
+export const InspectorBar = React.memo(InspectorBarComponent, (prev, next) => {
+  return (
+    prev.mapData === next.mapData &&
+    prev.activeRegionalMap === next.activeRegionalMap &&
+    prev.hoveredCell === next.hoveredCell &&
+    Math.round(prev.viewport.zoom * 100) === Math.round(next.viewport.zoom * 100)
+  );
+});

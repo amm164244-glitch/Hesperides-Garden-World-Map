@@ -559,20 +559,24 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   }, [activeRegionalMap?.kind, effectiveTownSelectedIds, townObjects, viewport.zoom]);
 
   // Candidates for snapping (8px on screen)
-  const townSnapCandidates = useMemo(() => {
+  const baseTownSnapCandidates = useMemo(() => {
     if (activeRegionalMap?.kind !== 'town' || !townToolConfig.snapEnabled) return [];
     const pts: Pt[] = [];
     for (const obj of townObjects) {
       const objPts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
-      for (const p of objPts) {
-        pts.push(p);
+      for (let i = 0; i < objPts.length; i++) {
+        pts.push(objPts[i]);
       }
     }
-    if (drawingTownPoints.length > 0) {
-      pts.push(drawingTownPoints[0]);
-    }
     return pts;
-  }, [activeRegionalMap?.kind, townToolConfig.snapEnabled, townObjects, drawingTownPoints]);
+  }, [activeRegionalMap?.kind, townToolConfig.snapEnabled, townObjects]);
+
+  const townSnapCandidates = useMemo(() => {
+    if (drawingTownPoints.length > 0) {
+      return [drawingTownPoints[0], ...baseTownSnapCandidates];
+    }
+    return baseTownSnapCandidates;
+  }, [baseTownSnapCandidates, drawingTownPoints]);
 
   // Find active handle of a selected object under cursor
   const findTownHandleUnderCursor = useCallback(
@@ -4857,7 +4861,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const next = effectiveLakes.map((l) => (l.id === drag.id ? { ...l, polygon: nextPoly } : l));
           onUpdateLakes?.(next);
         }
-        renderOverlay();
+        scheduleOverlayRender();
         return;
       } else if (drag.type === 'vertex') {
         const vIdx = drag.vertexIndex!;
@@ -4874,7 +4878,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const next = effectiveLakes.map((l) => (l.id === drag.id ? { ...l, polygon: nextPoly } : l));
           onUpdateLakes?.(next);
         }
-        renderOverlay();
+        scheduleOverlayRender();
         return;
       }
     }
@@ -4884,7 +4888,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       (brushSettings.mode === 'river' && drawingRiverPoints.length > 0) ||
       (brushSettings.mode === 'lake' && (drawingLakeStart !== null || drawingLakePolygon.length > 0))
     ) {
-      renderOverlay();
+      renderPreviewOverlay();
     }
 
     const isCoastlineAssisted = (
@@ -4921,7 +4925,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         y: Math.max(60, Math.min(currentHeight - 60, worldPos.y - compassDragOffsetRef.current.y)),
       };
       onUpdateCompassPos?.(newPos);
-      renderOverlay();
+      scheduleOverlayRender();
       return;
     }
 
@@ -4937,7 +4941,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         return s;
       });
       onUpdateSymbols?.(nextSymbols);
-      renderOverlay();
+      scheduleOverlayRender();
       return;
     }
 
@@ -4973,11 +4977,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           }
 
           setSelectionBox((prev) => (prev ? { ...prev, currentX, currentY } : null));
-          renderOverlay();
+          renderPreviewOverlay();
         } else if (selectMethod === 'polygon' && polygonPoints.length > 0) {
-          renderOverlay();
+          renderPreviewOverlay();
         } else if (isCoastlineAssisted) {
-          renderOverlay();
+          renderPreviewOverlay();
         }
       }
       renderCursorOverlay();
@@ -5013,7 +5017,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (!last || Math.hypot(pt[0] - last[0], pt[1] - last[1]) >= 4 / viewport.zoom) {
         freehandPointsRef.current.push(pt);
         setFreehandPoints([...freehandPointsRef.current]);
-        renderOverlay();
+        scheduleOverlayRender();
       }
     } else if (isSelectingRef.current && selectionBox && selectMethod === 'rect') {
       const sx = selectionBox.startX;
@@ -5050,7 +5054,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         currentX,
         currentY,
       });
-      renderOverlay();
+      scheduleOverlayRender();
     } else if (brushSettings.mode === 'symbolBrush') {
       const scatterRadius = symbolToolSettings?.scatterRadius ?? 60;
       const minStep = Math.max(8, Math.min(24, scatterRadius * 0.25));
@@ -5079,7 +5083,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
         lastWorldPosRef.current = worldPos;
       }
-      renderOverlay();
+      scheduleOverlayRender();
     } else if (brushSettings.mode === 'symbolEraser') {
       const symList = activeStrokeSymbolsRef.current;
       const rad = symbolToolSettings?.scatterRadius ?? brushSettings.radius;
@@ -5088,7 +5092,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         activeStrokeSymbolsRef.current = remaining;
         onUpdateSymbols?.(remaining);
       }
-      renderOverlay();
+      scheduleOverlayRender();
     } else if (brushSettings.mode === 'biomePaint' || brushSettings.mode === 'biomeErase') {
       const grid = getOrCreateBiomeGrid();
       const isErase = brushSettings.mode === 'biomeErase';

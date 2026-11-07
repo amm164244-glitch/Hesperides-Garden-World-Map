@@ -86,7 +86,7 @@ interface ToolbarProps {
   onToggleDimOutsideRegion?: () => void;
 }
 
-export const Toolbar: React.FC<ToolbarProps> = ({
+const ToolbarComponent: React.FC<ToolbarProps> = ({
   brushSettings,
   onUpdateBrush,
   symbolToolSettings,
@@ -134,7 +134,104 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   dimOutsideRegion = true,
   onToggleDimOutsideRegion,
 }) => {
-  const tools: { id: BrushMode; label: string; icon: React.ReactNode; desc: string }[] = [
+  const isBiomeMode =
+    brushSettings.mode === 'biomePaint' ||
+    brushSettings.mode === 'biomeFill' ||
+    brushSettings.mode === 'biomeErase';
+
+  const isWaterMode =
+    brushSettings.mode === 'river' ||
+    brushSettings.mode === 'lake' ||
+    brushSettings.mode === 'waterEdit';
+
+  const isBiomeOrWaterActive = isBiomeMode || isWaterMode;
+
+  const [lastBiomeOrWaterMode, setLastBiomeOrWaterMode] = React.useState<BrushMode>('biomePaint');
+  const [isBiomeWaterFlyoutOpen, setIsBiomeWaterFlyoutOpen] = React.useState<boolean>(false);
+  const flyoutRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (isBiomeOrWaterActive) {
+      setLastBiomeOrWaterMode(brushSettings.mode);
+    }
+  }, [brushSettings.mode, isBiomeOrWaterActive]);
+
+  React.useEffect(() => {
+    if (!isBiomeWaterFlyoutOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (flyoutRef.current && !flyoutRef.current.contains(e.target as Node)) {
+        setIsBiomeWaterFlyoutOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, [isBiomeWaterFlyoutOpen]);
+
+  const BIOME_WATER_SUBTOOLS: {
+    id: BrushMode;
+    label: string;
+    shortLabel: string;
+    icon: React.ReactNode;
+    desc: string;
+    category: 'biome' | 'water';
+  }[] = [
+    {
+      id: 'biomePaint',
+      label: '地形タイプ塗り',
+      shortLabel: '塗り',
+      icon: <Paintbrush className="w-3.5 h-3.5 text-emerald-400" />,
+      desc: '地形タイプ（森林・草原・砂漠など）をブラシで塗る',
+      category: 'biome',
+    },
+    {
+      id: 'biomeFill',
+      label: '地形タイプ塗りつぶし',
+      shortLabel: '塗りつぶし',
+      icon: <PaintBucket className="w-3.5 h-3.5 text-emerald-400" />,
+      desc: '同種の地形タイプ領域を一括塗りつぶし',
+      category: 'biome',
+    },
+    {
+      id: 'biomeErase',
+      label: '地形タイプ消去',
+      shortLabel: '消去',
+      icon: <Eraser className="w-3.5 h-3.5 text-rose-400" />,
+      desc: '地形タイプの塗りを消去して透明に戻す',
+      category: 'biome',
+    },
+    {
+      id: 'river',
+      label: '川描画',
+      shortLabel: '川描画',
+      icon: <Droplets className="w-3.5 h-3.5 text-cyan-400" />,
+      desc: '水源から河口へ川を描画 (クリックで頂点配置、Enterで確定)',
+      category: 'water',
+    },
+    {
+      id: 'lake',
+      label: '湖描画',
+      shortLabel: '湖描画',
+      icon: <CircleDot className="w-3.5 h-3.5 text-cyan-400" />,
+      desc: '自然な湖を配置 (ドラッグまたは多角形クリック)',
+      category: 'water',
+    },
+    {
+      id: 'waterEdit',
+      label: '水域編集',
+      shortLabel: '水域編集',
+      icon: <MousePointer className="w-3.5 h-3.5 text-cyan-400" />,
+      desc: '川や湖をクリックして選択、頂点をドラッグして変形・削除',
+      category: 'water',
+    },
+  ];
+
+  const tools: {
+    id: BrushMode | 'biomeWaterCombined';
+    label: string;
+    icon: React.ReactNode;
+    desc: string;
+    isCombinedBiomeWater?: boolean;
+  }[] = [
     { id: 'pan', label: '視点移動', icon: <Hand className="w-4 h-4" />, desc: '地図をドラッグして移動 (Spaceキーでも可能)' },
     { id: 'elevate', label: '隆起', icon: <TrendingUp className="w-4 h-4" />, desc: '標高を高く盛り上げる' },
     { id: 'depress', label: '沈降', icon: <TrendingDown className="w-4 h-4" />, desc: '標高を低く掘り下げる' },
@@ -143,12 +240,26 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     { id: 'mountain', label: '山脈描画', icon: <Mountain className="w-4 h-4" />, desc: 'ドラッグした軌跡に沿って鋭い連峰を作る' },
     { id: 'makeLand', label: '陸地化', icon: <Trees className="w-4 h-4" />, desc: '海面上の陸地へ一気に持ち上げる' },
     { id: 'makeSea', label: '海洋化', icon: <Waves className="w-4 h-4" />, desc: '海面下の海・水域へ沈める' },
-    { id: 'biomePaint', label: '地形タイプ塗り', icon: <Paintbrush className="w-4 h-4" />, desc: '地形タイプ（森林・草原・砂漠など）をブラシで塗る' },
-    { id: 'biomeFill', label: '地形タイプ塗りつぶし', icon: <PaintBucket className="w-4 h-4" />, desc: '同種の地形タイプ領域を一括塗りつぶし' },
-    { id: 'biomeErase', label: '地形タイプ消去', icon: <Eraser className="w-4 h-4" />, desc: '地形タイプの塗りを消去して透明に戻す' },
-    { id: 'river', label: '川描画', icon: <Droplets className="w-4 h-4 text-cyan-400" />, desc: '水源から河口へ川を描画 (クリックで頂点配置、Enterで確定)' },
-    { id: 'lake', label: '湖描画', icon: <CircleDot className="w-4 h-4 text-cyan-400" />, desc: '自然な湖を配置 (ドラッグまたは多角形クリック)' },
-    { id: 'waterEdit', label: '水域編集', icon: <MousePointer className="w-4 h-4 text-cyan-400" />, desc: '川や湖をクリックして選択、頂点をドラッグして変形・削除' },
+    {
+      id: 'biomeWaterCombined',
+      label: '地形・水域',
+      isCombinedBiomeWater: true,
+      icon: (
+        <div className="flex items-center justify-center">
+          {isWaterMode ? (
+            <Droplets className="w-4 h-4 text-cyan-400" />
+          ) : isBiomeMode ? (
+            <Paintbrush className="w-4 h-4 text-emerald-400" />
+          ) : (
+            <div className="flex items-center -space-x-1">
+              <Paintbrush className="w-3.5 h-3.5 text-emerald-400" />
+              <Droplets className="w-3 h-3 text-cyan-400" />
+            </div>
+          )}
+        </div>
+      ),
+      desc: '地形タイプ（バイオーム）塗り・消去と水域（川・湖）の描画・編集',
+    },
     { id: 'selectRegion', label: '地域範囲選択', icon: <Layers className="w-4 h-4" />, desc: '範囲をドラッグ選択して4倍/16倍の地域マップを生成' },
     ...(activeRegionalMap?.kind === 'town'
       ? [
@@ -258,18 +369,29 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Scrollable middle Brush Tool Icons */}
         <div className="flex flex-col gap-1 overflow-y-auto overflow-x-hidden py-1 min-h-0 pr-0.5">
           {tools.map((t) => {
-            const isActive = brushSettings.mode === t.id;
+            const isCombined = t.id === 'biomeWaterCombined';
+            const isActive = isCombined ? isBiomeOrWaterActive : brushSettings.mode === t.id;
             return (
               <button
                 key={t.id}
                 type="button"
-                onClick={() => onUpdateBrush({ mode: t.id })}
+                onClick={() => {
+                  if (isCombined) {
+                    if (!isBiomeOrWaterActive) {
+                      onUpdateBrush({ mode: lastBiomeOrWaterMode });
+                    }
+                    setIsBiomeWaterFlyoutOpen((prev) => !prev);
+                  } else {
+                    setIsBiomeWaterFlyoutOpen(false);
+                    onUpdateBrush({ mode: t.id as BrushMode });
+                  }
+                }}
                 className={`p-1.5 rounded-lg text-xs flex items-center justify-center transition-all shrink-0 ${
                   isActive
                     ? 'bg-amber-500 text-stone-950 font-bold shadow-md ring-2 ring-amber-300 scale-105'
                     : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300'
                 }`}
-                title={`${t.label}: ${t.desc}`}
+                title={isCombined ? '地形タイプ・水域ツール' : `${t.label}: ${t.desc}`}
                 aria-label={t.label}
               >
                 {t.icon}
@@ -277,6 +399,88 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             );
           })}
         </div>
+
+        {/* Collapsed flyout for Biome & Water tools */}
+        {isBiomeWaterFlyoutOpen && (
+          <div
+            ref={flyoutRef}
+            className="fixed left-14 top-24 z-50 bg-stone-900/95 backdrop-blur-md border border-stone-700 rounded-xl p-2.5 shadow-2xl flex flex-col gap-2 min-w-[210px] text-xs animate-in fade-in zoom-in-95 duration-150"
+          >
+            <div className="flex items-center justify-between border-b border-stone-800 pb-1.5">
+              <span className="font-bold text-stone-200 text-xs flex items-center gap-1.5">
+                <Paintbrush className="w-3.5 h-3.5 text-emerald-400" />
+                <span>地形タイプ・水域ツール</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsBiomeWaterFlyoutOpen(false)}
+                className="text-stone-400 hover:text-stone-200 text-xs p-0.5 rounded hover:bg-stone-800"
+              >
+                ✕
+              </button>
+            </div>
+            {/* Biome tools */}
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                <span>地形タイプの編集</span>
+              </span>
+              <div className="flex flex-col gap-0.5">
+                {BIOME_WATER_SUBTOOLS.filter((s) => s.category === 'biome').map((s) => {
+                  const isSubActive = brushSettings.mode === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        onUpdateBrush({ mode: s.id });
+                        setLastBiomeOrWaterMode(s.id);
+                        setIsBiomeWaterFlyoutOpen(false);
+                      }}
+                      className={`w-full py-1.5 px-2 rounded flex items-center gap-2 text-left transition ${
+                        isSubActive
+                          ? 'bg-emerald-600 text-stone-950 font-bold shadow-sm'
+                          : 'hover:bg-stone-800 text-stone-300'
+                      }`}
+                    >
+                      {s.icon}
+                      <span className="text-xs">{s.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {/* Water tools */}
+            <div className="flex flex-col gap-1 pt-1 border-t border-stone-800">
+              <span className="text-[10px] font-bold text-cyan-400 flex items-center gap-1">
+                <span>水域編集</span>
+              </span>
+              <div className="flex flex-col gap-0.5">
+                {BIOME_WATER_SUBTOOLS.filter((s) => s.category === 'water').map((s) => {
+                  const isSubActive = brushSettings.mode === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        onUpdateBrush({ mode: s.id });
+                        setLastBiomeOrWaterMode(s.id);
+                        setIsBiomeWaterFlyoutOpen(false);
+                      }}
+                      className={`w-full py-1.5 px-2 rounded flex items-center gap-2 text-left transition ${
+                        isSubActive
+                          ? 'bg-cyan-600 text-stone-950 font-bold shadow-sm'
+                          : 'hover:bg-stone-800 text-stone-300'
+                      }`}
+                    >
+                      {s.icon}
+                      <span className="text-xs">{s.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Bottom pinned Quick Undo / Redo */}
         <div className="flex flex-col gap-1 shrink-0 pt-1 border-t border-stone-800">
@@ -575,12 +779,21 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <div className="text-[11px] font-semibold text-stone-400 mb-1 px-1">地形編集ブラシ</div>
         <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-12 gap-1.5">
           {tools.map((t) => {
-            const isActive = brushSettings.mode === t.id;
+            const isCombined = t.id === 'biomeWaterCombined';
+            const isActive = isCombined ? isBiomeOrWaterActive : brushSettings.mode === t.id;
             return (
               <button
                 key={t.id}
                 type="button"
-                onClick={() => onUpdateBrush({ mode: t.id })}
+                onClick={() => {
+                  if (isCombined) {
+                    if (!isBiomeOrWaterActive) {
+                      onUpdateBrush({ mode: lastBiomeOrWaterMode });
+                    }
+                  } else {
+                    onUpdateBrush({ mode: t.id as BrushMode });
+                  }
+                }}
                 className={`flex flex-col items-center justify-center p-2 rounded-lg text-xs transition-all ${
                   isActive
                     ? 'bg-amber-500 text-stone-950 font-bold shadow-lg scale-102 ring-2 ring-amber-300'
@@ -589,12 +802,93 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 title={t.desc}
               >
                 {t.icon}
-                <span className="mt-1 text-[11px]">{t.label}</span>
+                <span className="mt-1 text-[11px] whitespace-nowrap">{t.label}</span>
               </button>
             );
           })}
         </div>
       </div>
+
+      {/* Sub-mode toolbar for combined Terrain Type & Water Editing */}
+      {isBiomeOrWaterActive && (
+        <div className="flex flex-col gap-1.5 p-2.5 bg-stone-950/80 border border-stone-800 rounded-lg text-xs animate-in fade-in duration-150">
+          <div className="flex items-center justify-between text-[11px]">
+            <span className="font-semibold text-stone-300 flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${isWaterMode ? 'bg-cyan-400' : 'bg-emerald-400'} shadow-sm`} />
+              <span>地形タイプ・水域ツール</span>
+            </span>
+            <span className="text-[10px] text-stone-400 font-mono">
+              選択中: {BIOME_WATER_SUBTOOLS.find((s) => s.id === brushSettings.mode)?.label ?? ''}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {/* Biome tools */}
+            <div className="flex flex-col gap-1 bg-stone-900/90 p-1.5 rounded border border-emerald-950/60">
+              <span className="text-[10px] font-bold text-emerald-400 flex items-center gap-1">
+                <Paintbrush className="w-3 h-3" />
+                <span>地形タイプの編集</span>
+              </span>
+              <div className="grid grid-cols-3 gap-1">
+                {BIOME_WATER_SUBTOOLS.filter((s) => s.category === 'biome').map((s) => {
+                  const isSubActive = brushSettings.mode === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        onUpdateBrush({ mode: s.id });
+                        setLastBiomeOrWaterMode(s.id);
+                      }}
+                      className={`py-1 px-1 rounded text-[11px] font-medium flex items-center justify-center gap-1 transition ${
+                        isSubActive
+                          ? 'bg-emerald-600 text-stone-950 font-bold shadow-sm'
+                          : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+                      }`}
+                      title={s.desc}
+                    >
+                      {s.icon}
+                      <span className="truncate">{s.shortLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Water tools */}
+            <div className="flex flex-col gap-1 bg-stone-900/90 p-1.5 rounded border border-cyan-950/60">
+              <span className="text-[10px] font-bold text-cyan-400 flex items-center gap-1">
+                <Waves className="w-3 h-3" />
+                <span>水域編集</span>
+              </span>
+              <div className="grid grid-cols-3 gap-1">
+                {BIOME_WATER_SUBTOOLS.filter((s) => s.category === 'water').map((s) => {
+                  const isSubActive = brushSettings.mode === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        onUpdateBrush({ mode: s.id });
+                        setLastBiomeOrWaterMode(s.id);
+                      }}
+                      className={`py-1 px-1 rounded text-[11px] font-medium flex items-center justify-center gap-1 transition ${
+                        isSubActive
+                          ? 'bg-cyan-600 text-stone-950 font-bold shadow-sm'
+                          : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+                      }`}
+                      title={s.desc}
+                    >
+                      {s.icon}
+                      <span className="truncate">{s.shortLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Brush parameters (when not in pan mode) */}
       {brushSettings.mode === 'symbolBrush' ? (
@@ -718,7 +1012,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             ※ ドラッグして円内のシンボルを一括消去
           </div>
         </div>
-      ) : brushSettings.mode !== 'pan' && (
+      ) : brushSettings.mode !== 'pan' && !isWaterMode && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-stone-950/60 p-2.5 rounded-lg border border-stone-800 text-xs">
           {/* Radius */}
           <div className="flex flex-col gap-1">
@@ -933,3 +1227,5 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     </div>
   );
 };
+
+export const Toolbar = React.memo(ToolbarComponent);
