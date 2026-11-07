@@ -2379,7 +2379,7 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                         {
                           id: 'roof' as const,
                           name: '屋根 (建物)',
-                          defaultTileM: 8,
+                          defaultTileM: 4,
                           slots: [
                             'roof:house',
                             'roof:shop',
@@ -2393,19 +2393,19 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                         {
                           id: 'road' as const,
                           name: '道路',
-                          defaultTileM: 6,
+                          defaultTileM: 4,
                           slots: ['road:main', 'road:street', 'road:path'] as TownTextureSlot[],
                         },
                         {
                           id: 'wall' as const,
                           name: '城壁',
-                          defaultTileM: 10,
+                          defaultTileM: 4,
                           slots: ['wall'] as TownTextureSlot[],
                         },
                         {
                           id: 'ground' as const,
                           name: '地面 (区画)',
-                          defaultTileM: 8,
+                          defaultTileM: 16,
                           slots: [
                             'ground:residential',
                             'ground:market',
@@ -2444,6 +2444,10 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                               {group.slots.map((slot) => {
                                 const assign = textureAssignments[slot];
                                 const label = getSlotLabel(slot);
+                                const isMissingTexture = !!(
+                                  assign?.textureId &&
+                                  !townTextures.some((t) => t.id === assign.textureId)
+                                );
 
                                 return (
                                   <div
@@ -2451,9 +2455,16 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                                     className="bg-stone-950/60 border border-stone-800/60 rounded p-1.5 text-[10px] space-y-1.5"
                                   >
                                     <div className="flex items-center justify-between gap-1.5">
-                                      <span className="font-medium text-stone-300 shrink-0">
-                                        {label}
-                                      </span>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <span className="font-medium text-stone-300">
+                                          {label}
+                                        </span>
+                                        {isMissingTexture && (
+                                          <span className="text-[9px] text-amber-400 font-normal">
+                                            (未登録の画像)
+                                          </span>
+                                        )}
+                                      </div>
                                       <div className="flex items-center gap-1 flex-1 justify-end min-w-0">
                                         <select
                                           value={assign?.textureId || ''}
@@ -2483,6 +2494,11 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                                           className="bg-stone-800 hover:bg-stone-750 border border-stone-700 rounded px-1.5 py-0.5 text-[10px] text-stone-200 font-medium truncate max-w-[140px] focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer"
                                         >
                                           <option value="">なし (標準色)</option>
+                                          {isMissingTexture && (
+                                            <option value={assign!.textureId}>
+                                              (未登録の画像)
+                                            </option>
+                                          )}
                                           {townTextures.map((tex) => (
                                             <option key={tex.id} value={tex.id}>
                                               {tex.name}
@@ -2512,16 +2528,16 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                                           <div className="flex items-center gap-1">
                                             <input
                                               type="number"
-                                              min="0.5"
-                                              max="100"
-                                              step="0.5"
+                                              min="0.25"
+                                              max="64"
+                                              step="0.25"
                                               value={assign.tileSizeM}
                                               onChange={(e) => {
                                                 const val = parseFloat(e.target.value);
                                                 if (Number.isFinite(val) && val > 0) {
                                                   onChangeTextureAssignment?.(slot, {
                                                     ...assign,
-                                                    tileSizeM: Math.min(100, Math.max(0.5, val)),
+                                                    tileSizeM: Math.min(64, Math.max(0.25, val)),
                                                   });
                                                 }
                                               }}
@@ -2666,150 +2682,163 @@ export const TownObjectsPanel: React.FC<TownObjectsPanelProps> = ({
                             return (
                               <div
                                 key={tex.id}
-                                className="bg-stone-900/80 border border-stone-800/80 rounded p-1.5 flex items-center gap-2"
+                                className="bg-stone-900/80 border border-stone-800/80 rounded p-1.5 space-y-1.5"
                               >
-                                {/* 32x32 Thumbnail with checkerboard background */}
-                                <div
-                                  className="w-8 h-8 rounded shrink-0 overflow-hidden border border-stone-700 bg-stone-950 relative"
-                                  style={{
-                                    backgroundImage:
-                                      'linear-gradient(45deg, #374151 25%, transparent 25%), linear-gradient(-45deg, #374151 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #374151 75%), linear-gradient(-45deg, transparent 75%, #374151 75%)',
-                                    backgroundSize: '8px 8px',
-                                    backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
-                                  }}
-                                >
-                                  <img
-                                    src={tex.dataUrl}
-                                    alt={tex.name}
-                                    className="w-full h-full object-cover"
-                                    style={tex.pixelated ? { imageRendering: 'pixelated' } : undefined}
-                                  />
-                                </div>
+                                <div className="flex items-center gap-2">
+                                  {/* 32x32 Thumbnail with checkerboard background */}
+                                  <div
+                                    className="w-8 h-8 rounded shrink-0 overflow-hidden border border-stone-700 bg-stone-950 relative"
+                                    style={{
+                                      backgroundImage:
+                                        'linear-gradient(45deg, #374151 25%, transparent 25%), linear-gradient(-45deg, #374151 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #374151 75%), linear-gradient(-45deg, transparent 75%, #374151 75%)',
+                                      backgroundSize: '8px 8px',
+                                      backgroundPosition: '0 0, 0 4px, 4px -4px, -4px 0',
+                                    }}
+                                  >
+                                    <img
+                                      src={tex.dataUrl}
+                                      alt={tex.name}
+                                      className="w-full h-full object-cover"
+                                      style={tex.pixelated ? { imageRendering: 'pixelated' } : undefined}
+                                    />
+                                  </div>
 
-                                {/* Name & Details / Edit */}
-                                <div className="flex-1 min-w-0">
-                                  {isEditing ? (
-                                    <div className="flex items-center gap-1">
-                                      <input
-                                        type="text"
-                                        value={editingTextureName}
-                                        onChange={(e) => setEditingTextureName(e.target.value)}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
+                                  {/* Name & Details / Edit */}
+                                  <div className="flex-1 min-w-0">
+                                    {isEditing ? (
+                                      <div className="flex items-center gap-1">
+                                        <input
+                                          type="text"
+                                          value={editingTextureName}
+                                          onChange={(e) => setEditingTextureName(e.target.value)}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              if (editingTextureName.trim()) {
+                                                onRenameTexture?.(tex.id, editingTextureName.trim());
+                                              }
+                                              setEditingTextureId(null);
+                                            } else if (e.key === 'Escape') {
+                                              setEditingTextureId(null);
+                                            }
+                                          }}
+                                          autoFocus
+                                          className="bg-stone-800 border border-stone-600 rounded px-1.5 py-0.5 text-[10px] text-stone-100 w-full focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => {
                                             if (editingTextureName.trim()) {
                                               onRenameTexture?.(tex.id, editingTextureName.trim());
                                             }
                                             setEditingTextureId(null);
-                                          } else if (e.key === 'Escape') {
-                                            setEditingTextureId(null);
-                                          }
-                                        }}
-                                        autoFocus
-                                        className="bg-stone-800 border border-stone-600 rounded px-1.5 py-0.5 text-[10px] text-stone-100 w-full focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          if (editingTextureName.trim()) {
-                                            onRenameTexture?.(tex.id, editingTextureName.trim());
-                                          }
-                                          setEditingTextureId(null);
-                                        }}
-                                        className="p-1 text-emerald-400 hover:text-emerald-300 rounded"
-                                        title="保存"
-                                      >
-                                        <Check className="w-3 h-3" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setEditingTextureId(null)}
-                                        className="p-1 text-stone-500 hover:text-stone-300 rounded"
-                                        title="キャンセル"
-                                      >
-                                        <X className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex flex-col">
-                                      <div className="flex items-center gap-1">
-                                        <span
-                                          className="text-[11px] font-medium text-stone-200 truncate cursor-pointer hover:text-amber-300"
-                                          onClick={() => {
-                                            setEditingTextureId(tex.id);
-                                            setEditingTextureName(tex.name);
                                           }}
-                                          title="クリックして名前を変更"
+                                          className="p-1 text-emerald-400 hover:text-emerald-300 rounded"
+                                          title="保存"
                                         >
-                                          {tex.name}
-                                        </span>
+                                          <Check className="w-3 h-3" />
+                                        </button>
                                         <button
                                           type="button"
-                                          onClick={() => {
-                                            setEditingTextureId(tex.id);
-                                            setEditingTextureName(tex.name);
-                                          }}
-                                          className="text-stone-500 hover:text-stone-300 p-0.5"
-                                          title="名前を変更"
+                                          onClick={() => setEditingTextureId(null)}
+                                          className="p-1 text-stone-500 hover:text-stone-300 rounded"
+                                          title="キャンセル"
                                         >
-                                          <Edit2 className="w-2.5 h-2.5" />
+                                          <X className="w-3 h-3" />
                                         </button>
                                       </div>
-                                      <span className="text-[9px] text-stone-500 font-mono">
-                                        {tex.width} × {tex.height}px
-                                      </span>
-                                    </div>
-                                  )}
+                                    ) : (
+                                      <div className="flex flex-col">
+                                        <div className="flex items-center gap-1">
+                                          <span
+                                            className="text-[11px] font-medium text-stone-200 truncate cursor-pointer hover:text-amber-300"
+                                            onClick={() => {
+                                              setEditingTextureId(tex.id);
+                                              setEditingTextureName(tex.name);
+                                            }}
+                                            title="クリックして名前を変更"
+                                          >
+                                            {tex.name}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setEditingTextureId(tex.id);
+                                              setEditingTextureName(tex.name);
+                                            }}
+                                            className="text-stone-500 hover:text-stone-300 p-0.5"
+                                            title="名前を変更"
+                                          >
+                                            <Edit2 className="w-2.5 h-2.5" />
+                                          </button>
+                                        </div>
+                                        <span className="text-[9px] text-stone-500 font-mono">
+                                          {tex.width} × {tex.height}px
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Actions: Pixelated toggle & Delete */}
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onToggleTexturePixelated?.(tex.id, !tex.pixelated)
+                                      }
+                                      className={`px-1.5 py-0.5 rounded text-[9px] font-mono transition cursor-pointer ${
+                                        tex.pixelated
+                                          ? 'bg-amber-950/80 text-amber-300 border border-amber-800'
+                                          : 'bg-stone-800 text-stone-400 hover:text-stone-200 border border-stone-700/60'
+                                      }`}
+                                      title="ピクセルアート風の補間（最近傍補間）を切り替えます"
+                                    >
+                                      {tex.pixelated ? 'PXL:ON' : 'PXL:OFF'}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDeleteConfirmTextureId(isDeleting ? null : tex.id)
+                                      }
+                                      className={`p-1 rounded transition cursor-pointer ${
+                                        isDeleting
+                                          ? 'text-red-400 bg-red-950/60'
+                                          : 'text-stone-500 hover:text-red-400'
+                                      }`}
+                                      title="テクスチャを削除"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
                                 </div>
 
-                                {/* Actions: Pixelated toggle & Delete */}
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      onToggleTexturePixelated?.(tex.id, !tex.pixelated)
-                                    }
-                                    className={`px-1.5 py-0.5 rounded text-[9px] font-mono transition cursor-pointer ${
-                                      tex.pixelated
-                                        ? 'bg-amber-950/80 text-amber-300 border border-amber-800'
-                                        : 'bg-stone-800 text-stone-400 hover:text-stone-200 border border-stone-700/60'
-                                    }`}
-                                    title="ピクセルアート風の補間（最近傍補間）を切り替えます"
-                                  >
-                                    {tex.pixelated ? 'PXL:ON' : 'PXL:OFF'}
-                                  </button>
-
-                                  {isDeleting ? (
-                                    <div className="flex items-center gap-1 bg-red-950/90 border border-red-800 rounded px-1 py-0.5 text-[9px]">
-                                      <span className="text-red-300 font-medium">削除?</span>
+                                {/* Inline delete confirmation */}
+                                {isDeleting && (
+                                  <div className="bg-red-950/90 border border-red-800/80 rounded p-1.5 text-[9px] space-y-1">
+                                    <div className="text-red-200 leading-relaxed">
+                                      この画像を使っている割り当ては、残りますが、画像が無い間は、標準の色で描かれます。
+                                    </div>
+                                    <div className="flex items-center justify-end gap-1.5 pt-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeleteConfirmTextureId(null)}
+                                        className="px-2 py-0.5 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded cursor-pointer"
+                                      >
+                                        いいえ
+                                      </button>
                                       <button
                                         type="button"
                                         onClick={() => {
                                           onDeleteTexture?.(tex.id);
                                           setDeleteConfirmTextureId(null);
                                         }}
-                                        className="text-red-200 hover:text-white font-bold px-0.5"
+                                        className="px-2 py-0.5 bg-red-700 hover:bg-red-600 text-white font-bold rounded cursor-pointer"
                                       >
-                                        はい
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setDeleteConfirmTextureId(null)}
-                                        className="text-stone-400 hover:text-stone-200 px-0.5"
-                                      >
-                                        いいえ
+                                        はい (削除)
                                       </button>
                                     </div>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => setDeleteConfirmTextureId(tex.id)}
-                                      className="p-1 text-stone-500 hover:text-red-400 rounded transition cursor-pointer"
-                                      title="テクスチャを削除 (割り当ては解除されます)"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
-                                  )}
-                                </div>
+                                  </div>
+                                )}
                               </div>
                             );
                           })}

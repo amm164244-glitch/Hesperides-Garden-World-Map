@@ -1688,6 +1688,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     waterSettings,
   ]);
 
+  renderOverlayRef.current = renderOverlay;
+
   // Keep water bodies overlay in sync
   useEffect(() => {
     scheduleOverlayRender();

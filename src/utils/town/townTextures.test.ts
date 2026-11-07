@@ -62,12 +62,18 @@ describe('townTextures', () => {
       assert.strictEqual(sanitized?.opacity, 0.75);
     });
 
-    it('clamps tileSizeM between 0.5 and 100', () => {
+    it('clamps tileSizeM between 0.25 and 64 and defaults to 4', () => {
       const tooSmall = sanitizeTextureAssignment({ textureId: 'tex_1', tileSizeM: 0.1 });
-      assert.strictEqual(tooSmall?.tileSizeM, 0.5);
+      assert.strictEqual(tooSmall?.tileSizeM, 0.25);
 
       const tooLarge = sanitizeTextureAssignment({ textureId: 'tex_1', tileSizeM: 500 });
-      assert.strictEqual(tooLarge?.tileSizeM, 100);
+      assert.strictEqual(tooLarge?.tileSizeM, 64);
+
+      const nanVal = sanitizeTextureAssignment({ textureId: 'tex_1', tileSizeM: NaN });
+      assert.strictEqual(nanVal?.tileSizeM, 4);
+
+      const unspec = sanitizeTextureAssignment({ textureId: 'tex_1' });
+      assert.strictEqual(unspec?.tileSizeM, 4);
     });
 
     it('clamps tintStrength between 0 and 1', () => {
@@ -118,7 +124,33 @@ describe('townTextures', () => {
   });
 
   describe('sanitizeTownStyle (integration with serialization)', () => {
-    it('preserves textures alongside roofTheme', () => {
+    it('(a) returns undefined for non-town maps when raw is missing or invalid', () => {
+      assert.strictEqual(sanitizeTownStyle(undefined, 'region'), undefined);
+      assert.strictEqual(sanitizeTownStyle(null, 'region'), undefined);
+      assert.strictEqual(sanitizeTownStyle('invalid', 'region'), undefined);
+    });
+
+    it('(b) returns sanitized townStyle for non-town maps when raw is valid object', () => {
+      const raw = {
+        roofTheme: 'slate',
+        textures: {
+          'roof:house': { textureId: 'tex_slate1', tileSizeM: 10 },
+        },
+      };
+      const sanitized = sanitizeTownStyle(raw, 'region');
+      assert.ok(sanitized);
+      assert.strictEqual(sanitized?.roofTheme, 'slate');
+      assert.strictEqual(sanitized?.textures?.['roof:house']?.textureId, 'tex_slate1');
+      assert.strictEqual(sanitized?.textures?.['roof:house']?.tileSizeM, 10);
+    });
+
+    it('(c) returns default terracotta for town maps when raw is missing or invalid', () => {
+      assert.deepStrictEqual(sanitizeTownStyle(undefined, 'town'), { roofTheme: 'terracotta' });
+      assert.deepStrictEqual(sanitizeTownStyle(null, 'town'), { roofTheme: 'terracotta' });
+      assert.deepStrictEqual(sanitizeTownStyle('invalid', 'town'), { roofTheme: 'terracotta' });
+    });
+
+    it('preserves textures alongside roofTheme for town maps', () => {
       const raw = {
         roofTheme: 'slate',
         textures: {
@@ -138,11 +170,6 @@ describe('townTextures', () => {
       assert.ok(sanitized);
       assert.strictEqual(sanitized?.roofTheme, 'thatch');
       assert.strictEqual(sanitized?.textures, undefined);
-    });
-
-    it('returns undefined for non-town maps', () => {
-      const style = { roofTheme: 'terracotta' };
-      assert.strictEqual(sanitizeTownStyle(style, 'region'), undefined);
     });
   });
 

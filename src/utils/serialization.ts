@@ -161,17 +161,16 @@ export function sanitizeTownStyle(
   raw: any,
   kind?: string
 ): import('../types/town').TownStyle | undefined {
-  if (kind !== undefined && kind !== 'town') return undefined;
+  if (kind !== 'town' && (!raw || typeof raw !== 'object')) return undefined;
   if (!raw || typeof raw !== 'object') {
     return kind === 'town' ? { roofTheme: 'terracotta' } : undefined;
   }
   const validThemes = new Set(['terracotta', 'thatch', 'slate', 'stone']);
   const roofTheme =
-    raw && typeof raw === 'object' && validThemes.has(raw.roofTheme)
+    validThemes.has(raw.roofTheme)
       ? (raw.roofTheme as import('../types/town').TownRoofTheme)
       : 'terracotta';
-  const textures =
-    raw && typeof raw === 'object' ? sanitizeTownTextures(raw.textures) : undefined;
+  const textures = sanitizeTownTextures(raw.textures);
   return textures ? { roofTheme, textures } : { roofTheme };
 }
 

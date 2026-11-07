@@ -74,10 +74,10 @@ export function sanitizeTextureAssignment(raw: unknown): TownTextureAssignment |
   }
   const textureId = data.textureId.trim();
 
-  // tileSizeM: 0.5〜100, default 8
-  let tileSizeM = 8;
+  // tileSizeM: 0.25〜64, default 4
+  let tileSizeM = 4;
   if (typeof data.tileSizeM === 'number' && Number.isFinite(data.tileSizeM)) {
-    tileSizeM = Math.max(0.5, Math.min(100, data.tileSizeM));
+    tileSizeM = Math.max(0.25, Math.min(64, data.tileSizeM));
   }
 
   // tintStrength: 0〜1, default 0.25

@@ -507,36 +507,6 @@ export default function App() {
       const nextList = townTextures.filter((t) => t.id !== id);
       setTownTextures(nextList);
       townTextureCache.setTextures(nextList);
-
-      // Clean up assignments using this texture across regional maps
-      setMapData((prev) => {
-        let changed = false;
-        const nextRegs = { ...prev.regionalMaps };
-        for (const [rid, reg] of Object.entries(nextRegs)) {
-          if (reg.townStyle?.textures) {
-            let mapChanged = false;
-            const nextTextures = { ...reg.townStyle.textures };
-            for (const [slot, assign] of Object.entries(nextTextures)) {
-              if (assign?.textureId === id) {
-                delete nextTextures[slot as TownTextureSlot];
-                mapChanged = true;
-              }
-            }
-            if (mapChanged) {
-              nextRegs[rid] = {
-                ...reg,
-                townStyle: {
-                  ...reg.townStyle,
-                  textures: nextTextures,
-                },
-              };
-              changed = true;
-            }
-          }
-        }
-        return changed ? { ...prev, regionalMaps: nextRegs } : prev;
-      });
-
       showTextureMessage('テクスチャを削除しました。', 'info');
     },
     [townTextures, showTextureMessage]
