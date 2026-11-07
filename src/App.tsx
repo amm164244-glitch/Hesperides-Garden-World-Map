@@ -26,6 +26,7 @@ import {
 import { SpatialIndex } from './utils/terrainEditor';
 import { Toolbar } from './components/Toolbar';
 import { GeneratorPanel } from './components/GeneratorPanel';
+import { smoothCoastBand } from './utils/coastSmoothing';
 import { MapCanvas } from './components/MapCanvas';
 import { InspectorBar } from './components/InspectorBar';
 import { TownObjectsPanel } from './components/TownObjectsPanel';
@@ -121,6 +122,7 @@ export default function App() {
     erosionIterations: 15,
     erosionStrength: 5,
     coastlineComplexity: 4,
+    coastSmoothing: 5,
   });
 
   // Toolbar collapsed state persisted in localStorage
@@ -1219,6 +1221,33 @@ export default function App() {
     }
   }, [config, biomeTypes]);
 
+  // Apply Coast Smoothing to Current World Map
+  const handleApplyCoastSmoothingToCurrentMap = useCallback(() => {
+    if (activeRegionalMap) return;
+    const coastSmoothing = config.coastSmoothing ?? 5;
+    if (coastSmoothing <= 0) return;
+
+    const blend = coastSmoothing / 10.0;
+    const sigmaCells = 1.0 + coastSmoothing * 0.12;
+
+    const newElevationGrid = smoothCoastBand(
+      mapData.elevationGrid,
+      mapData.gridCols,
+      mapData.gridRows,
+      mapData.seaLevel,
+      {
+        bandCells: 3,
+        sigmaCells,
+        blend,
+      }
+    );
+
+    setMapData((prev) => ({
+      ...prev,
+      elevationGrid: newElevationGrid,
+    }));
+  }, [activeRegionalMap, config.coastSmoothing, mapData.elevationGrid, mapData.gridCols, mapData.gridRows, mapData.seaLevel]);
+
   // Apply world map directly from ImageToTerrainModal manual mask correction
   const handleApplyWorldMapFromImage = useCallback((newMapData: MapData) => {
     setMapData((prev) => ({
@@ -2126,6 +2155,8 @@ export default function App() {
               onRegenerate={handleRegenerate}
               onGenerateBlankOcean={handleGenerateBlankOcean}
               onOpenImageToTerrain={() => setIsImageToTerrainOpen(true)}
+              onApplyCoastSmoothingToCurrentMap={handleApplyCoastSmoothingToCurrentMap}
+              isWorldMapActive={!activeRegionalMap}
               isGenerating={isGenerating}
               generationProgress={generationProgress}
               onClose={() => setIsGeneratorOpen(false)}

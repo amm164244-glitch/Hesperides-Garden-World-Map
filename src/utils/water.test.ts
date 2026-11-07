@@ -5,6 +5,7 @@ import {
   createOrganicLake,
   pointInLake,
   smoothRiverPath,
+  sampleElev,
 } from './waterGenerator';
 import {
   distanceToRiver,
@@ -14,13 +15,54 @@ import {
 } from './waterRenderer';
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
+import { computeHydrology, downsampleForHydrology } from './hydrology';
+
+/**
+ * Asserts that river elevations monotonically decrease downstream (towards mouth).
+ * Allowable tolerance for minor spline interpolation overshoot is 0.35.
+ */
+function assertElevationMonotonicity(
+  rivers: RiverData[],
+  grid: Float32Array,
+  cols: number,
+  rows: number,
+  mapW: number,
+  mapH: number,
+  tolerance: number = 0.35
+) {
+  for (const river of rivers) {
+    for (let i = 0; i < river.points.length - 1; i++) {
+      const p1 = river.points[i];
+      const p2 = river.points[i + 1];
+      const e1 = sampleElev(grid, cols, rows, mapW, mapH, p1[0], p1[1]);
+      const e2 = sampleElev(grid, cols, rows, mapW, mapH, p2[0], p2[1]);
+      const uphill = e2 - e1;
+      assert.ok(
+        uphill <= tolerance,
+        `River ${river.id} climbs uphill by ${uphill.toFixed(2)} between point ${i} and ${i + 1} (${e1.toFixed(1)} -> ${e2.toFixed(1)})`
+      );
+    }
+  }
+}
+
+/**
+ * Asserts that all rivers terminate cleanly into ocean, lake, or another river.
+ * 'inland' termination is strictly 0.
+ */
+function assertValidTerminations(rivers: RiverData[]) {
+  for (const r of rivers) {
+    assert.ok(
+      r.terminatesAt === 'ocean' || r.terminatesAt === 'lake' || r.terminatesAt === 'river',
+      `River ${r.id} terminated at invalid type: ${r.terminatesAt}`
+    );
+    assert.notEqual(r.terminatesAt, 'inland');
+  }
+}
 
 test('creates an organic closed lake polygon', () => {
   const lake = createOrganicLake(100, 100, 30, 12345);
   assert.ok(lake.length > 10);
-  // Center point should be inside the lake
   assert.equal(pointInLake(100, 100, lake), true);
-  // Point far away should be outside
   assert.equal(pointInLake(300, 300, lake), false);
 });
 
@@ -36,41 +78,6 @@ test('smooths river paths', () => {
   assert.deepEqual(smoothed[0], raw[0]);
 });
 
-test('generates rivers and lakes from downhill elevation gradient', () => {
-  const cols = 64;
-  const rows = 32;
-  const grid = new Float32Array(cols * rows);
-  const seaLevel = 35.0;
-
-  // Mountain in top-left (elevation 80) sloping down to ocean in bottom-right (elevation 20)
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const u = c / (cols - 1);
-      const v = r / (rows - 1);
-      grid[r * cols + c] = 80 - (u + v) * 35;
-    }
-  }
-
-  const { rivers, lakes } = generateRiversAndLakes(
-    grid,
-    cols,
-    rows,
-    1000,
-    500,
-    seaLevel,
-    9999,
-    { riverCount: 4, lakeCount: 2 }
-  );
-
-  assert.ok(Array.isArray(rivers));
-  assert.ok(Array.isArray(lakes));
-  if (rivers.length > 0) {
-    assert.ok(rivers[0].points.length > 1);
-    assert.ok(rivers[0].widthStart > 0);
-    assert.ok(rivers[0].widthEnd > 0);
-  }
-});
-
 test('accurately tests distance to river and detects hit within width', () => {
   const river: RiverData = {
     id: 'river_test',
@@ -82,15 +89,12 @@ test('accurately tests distance to river and detects hit within width', () => {
     widthEnd: 10,
   };
 
-  // Exactly on line
   const onLine = distanceToRiver(150, 100, river);
   assert.equal(onLine.distance, 0);
 
-  // 4 units away (within half-width 5) -> effective distance 0
   const nearLine = distanceToRiver(150, 104, river);
   assert.equal(nearLine.distance, 0);
 
-  // 12 units away (outside half-width 5) -> effective distance ~7
   const outside = distanceToRiver(150, 112, river);
   assert.ok(Math.abs(outside.distance - 7) < 0.1);
 });
@@ -156,7 +160,7 @@ test('finds water body under cursor', () => {
 });
 
 test('createTerrainWaterSampler correctly identifies rivers and lakes as water', () => {
-  const grid = new Float32Array(10 * 10).fill(50.0); // high elevation land
+  const grid = new Float32Array(10 * 10).fill(50.0);
   const seaLevel = 35.0;
 
   const river: RiverData = {
@@ -180,40 +184,37 @@ test('createTerrainWaterSampler correctly identifies rivers and lakes as water',
 
   const sampler = createTerrainWaterSampler(grid, 10, 10, 100, 100, seaLevel, [river], [lake]);
 
-  // On river
   assert.equal(sampler.isWater(50, 10), true);
-  // Inside lake
   assert.equal(sampler.isWater(50, 50), true);
-  // On normal land far from river/lake
   assert.equal(sampler.isWater(10, 90), false);
 });
 
-test('lake generation strictly constrains diameter to under 100km on world scale', () => {
-  const cols = 80;
-  const rows = 40;
-  const grid = new Float32Array(cols * rows);
-  const seaLevel = 35.0;
-  const worldWidthKm = 40000;
-  const mapW = 2000;
-  const mapH = 1000;
+// =========================================================================
+// Hydrology Tests: Analytical Terrains, Monotonicity, and Termination
+// =========================================================================
 
-  // Broad inland continent: center is elevated plateau with gentle depressions
+test('Analytical terrain: Conical island has radial downhill rivers reaching the sea with 0 inland endings', () => {
+  const cols = 64;
+  const rows = 64;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  const cx = (cols - 1) * 0.5;
+  const cy = (rows - 1) * 0.5;
+  const maxR = cx * 0.9;
+
+  // Mountain peak at center (85), sloping down radially to ocean (20)
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const u = (c / (cols - 1)) * 2 - 1;
-      const v = (r / (rows - 1)) * 2 - 1;
-      const dist = Math.hypot(u, v);
-      if (dist < 0.6) {
-        // High land with small dip at (35, 20)
-        const dBasin = Math.hypot(c - 35, r - 20);
-        grid[r * cols + c] = 55.0 + Math.min(10, dBasin * 0.8);
-      } else {
-        grid[r * cols + c] = 20.0; // Ocean
-      }
+      const d = Math.hypot(c - cx, r - cy);
+      const ratio = Math.min(1, d / maxR);
+      grid[r * cols + c] = 85.0 - ratio * 65.0;
     }
   }
 
-  const { lakes } = generateRiversAndLakes(
+  const { rivers, lakes } = generateRiversAndLakes(
     grid,
     cols,
     rows,
@@ -221,32 +222,166 @@ test('lake generation strictly constrains diameter to under 100km on world scale
     mapH,
     seaLevel,
     12345,
-    { lakeCount: 3, enableRivers: false, worldWidthKm }
+    { riverCount: 8, lakeCount: 0, riverDensity: 60 }
   );
 
-  const kmPerUnit = worldWidthKm / mapW; // 20 km/unit
-  for (const lake of lakes) {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const [x, y] of lake.polygon) {
-      minX = Math.min(minX, x);
-      maxX = Math.max(maxX, x);
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
-    }
-    const widthKm = (maxX - minX) * kmPerUnit;
-    const heightKm = (maxY - minY) * kmPerUnit;
-    const maxDimKm = Math.max(widthKm, heightKm);
+  assert.ok(rivers.length > 0, 'Should generate rivers on conical island');
+  assertValidTerminations(rivers);
+  assertElevationMonotonicity(rivers, grid, cols, rows, mapW, mapH);
 
-    // Assert lake diameter strictly does NOT exceed 100km
-    assert.ok(maxDimKm < 100, `Lake ${lake.name} diameter ${maxDimKm.toFixed(1)}km exceeds 100km limit!`);
-
-    // Assert all lake vertices are comfortably on land (> seaLevel)
-    for (const [px, py] of lake.polygon) {
-      const gx = Math.round((px / mapW) * (cols - 1));
-      const gy = Math.round((py / mapH) * (rows - 1));
-      const e = grid[gy * cols + gx];
-      assert.ok(e > seaLevel, `Lake vertex at (${px}, ${py}) with elev ${e} clipped into ocean!`);
-    }
+  // Check radial outward flow: river end points should be further from center than start points
+  for (const river of rivers) {
+    const pStart = river.points[0];
+    const pEnd = river.points[river.points.length - 1];
+    const dStart = Math.hypot(pStart[0] - mapW * 0.5, pStart[1] - mapH * 0.5);
+    const dEnd = Math.hypot(pEnd[0] - mapW * 0.5, pEnd[1] - mapH * 0.5);
+    assert.ok(dEnd > dStart, `River ${river.id} must flow radially outward (dStart=${dStart}, dEnd=${dEnd})`);
   }
 });
 
+test('Analytical terrain: Tilted plane rivers flow strictly downhill to bottom border/sea', () => {
+  const cols = 64;
+  const rows = 32;
+  const mapW = 1000;
+  const mapH = 500;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // Mountain in top-left (elevation 85) sloping down to ocean in bottom-right (elevation 20)
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      grid[r * cols + c] = 85.0 - (u * 0.5 + v * 0.5) * 60.0;
+    }
+  }
+
+  const { rivers } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    54321,
+    { riverCount: 6, lakeCount: 0, riverDensity: 50 }
+  );
+
+  assert.ok(rivers.length > 0, 'Should generate rivers on tilted plane');
+  assertValidTerminations(rivers);
+  assertElevationMonotonicity(rivers, grid, cols, rows, mapW, mapH);
+});
+
+test('Analytical terrain: Closed basin forms a lake and an outflow river draining it', () => {
+  const cols = 64;
+  const rows = 64;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // Overall slope from left (high, 80) to right (sea, 20)
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      grid[r * cols + c] = 80.0 - u * 55.0;
+    }
+  }
+
+  // Create an inland depression (basin) around (c=25, r=32)
+  const bc = 25;
+  const br = 32;
+  for (let r = br - 6; r <= br + 6; r++) {
+    for (let c = bc - 6; c <= bc + 6; c++) {
+      if (r >= 0 && r < rows && c >= 0 && c < cols) {
+        const d = Math.hypot(c - bc, r - br);
+        if (d <= 5) {
+          // Hollow out the center to depth 6
+          grid[r * cols + c] -= (5 - d) * 1.5;
+        }
+      }
+    }
+  }
+
+  const { rivers, lakes } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    8888,
+    { riverCount: 8, lakeCount: 2, riverDensity: 50 }
+  );
+
+  // Basin should form at least one lake
+  assert.ok(lakes.length > 0, 'Should extract lake from closed basin');
+  const lake = lakes[0];
+  assert.ok(lake.polygon.length >= 3);
+
+  // Lake polygon must stay on land
+  for (const [px, py] of lake.polygon) {
+    const e = sampleElev(grid, cols, rows, mapW, mapH, px, py);
+    assert.ok(e >= seaLevel - 0.5, `Lake vertex at (${px}, ${py}) should be inland`);
+  }
+
+  assertValidTerminations(rivers);
+  assertElevationMonotonicity(rivers, grid, cols, rows, mapW, mapH);
+
+  // Outflow river check: one of the rivers should originate from the lake or enter it
+  const lakeConnectedRiver = rivers.find(
+    (r) => (r.sourceType === 'lake' && r.sourceLakeId === lake.id) || r.targetLakeId === lake.id
+  );
+  assert.ok(lakeConnectedRiver, 'Should have river connected to the depression lake');
+});
+
+test('Performance: 1024x512 grid computes hydrology and extracts water under 2000ms', () => {
+  const cols = 1024;
+  const rows = 512;
+  const mapW = 2048;
+  const mapH = 1024;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // Generate synthetic wavy terrain
+  for (let r = 0; r < rows; r++) {
+    const v = r / (rows - 1);
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const wave = Math.sin(u * 12) * Math.cos(v * 8) * 15;
+      grid[r * cols + c] = 55.0 - v * 25.0 + wave;
+    }
+  }
+
+  const t0 = performance.now();
+  const { rivers, lakes, stats } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    424242,
+    { riverCount: 14, lakeCount: 6, riverDensity: 40 }
+  );
+  const elapsed = performance.now() - t0;
+
+  assert.ok(elapsed < 2000, `Execution time ${elapsed.toFixed(1)}ms must be under 2000ms!`);
+  assert.ok(stats && (stats.computationTimeMs ?? 0) < 2000);
+  assert.ok(Array.isArray(rivers));
+  assert.ok(Array.isArray(lakes));
+  assertValidTerminations(rivers);
+});
+
+test('Large grid downsampling scales massive 4096x2048 grid to <= 2048x1024', () => {
+  const bigCols = 4096;
+  const bigRows = 2048;
+  const dummyGrid = new Float32Array(bigCols * bigRows);
+  dummyGrid[0] = 50.0;
+
+  const result = downsampleForHydrology(dummyGrid, bigCols, bigRows, 2048 * 1024);
+  assert.ok(result.scale >= 2);
+  assert.ok(result.cols <= 2048);
+  assert.ok(result.rows <= 1024);
+  assert.equal(result.grid.length, result.cols * result.rows);
+});

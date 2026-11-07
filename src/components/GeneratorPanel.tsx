@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RefreshCw, Shuffle, Sliders, X, Globe, Layers, Waves, FileImage } from 'lucide-react';
+import { RefreshCw, Shuffle, Sliders, X, Globe, Layers, Waves, FileImage, Sparkles } from 'lucide-react';
 import { GeneratorConfig } from '../types/map';
 import { hashStringToSeed } from '../utils/prng';
 
@@ -9,6 +9,8 @@ interface GeneratorPanelProps {
   onRegenerate: () => void;
   onGenerateBlankOcean?: () => void;
   onOpenImageToTerrain?: () => void;
+  onApplyCoastSmoothingToCurrentMap?: () => void;
+  isWorldMapActive?: boolean;
   isGenerating: boolean;
   generationProgress?: { progress: number; message: string };
   onClose: () => void;
@@ -20,11 +22,14 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
   onRegenerate,
   onGenerateBlankOcean,
   onOpenImageToTerrain,
+  onApplyCoastSmoothingToCurrentMap,
+  isWorldMapActive = true,
   isGenerating,
   generationProgress,
   onClose,
 }) => {
   const [seedInput, setSeedInput] = useState<string>(String(config.seed));
+  const [showSmoothingConfirm, setShowSmoothingConfirm] = useState(false);
 
   const handleRandomSeed = () => {
     const nextSeed = Math.floor(Math.random() * 90000000) + 10000000;
@@ -284,6 +289,33 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
           </div>
         </div>
 
+        {/* Coast Smoothing */}
+        <div className="flex flex-col gap-1 border-t border-stone-800 pt-2">
+          <div className="flex justify-between text-stone-300">
+            <span>海岸線のなめらかさ</span>
+            <span className="font-mono text-amber-400">
+              {(config.coastSmoothing ?? 5) === 0 ? '無効 (0)' : `Lv ${config.coastSmoothing ?? 5}`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            step={1}
+            value={config.coastSmoothing ?? 5}
+            onChange={(e) => onUpdateConfig({ coastSmoothing: Number(e.target.value) })}
+            className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+          />
+          <div className="flex justify-between text-[10px] text-stone-500">
+            <span>0 (無効)</span>
+            <span className="text-amber-400/90 font-medium">5 (標準・崖緩和)</span>
+            <span>10 (最大平滑化)</span>
+          </div>
+          <div className="text-[10px] text-stone-400 leading-tight">
+            ※ 大きいほど、海岸線が滑らかになります。小さな島や細い半島は、少し丸くなります
+          </div>
+        </div>
+
         {/* Geomorphic Erosion (Thermal + Water Erosion) */}
         <div className="flex flex-col gap-1 border-t border-stone-800 pt-2">
           <div className="flex justify-between text-stone-300">
@@ -359,6 +391,72 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
         <RefreshCw className={`w-4 h-4 ${isGenerating ? 'animate-spin' : ''}`} />
         <span>{isGenerating ? 'Web Workerで計算中...' : '地形を自動生成する'}</span>
       </button>
+
+      {/* Apply Coast Smoothing to Existing World Map Button */}
+      {onApplyCoastSmoothingToCurrentMap && (
+        <button
+          type="button"
+          disabled={!isWorldMapActive || isGenerating || (config.coastSmoothing ?? 5) === 0}
+          onClick={() => setShowSmoothingConfirm(true)}
+          className={`py-2 px-3 rounded-xl font-medium text-xs flex items-center justify-center gap-2 transition-all border shadow cursor-pointer ${
+            !isWorldMapActive || isGenerating || (config.coastSmoothing ?? 5) === 0
+              ? 'bg-stone-800/60 text-stone-500 border-stone-800 cursor-not-allowed opacity-60'
+              : 'bg-amber-950/70 hover:bg-amber-900/90 text-amber-200 border-amber-600/60 hover:border-amber-400'
+          }`}
+          title={
+            !isWorldMapActive
+              ? '世界マップ表示時のみ実行可能です'
+              : (config.coastSmoothing ?? 5) === 0
+              ? '「海岸線のなめらかさ」スライダーを1以上に設定してください'
+              : '現在の世界マップの海岸の崖段差をなめらかに平滑化します'
+          }
+        >
+          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+          <span>いまの世界マップの海岸線をなめらかにする</span>
+        </button>
+      )}
+
+      {/* Coast Smoothing Confirmation Dialog */}
+      {showSmoothingConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-stone-900 border border-amber-600/70 rounded-xl p-5 max-w-sm w-full shadow-2xl flex flex-col gap-3 text-stone-200">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>海岸線の平滑化の確認</span>
+            </div>
+            <div className="text-xs text-stone-300 space-y-2 leading-relaxed">
+              <p className="text-amber-200 font-medium">
+                標高が変更されます。この操作は取り消せません。先に保存することをおすすめします。
+              </p>
+              <p className="text-stone-300 text-[11px]">
+                適用強度: <span className="font-bold text-amber-300">Lv {config.coastSmoothing ?? 5}</span>
+              </p>
+              <p className="text-stone-400 text-[10px] bg-stone-950/80 p-2 rounded border border-stone-800">
+                ※ 既存の地域マップ（子マップ）は、作り直さない限り変更されません。
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t border-stone-800">
+              <button
+                type="button"
+                onClick={() => setShowSmoothingConfirm(false)}
+                className="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs transition cursor-pointer"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSmoothingConfirm(false);
+                  onApplyCoastSmoothingToCurrentMap?.();
+                }}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs transition cursor-pointer shadow"
+              >
+                平滑化を実行
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Image to Terrain Button */}
       {onOpenImageToTerrain && (

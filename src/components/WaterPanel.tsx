@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Waves,
   MousePointer,
@@ -9,10 +9,19 @@ import {
   Sliders,
   Eye,
   EyeOff,
-  Plus,
+  Sparkles,
+  RefreshCw,
+  Loader2,
+  CheckCircle2,
 } from 'lucide-react';
 import { RiverData, LakeData, WaterToolSettings } from '../types/water';
 import { BrushMode } from '../types/map';
+
+export interface AutoGenResult {
+  riverCount: number;
+  lakeCount: number;
+  computationTimeMs?: number;
+}
 
 interface WaterPanelProps {
   mode: BrushMode;
@@ -32,6 +41,14 @@ interface WaterPanelProps {
   inProgressCount?: number;
   onCommitRiverDrawing?: () => void;
   onCancelRiverDrawing?: () => void;
+  onAutoGenerateWater?: (options: {
+    riverDensity: number;
+    meander: number;
+    riverCount: number;
+    lakeCount: number;
+    onProgress?: (percent: number, message: string) => void;
+    signal?: AbortSignal;
+  }) => Promise<AutoGenResult | void> | void;
 }
 
 export const WaterPanel: React.FC<WaterPanelProps> = ({
@@ -52,12 +69,72 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
   inProgressCount = 0,
   onCommitRiverDrawing,
   onCancelRiverDrawing,
+  onAutoGenerateWater,
 }) => {
   const selectedRiver = selectedWaterType === 'river' ? rivers.find((r) => r.id === selectedWaterId) : null;
   const selectedLake = selectedWaterType === 'lake' ? lakes.find((l) => l.id === selectedWaterId) : null;
 
+  // Auto-generation UI states
+  const [showAutoSection, setShowAutoSection] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [genProgress, setGenProgress] = useState<{ percent: number; message: string } | null>(null);
+  const [lastResult, setLastResult] = useState<AutoGenResult | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const riverDensity = waterSettings.riverDensity ?? 40;
+  const meander = waterSettings.meander ?? 60;
+  const riverCount = waterSettings.riverCount ?? 14;
+  const lakeCount = waterSettings.lakeCount ?? 6;
+
+  const handleStartAutoGenerate = async () => {
+    if (!onAutoGenerateWater || isGenerating) return;
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setIsGenerating(true);
+    setGenProgress({ percent: 5, message: '水文解析の準備中...' });
+    setLastResult(null);
+
+    try {
+      const res = await onAutoGenerateWater({
+        riverDensity,
+        meander,
+        riverCount,
+        lakeCount,
+        onProgress: (percent, message) => {
+          setGenProgress({ percent, message });
+        },
+        signal: controller.signal,
+      });
+
+      if (res && typeof res.riverCount === 'number') {
+        setLastResult(res);
+      } else {
+        setLastResult({ riverCount: rivers.length, lakeCount: lakes.length });
+      }
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        console.error('水系自動生成エラー:', err);
+      }
+    } finally {
+      setIsGenerating(false);
+      setGenProgress(null);
+      abortControllerRef.current = null;
+    }
+  };
+
+  const handleCancelAutoGenerate = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsGenerating(false);
+    setGenProgress(null);
+  };
+
   return (
-    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-stone-900/95 backdrop-blur-md border border-cyan-600/70 rounded-xl px-4 py-2.5 shadow-2xl flex flex-col gap-2.5 text-xs text-stone-200 pointer-events-auto animate-in fade-in slide-in-from-top-2 max-w-[95vw] w-[560px]">
+    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-stone-900/95 backdrop-blur-md border border-cyan-600/70 rounded-xl px-4 py-2.5 shadow-2xl flex flex-col gap-2.5 text-xs text-stone-200 pointer-events-auto animate-in fade-in slide-in-from-top-2 max-w-[95vw] w-[580px]">
       {/* Header & Mode Switcher */}
       <div className="flex items-center justify-between border-b border-stone-800 pb-2">
         <div className="flex items-center gap-2">
@@ -95,7 +172,143 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
         </div>
       </div>
 
-      {/* Mode Selector Tabs */}
+      {/* Auto-Generation Hydrology Section */}
+      <div className="bg-stone-950/70 border border-cyan-900/60 rounded-lg p-2.5 flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-cyan-300 font-semibold text-[11px]">
+            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            <span>地形水文シミュレーション (自動生成)</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAutoSection(!showAutoSection)}
+            className="text-[10px] text-stone-400 hover:text-stone-200 transition"
+          >
+            {showAutoSection ? '折りたたむ' : '設定を展開'}
+          </button>
+        </div>
+
+        {showAutoSection && (
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 pt-1 border-t border-stone-800/60 text-[11px]">
+            {/* 1. River Density */}
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-stone-300">
+                <span>川の密度:</span>
+                <span className="font-mono text-cyan-300 font-bold">{riverDensity}</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={riverDensity}
+                disabled={isGenerating}
+                onChange={(e) => onChangeWaterSettings({ riverDensity: Number(e.target.value) })}
+                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+              />
+            </div>
+
+            {/* 2. Meandering Strength */}
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-stone-300">
+                <span>蛇行の強さ:</span>
+                <span className="font-mono text-cyan-300 font-bold">{meander}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={meander}
+                disabled={isGenerating}
+                onChange={(e) => onChangeWaterSettings({ meander: Number(e.target.value) })}
+                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+              />
+            </div>
+
+            {/* 3. River Max Count */}
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-stone-300">
+                <span>川の本数 (上限):</span>
+                <span className="font-mono text-cyan-300 font-bold">{riverCount} 本</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={30}
+                step={1}
+                value={riverCount}
+                disabled={isGenerating}
+                onChange={(e) => onChangeWaterSettings({ riverCount: Number(e.target.value) })}
+                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+              />
+            </div>
+
+            {/* 4. Lake Max Count */}
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-stone-300">
+                <span>湖の数 (上限):</span>
+                <span className="font-mono text-cyan-300 font-bold">{lakeCount} 個</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={15}
+                step={1}
+                value={lakeCount}
+                disabled={isGenerating}
+                onChange={(e) => onChangeWaterSettings({ lakeCount: Number(e.target.value) })}
+                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Generate Button & Progress State */}
+        <div className="flex items-center justify-between gap-2 pt-1">
+          {isGenerating ? (
+            <div className="flex-1 flex items-center justify-between bg-cyan-950/80 border border-cyan-700/60 rounded-md px-3 py-1.5">
+              <div className="flex items-center gap-2 text-cyan-200">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                <span className="text-[11px] font-medium">{genProgress?.message || '計算中...'}</span>
+                <span className="text-[10px] text-cyan-400 font-mono font-bold">({genProgress?.percent ?? 0}%)</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelAutoGenerate}
+                className="px-2 py-0.5 rounded bg-stone-800 hover:bg-stone-700 text-stone-300 text-[10px] transition"
+              >
+                中止
+              </button>
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={handleStartAutoGenerate}
+                disabled={!onAutoGenerateWater}
+                className="flex-1 py-1.5 px-3 rounded-md bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-stone-950 font-bold flex items-center justify-center gap-1.5 shadow transition disabled:opacity-50 cursor-pointer"
+                title="現在の標高地形から下流への水の流れを計算し、川と湖を再構築します"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>地形から水系を自動生成</span>
+              </button>
+
+              {lastResult && (
+                <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-2.5 py-1 rounded">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>
+                    生成完了: 川 {lastResult.riverCount}本 / 湖 {lastResult.lakeCount}個
+                    {lastResult.computationTimeMs ? ` (${lastResult.computationTimeMs}ms)` : ''}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Manual Mode Selector Tabs */}
       <div className="flex items-center gap-1.5 bg-stone-950/80 p-1 rounded-lg border border-stone-800">
         <button
           type="button"
@@ -108,7 +321,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
           title="クリックで水源から河口へ川を描画"
         >
           <PenTool className="w-3.5 h-3.5" />
-          <span>川を描く</span>
+          <span>川を手描き</span>
         </button>
 
         <button
@@ -122,7 +335,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
           title="ドラッグまたは多角形で湖を描画"
         >
           <CircleDot className="w-3.5 h-3.5" />
-          <span>湖を描く</span>
+          <span>湖を手描き</span>
         </button>
 
         <button

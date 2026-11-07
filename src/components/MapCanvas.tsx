@@ -100,7 +100,7 @@ import {
   findNearestRiverVertex,
   findNearestLakeVertex,
 } from '../utils/waterRenderer';
-import { createOrganicLake, smoothRiverPath } from '../utils/waterGenerator';
+import { createOrganicLake, smoothRiverPath, generateRiversAndLakes } from '../utils/waterGenerator';
 import { WaterPanel } from './WaterPanel';
 import {
   TownTemplatePlacement,
@@ -1782,6 +1782,170 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       renderOverlay();
     },
     [effectiveLakes, waterSettings, onCommitHistory, onUpdateLakes, onSelectWater, renderOverlay]
+  );
+
+  // Auto Generate Water using Topographic Hydrology
+  const handleAutoGenerateWater = useCallback(
+    async (opts: {
+      riverDensity: number;
+      meander: number;
+      riverCount: number;
+      lakeCount: number;
+      onProgress?: (percent: number, message: string) => void;
+      signal?: AbortSignal;
+    }) => {
+      const seed = mapData.seed || 12345;
+      const prevRivers = effectiveRivers;
+      const prevLakes = effectiveLakes;
+
+      let worker: Worker | null = null;
+      let result: { rivers: RiverData[]; lakes: LakeData[]; stats: any } | null = null;
+
+      try {
+        result = await new Promise((resolve, reject) => {
+          if (opts.signal?.aborted) {
+            return reject(new DOMException('Aborted', 'AbortError'));
+          }
+
+          try {
+            worker = new Worker(new URL('../workers/terrainWorker.ts', import.meta.url), { type: 'module' });
+          } catch {
+            worker = null;
+          }
+
+          if (!worker) {
+            const res = generateRiversAndLakes(
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel ?? 35.0,
+              seed,
+              {
+                riverDensity: opts.riverDensity,
+                meander: opts.meander,
+                riverCount: opts.riverCount,
+                lakeCount: opts.lakeCount,
+                worldWidthKm: effectiveWidthKm,
+                onProgress: opts.onProgress,
+              }
+            );
+            return resolve(res);
+          }
+
+          const onAbort = () => {
+            if (worker) {
+              worker.terminate();
+              worker = null;
+            }
+            reject(new DOMException('Aborted', 'AbortError'));
+          };
+
+          opts.signal?.addEventListener('abort', onAbort);
+
+          worker.onmessage = (e) => {
+            const data = e.data;
+            if (data.type === 'progress') {
+              opts.onProgress?.(data.progress, data.message);
+            } else if (data.type === 'successWater') {
+              opts.signal?.removeEventListener('abort', onAbort);
+              worker?.terminate();
+              worker = null;
+              resolve({ rivers: data.rivers, lakes: data.lakes, stats: data.stats });
+            } else if (data.type === 'error') {
+              opts.signal?.removeEventListener('abort', onAbort);
+              worker?.terminate();
+              worker = null;
+              reject(new Error(data.error));
+            }
+          };
+
+          worker.onerror = (err) => {
+            opts.signal?.removeEventListener('abort', onAbort);
+            worker?.terminate();
+            worker = null;
+            reject(err);
+          };
+
+          worker.postMessage({
+            action: 'generateWater',
+            elevationGrid: currentElevation,
+            cols: currentCols,
+            rows: currentRows,
+            mapWidth: currentWidth,
+            mapHeight: currentHeight,
+            seaLevel: currentSeaLevel ?? 35.0,
+            seed,
+            waterOptions: {
+              riverDensity: opts.riverDensity,
+              meander: opts.meander,
+              riverCount: opts.riverCount,
+              lakeCount: opts.lakeCount,
+              worldWidthKm: effectiveWidthKm,
+            },
+          });
+        });
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          return;
+        }
+        result = generateRiversAndLakes(
+          currentElevation,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          currentSeaLevel ?? 35.0,
+          seed,
+          {
+            riverDensity: opts.riverDensity,
+            meander: opts.meander,
+            riverCount: opts.riverCount,
+            lakeCount: opts.lakeCount,
+            worldWidthKm: effectiveWidthKm,
+            onProgress: opts.onProgress,
+          }
+        );
+      }
+
+      if (result) {
+        onCommitHistory({
+          description: '水系の自動生成',
+          timestamp: Date.now(),
+          waterChanges: {
+            prevRivers,
+            newRivers: result.rivers,
+            prevLakes,
+            newLakes: result.lakes,
+          },
+        });
+
+        onUpdateRivers?.(result.rivers);
+        onUpdateLakes?.(result.lakes);
+        onSelectWater?.(null, null);
+        renderOverlay();
+
+        return result.stats;
+      }
+    },
+    [
+      mapData.seed,
+      effectiveRivers,
+      effectiveLakes,
+      currentElevation,
+      currentCols,
+      currentRows,
+      currentWidth,
+      currentHeight,
+      currentSeaLevel,
+      effectiveWidthKm,
+      onCommitHistory,
+      onUpdateRivers,
+      onUpdateLakes,
+      onSelectWater,
+      renderOverlay,
+    ]
   );
 
   // Finalize polygon building drawing
@@ -5672,6 +5836,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             setDrawingLakeStart(null);
             renderOverlay();
           }}
+          onAutoGenerateWater={handleAutoGenerateWater}
         />
       )}
 

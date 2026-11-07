@@ -1,6 +1,7 @@
 import { GeneratorConfig, MapCell, MapData, TectonicPlate } from '../types/map';
 import { Mulberry32, Noise2D } from './prng';
 import { applyErosion } from './erosion';
+import { smoothCoastBand } from './coastSmoothing';
 
 export const STANDARD_SEA_LEVEL = 35.0;
 
@@ -475,6 +476,20 @@ export function generateTectonicWorld(
         }
       }
     }
+  }
+
+  // 4.5. Coastline smoothing to eliminate cliff-like staircase artifacts
+  const coastSmoothing = config.coastSmoothing !== undefined ? config.coastSmoothing : 5;
+  if (coastSmoothing > 0) {
+    onProgress?.(80, '海岸線の平滑化処理を適用中...');
+    const blend = coastSmoothing / 10.0;
+    const sigmaCells = 1.0 + coastSmoothing * 0.12;
+    const smoothed = smoothCoastBand(elevationGrid, gridCols, gridRows, STANDARD_SEA_LEVEL, {
+      bandCells: 3,
+      sigmaCells,
+      blend,
+    });
+    elevationGrid.set(smoothed);
   }
 
   onProgress?.(85, '地域マップ基盤とセルデータを生成中...');

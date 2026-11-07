@@ -30,6 +30,7 @@ export interface GeneratorConfig {
   erosionStrength?: number; // 1 - 10 (侵食強度)
   cellCount?: number;
   coastlineComplexity?: number; // 1 - 10 (海岸線の複雑さ・湾曲度、標準: 4)
+  coastSmoothing?: number; // 0 - 10 (海岸線のなめらかさ、既定: 5)
 }
 
 export interface RegionalBounds {

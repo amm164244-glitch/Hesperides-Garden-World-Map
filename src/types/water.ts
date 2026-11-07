@@ -35,6 +35,10 @@ export interface WaterToolSettings {
   lakeRadius: number;
   lakeMode: 'drag' | 'polygon';
   showWater: boolean;
+  riverDensity?: number;
+  meander?: number;
+  riverCount?: number;
+  lakeCount?: number;
 }
 
 export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
@@ -43,5 +47,9 @@ export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
   lakeRadius: 18,
   lakeMode: 'drag',
   showWater: true,
+  riverDensity: 40,
+  meander: 60,
+  riverCount: 14,
+  lakeCount: 6,
 };
 
