@@ -35,6 +35,16 @@ import {
 } from './townStyle';
 import { ResolvedFill } from './townTextures';
 
+const boundsCache = new WeakMap<TownObject, { minX: number; minY: number; maxX: number; maxY: number }>();
+export function getCachedTownObjectBounds(obj: TownObject) {
+  let b = boundsCache.get(obj);
+  if (!b) {
+    b = objectBounds(obj);
+    boundsCache.set(obj, b);
+  }
+  return b;
+}
+
 export interface DrawTownOptions {
   metersPerUnit: number;
   zoomPx: number; // viewport.zoom * dpr
@@ -135,7 +145,7 @@ export function drawTownObjects(
 
   // Filter visible objects via viewport AABB check
   const visible = objects.filter((obj) => {
-    const b = objectBounds(obj);
+    const b = getCachedTownObjectBounds(obj);
     return isBoundsVisible(b, viewBounds);
   });
 
@@ -171,8 +181,8 @@ export function drawTownObjects(
   // 4. Buildings (sorted ascending by bottom Y for authentic isometric overlap)
   const buildings = visible.filter((obj): obj is TownBuilding => obj.kind === 'building');
   buildings.sort((a, b) => {
-    const bA = objectBounds(a).maxY;
-    const bB = objectBounds(b).maxY;
+    const bA = getCachedTownObjectBounds(a).maxY;
+    const bB = getCachedTownObjectBounds(b).maxY;
     return bA - bB;
   });
 
@@ -418,7 +428,7 @@ function drawBuilding(
   const rawPoly = bld.polygon;
   if (!rawPoly || rawPoly.length < 3) return;
 
-  const bounds = objectBounds(bld);
+  const bounds = getCachedTownObjectBounds(bld);
   const wUnits = bounds.maxX - bounds.minX;
   const hUnits = bounds.maxY - bounds.minY;
   const screenPx = Math.max(wUnits, hUnits) * zoomPx;

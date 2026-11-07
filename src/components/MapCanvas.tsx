@@ -107,6 +107,8 @@ import {
   instantiateTemplate,
   placeTemplate,
 } from '../utils/town/townTemplate';
+import { createFrameScheduler, FrameScheduler } from '../utils/frameScheduler';
+import { townPerf } from '../utils/town/townPerf';
 
 interface MapCanvasProps {
   mapData: MapData;
@@ -434,11 +436,36 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     vertexIndex?: number;
     gateIndex?: number;
     initialObjects: TownObject[];
+    draftObjects?: TownObject[];
     hasMoved?: boolean;
   } | null>(null);
 
   const currentTownObjectsRef = useRef<TownObject[]>(townObjects);
   currentTownObjectsRef.current = townObjects;
+
+  // Frame scheduler for overlay canvas rendering (coalesces multiple requests in same frame)
+  const renderOverlayRef = useRef<() => void>(() => {});
+  const overlaySchedulerRef = useRef<FrameScheduler | null>(null);
+
+  const scheduleOverlayRender = useCallback(() => {
+    if (!overlaySchedulerRef.current) {
+      overlaySchedulerRef.current = createFrameScheduler(() => {
+        renderOverlayRef.current();
+      });
+    }
+    overlaySchedulerRef.current.schedule();
+  }, []);
+
+  const renderPreviewOverlayRef = useRef<() => void>(() => {});
+  const triggerPreviewOverlay = useCallback(() => {
+    renderPreviewOverlayRef.current();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      overlaySchedulerRef.current?.cancel();
+    };
+  }, []);
 
   const [textureCacheVersion, setTextureCacheVersion] = useState(0);
   useEffect(() => {
@@ -675,6 +702,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
       if (newObj) {
         const nextObjects = [...townObjects, newObj];
+        townPerf.startConfirmation(`${newObj.name || '町部品'}の作成`);
         onCommitHistory({
           description: `${newObj.name || '町部品'}の作成`,
           timestamp: Date.now(),
@@ -689,6 +717,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
 
       setDrawingTownPoints([]);
+      scheduleOverlayRender();
     },
     [
       brushSettings.mode,
@@ -699,6 +728,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       onUpdateTownObjects,
       onSelectTownObjectIds,
       onSelectTownObjectId,
+      scheduleOverlayRender,
     ]
   );
 
@@ -935,6 +965,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const ctx = overlayCanvas.getContext('2d');
     if (!ctx) return;
 
+    townPerf.start('renderOverlay_total');
+
     const dpr = overlayCanvas.clientWidth > 0
       ? overlayCanvas.width / overlayCanvas.clientWidth
       : Math.min(window.devicePixelRatio || 1, 2.0);
@@ -945,6 +977,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const cPos = compassPos || { x: currentWidth * 0.12, y: currentHeight * 0.28 };
 
     // 0. Pixel Art Scenic Backdrop or Map Reference Image
+    townPerf.start('background');
     if (bgImageRef.current && bgImageRef.current.complete && bgImageRef.current.naturalWidth > 0) {
       ctx.save();
       ctx.imageSmoothingEnabled = false;
@@ -952,8 +985,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.drawImage(bgImageRef.current, 0, 0, currentWidth, currentHeight);
       ctx.restore();
     }
+    townPerf.end('background');
 
     // 0.5. Semi-transparent Biome Grid Overlay
+    townPerf.start('biome');
     const isBiomeToolActive =
       brushSettings.mode === 'biomePaint' ||
       brushSettings.mode === 'biomeFill' ||
@@ -968,10 +1003,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.drawImage(biomeCanvasRef.current, 0, 0, currentWidth, currentHeight);
       ctx.restore();
     }
+    townPerf.end('biome');
 
     // 0.8. Regional Map Boundary Outline & Outer Context Dimming
     // When viewing a regional map generated from a shape (especially with "親のまま生成"),
     // darken the terrain outside the shape polygon and stroke a prominent cartographic boundary.
+    townPerf.start('boundary');
     if (activeRegionalMap && activeRegionalMap.outline && activeRegionalMap.outline.length >= 3) {
       const b = activeRegionalMap.bounds;
       const bw = b.maxX - b.minX;
@@ -1067,8 +1104,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         ctx.restore();
       }
     }
+    townPerf.end('boundary');
 
     // 1. Nautical Navigation Rhumb Lines (Loxodromes)
+    townPerf.start('rhumb');
     if (showCompass) {
       drawRhumbLines(
         ctx,
@@ -1079,6 +1118,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         viewport.zoom * dpr
       );
     }
+    townPerf.end('rhumb');
 
     // 2. Region Selection Visuals: Selection Box / Polygon / Freehand / Confirmed Shape
     if (selectionBox && !(selectMethod === 'rect2' && followCoastline)) {
@@ -1525,6 +1565,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     }
 
     // 3.4. Water Bodies (Rivers and Lakes)
+    townPerf.start('water');
     const activeRivers = effectiveRivers;
     const activeLakes = effectiveLakes;
     if (activeRivers.length > 0 || activeLakes.length > 0) {
@@ -1536,72 +1577,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         showLabels: true,
       });
     }
-
-    // In-progress river preview
-    if (brushSettings.mode === 'river' && drawingRiverPoints.length > 0) {
-      const zoom = viewport.zoom * dpr;
-      const curPos = cursorPosRef.current;
-      const pts = curPos ? [...drawingRiverPoints, [curPos.x, curPos.y] as [number, number]] : drawingRiverPoints;
-      ctx.save();
-      ctx.beginPath();
-      pts.forEach((p, i) => {
-        if (i === 0) ctx.moveTo(p[0], p[1]);
-        else ctx.lineTo(p[0], p[1]);
-      });
-      ctx.strokeStyle = '#2b7fb3';
-      ctx.lineWidth = Math.max(2, (waterSettings?.riverWidthStart || 2.5) / zoom);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-
-      pts.forEach((p) => {
-        ctx.beginPath();
-        ctx.arc(p[0], p[1], 4 / zoom, 0, Math.PI * 2);
-        ctx.fillStyle = '#38bdf8';
-        ctx.fill();
-        ctx.strokeStyle = '#0369a1';
-        ctx.lineWidth = 1.5 / zoom;
-        ctx.stroke();
-      });
-      ctx.restore();
-    }
-
-    // In-progress lake preview (drag circle or polygon)
-    if (brushSettings.mode === 'lake') {
-      const zoom = viewport.zoom * dpr;
-      if (drawingLakeStart && cursorPosRef.current) {
-        const cur = cursorPosRef.current;
-        const rad = Math.hypot(cur.x - drawingLakeStart[0], cur.y - drawingLakeStart[1]);
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(drawingLakeStart[0], drawingLakeStart[1], Math.max(4, rad), 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
-        ctx.strokeStyle = '#0284c7';
-        ctx.lineWidth = 2 / zoom;
-        ctx.setLineDash([6 / zoom, 4 / zoom]);
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      } else if (drawingLakePolygon.length > 0) {
-        const curPos = cursorPosRef.current;
-        const pts = curPos ? [...drawingLakePolygon, [curPos.x, curPos.y] as [number, number]] : drawingLakePolygon;
-        ctx.save();
-        ctx.beginPath();
-        pts.forEach((p, i) => {
-          if (i === 0) ctx.moveTo(p[0], p[1]);
-          else ctx.lineTo(p[0], p[1]);
-        });
-        ctx.closePath();
-        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
-        ctx.strokeStyle = '#0284c7';
-        ctx.lineWidth = 2 / zoom;
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
+    townPerf.end('water');
 
     // 3.5. Town Objects (Districts, Roads, Piers, Buildings, Fortified Walls)
+    townPerf.start('townObjects');
     if (
       showTownObjects &&
       townObjects &&
@@ -1631,591 +1610,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           resolveTextureFill(ctx, slot, textures, metersPerUnit, viewport.zoom * dpr, extra, townTextureCache),
       });
     }
-
-    // 3.55 Town Building Auto-Fill Preview (Amber dashed outline, translucent amber fill)
-    if (
-      showTownObjects &&
-      autoFillPreviewBuildings &&
-      autoFillPreviewBuildings.length > 0 &&
-      activeRegionalMap?.kind === 'town'
-    ) {
-      ctx.save();
-      const zoomPx = viewport.zoom * dpr;
-      ctx.strokeStyle = '#f59e0b';
-      ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
-      ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
-      ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-
-      for (const bld of autoFillPreviewBuildings) {
-        if (!bld.polygon || bld.polygon.length < 3) continue;
-        ctx.beginPath();
-        ctx.moveTo(bld.polygon[0][0], bld.polygon[0][1]);
-        for (let i = 1; i < bld.polygon.length; i++) {
-          ctx.lineTo(bld.polygon[i][0], bld.polygon[i][1]);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
-    // 3.56 Town Template Placement Preview (Translucent amber preview following cursor)
-    if (
-      showTownObjects &&
-      templatePlacement &&
-      cursorPosRef.current &&
-      activeRegionalMap?.kind === 'town'
-    ) {
-      ctx.save();
-      const zoomPx = viewport.zoom * dpr;
-      const curPos: Pt = [cursorPosRef.current.x, cursorPosRef.current.y];
-      const previewObjs = instantiateTemplate(
-        templatePlacement.template,
-        curPos,
-        metersPerUnit,
-        {
-          angleDeg: templatePlacement.angleDeg,
-          flipX: templatePlacement.flipX,
-        }
-      );
-
-      ctx.strokeStyle = '#f59e0b';
-      ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
-      ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
-      ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-
-      for (const obj of previewObjs) {
-        if (obj.kind === 'building' || obj.kind === 'district') {
-          if (!obj.polygon || obj.polygon.length < 3) continue;
-          ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
-          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-          ctx.beginPath();
-          ctx.moveTo(obj.polygon[0][0], obj.polygon[0][1]);
-          for (let i = 1; i < obj.polygon.length; i++) {
-            ctx.lineTo(obj.polygon[i][0], obj.polygon[i][1]);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        } else if (obj.kind === 'road' || obj.kind === 'wall' || obj.kind === 'pier') {
-          if (!obj.points || obj.points.length < 2) continue;
-          const wM = obj.kind === 'wall' ? obj.thicknessM : obj.widthM;
-          ctx.lineWidth = Math.max(2 / zoomPx, metersToUnits(wM || 3, metersPerUnit));
-          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-          ctx.beginPath();
-          ctx.moveTo(obj.points[0][0], obj.points[0][1]);
-          for (let i = 1; i < obj.points.length; i++) {
-            ctx.lineTo(obj.points[i][0], obj.points[i][1]);
-          }
-          if (obj.kind === 'wall' && obj.closed) {
-            ctx.closePath();
-          }
-          ctx.stroke();
-        }
-      }
-
-      // Draw anchor indicator
-      const crossSize = 6 / zoomPx;
-      ctx.setLineDash([]);
-      ctx.lineWidth = 1.5 / zoomPx;
-      ctx.strokeStyle = '#f59e0b';
-      ctx.beginPath();
-      ctx.moveTo(curPos[0] - crossSize, curPos[1]);
-      ctx.lineTo(curPos[0] + crossSize, curPos[1]);
-      ctx.moveTo(curPos[0], curPos[1] - crossSize);
-      ctx.lineTo(curPos[0], curPos[1] + crossSize);
-      ctx.stroke();
-
-      ctx.restore();
-    }
-
-    // 3.6 Town Editing Interactive Overlays (Handles, In-progress Drawing, Marquee, Snap Target)
-    if (activeRegionalMap?.kind === 'town') {
-      const zoomPx = viewport.zoom * dpr;
-      const handleSizeUnits = 7 / zoomPx;
-      const midpointRadius = 3.5 / zoomPx;
-
-      // A. Vertex, Midpoint, and Gate Handles for Selected Objects
-      if (brushSettings.mode === 'townSelect' && effectiveTownSelectedIds.length > 0) {
-        const selectedSet = new Set(effectiveTownSelectedIds);
-        const selectedObjs = townObjects.filter((o) => selectedSet.has(o.id));
-
-        for (const obj of selectedObjs) {
-          const pts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
-          const isClosed =
-            obj.kind === 'district' ||
-            obj.kind === 'building' ||
-            (obj.kind === 'wall' && obj.closed);
-
-          // Edge Midpoint handles (circles for vertex insertion)
-          const numEdges = isClosed ? pts.length : pts.length - 1;
-          for (let eIdx = 0; eIdx < numEdges; eIdx++) {
-            const p0 = pts[eIdx];
-            const p1 = pts[(eIdx + 1) % pts.length];
-            const mx = (p0[0] + p1[0]) * 0.5;
-            const my = (p0[1] + p1[1]) * 0.5;
-
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(mx, my, midpointRadius, 0, Math.PI * 2);
-            ctx.fillStyle = '#ffffff';
-            ctx.strokeStyle = '#d97706';
-            ctx.lineWidth = 1.2 / zoomPx;
-            ctx.fill();
-            ctx.stroke();
-            ctx.restore();
-          }
-
-          // Vertex handles (amber squares, highlighted if selected)
-          for (let vIdx = 0; vIdx < pts.length; vIdx++) {
-            const p = pts[vIdx];
-            const isVertexSelected =
-              selectedVertex?.objectId === obj.id && selectedVertex?.index === vIdx;
-            const sz = (isVertexSelected ? 9 : 7) / zoomPx;
-            ctx.save();
-            ctx.fillStyle = isVertexSelected ? '#ffffff' : '#f59e0b';
-            ctx.strokeStyle = isVertexSelected ? '#2563eb' : '#1c1917';
-            ctx.lineWidth = (isVertexSelected ? 2.5 : 1.5) / zoomPx;
-            ctx.fillRect(
-              p[0] - sz * 0.5,
-              p[1] - sz * 0.5,
-              sz,
-              sz
-            );
-            ctx.strokeRect(
-              p[0] - sz * 0.5,
-              p[1] - sz * 0.5,
-              sz,
-              sz
-            );
-            ctx.restore();
-          }
-
-          // Gate handles (sky-blue diamonds, highlighted if selected) for walls
-          if (obj.kind === 'wall') {
-            for (let gIdx = 0; gIdx < obj.gates.length; gIdx++) {
-              const g = obj.gates[gIdx];
-              const gp = getGateWorldPosition(obj, g);
-              const isGateSelected =
-                selectedGate?.objectId === obj.id && selectedGate?.index === gIdx;
-              const gs = (isGateSelected ? 11 : 8) / zoomPx;
-              ctx.save();
-              ctx.translate(gp[0], gp[1]);
-              ctx.rotate(Math.PI / 4);
-              ctx.fillStyle = isGateSelected ? '#ffffff' : '#38bdf8';
-              ctx.strokeStyle = isGateSelected ? '#2563eb' : '#0f172a';
-              ctx.lineWidth = (isGateSelected ? 2.5 : 1.5) / zoomPx;
-              ctx.fillRect(-gs * 0.5, -gs * 0.5, gs, gs);
-              ctx.strokeRect(-gs * 0.5, -gs * 0.5, gs, gs);
-              ctx.restore();
-            }
-          }
-        }
-      }
-
-      // Snap indicator during vertex dragging
-      if (
-        brushSettings.mode === 'townSelect' &&
-        townDragRef.current?.type === 'vertex' &&
-        townToolConfig.snapEnabled &&
-        cursorPosRef.current
-      ) {
-        const snapRes = snapPoint(
-          [cursorPosRef.current.x, cursorPosRef.current.y],
-          townSnapCandidates,
-          8 / zoomPx
-        );
-        if (snapRes.didSnap) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(snapRes.snapped[0], snapRes.snapped[1], 5 / zoomPx, 0, Math.PI * 2);
-          ctx.strokeStyle = '#06b6d4';
-          ctx.lineWidth = 2.0 / zoomPx;
-          ctx.fillStyle = 'rgba(6, 182, 212, 0.35)';
-          ctx.fill();
-          ctx.stroke();
-          ctx.restore();
-        }
-      }
-
-      // B. Marquee Box Overlay
-      if (townMarqueeBox) {
-        const minX = Math.min(townMarqueeBox.startX, townMarqueeBox.currentX);
-        const maxX = Math.max(townMarqueeBox.startX, townMarqueeBox.currentX);
-        const minY = Math.min(townMarqueeBox.startY, townMarqueeBox.currentY);
-        const maxY = Math.max(townMarqueeBox.startY, townMarqueeBox.currentY);
-
-        ctx.save();
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
-        ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 1.5 / zoomPx;
-        ctx.setLineDash([5 / zoomPx, 4 / zoomPx]);
-        ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
-        ctx.restore();
-      }
-
-      // C. In-progress Line Drawing and Rubberband
-      if (
-        (brushSettings.mode === 'townRoad' ||
-          brushSettings.mode === 'townWall' ||
-          brushSettings.mode === 'townPier') &&
-        drawingTownPoints.length > 0
-      ) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
-        for (let i = 1; i < drawingTownPoints.length; i++) {
-          ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
-        }
-
-        const curPos = cursorPosRef.current;
-        let activeEndPt: Pt | null = null;
-        let didSnapActive = false;
-        let snappedCoord: Pt = [0, 0];
-        if (curPos) {
-          const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
-          let targetPt: Pt = [curPos.x, curPos.y];
-
-          // Snapping to existing vertices/endpoints (8px)
-          const snapTol = 8 / zoomPx;
-          if (townToolConfig.snapEnabled) {
-            const snapRes = snapPoint(targetPt, townSnapCandidates, snapTol);
-            if (snapRes.didSnap) {
-              targetPt = snapRes.snapped;
-              didSnapActive = true;
-              snappedCoord = snapRes.snapped;
-            }
-          }
-
-          activeEndPt = targetPt;
-          ctx.lineTo(targetPt[0], targetPt[1]);
-        }
-
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 2.0 / zoomPx;
-        ctx.setLineDash([5 / zoomPx, 4 / zoomPx]);
-        ctx.stroke();
-
-        // Snap target indicator circle (cyan ring)
-        if (didSnapActive) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(snappedCoord[0], snappedCoord[1], 5 / zoomPx, 0, Math.PI * 2);
-          ctx.strokeStyle = '#06b6d4';
-          ctx.lineWidth = 2.0 / zoomPx;
-          ctx.fillStyle = 'rgba(6, 182, 212, 0.35)';
-          ctx.fill();
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        // Placed vertex dots
-        for (let i = 0; i < drawingTownPoints.length; i++) {
-          const pt = drawingTownPoints[i];
-          const isStartWall = i === 0 && brushSettings.mode === 'townWall';
-          ctx.beginPath();
-          ctx.arc(pt[0], pt[1], (isStartWall ? 5.5 : 3.5) / zoomPx, 0, Math.PI * 2);
-          ctx.fillStyle = isStartWall ? '#34d399' : '#f59e0b';
-          ctx.fill();
-          ctx.strokeStyle = '#1c1917';
-          ctx.lineWidth = 1.0 / zoomPx;
-          ctx.stroke();
-        }
-
-        // Segment distance and total length badge
-        if (activeEndPt && townToolConfig.showLengths) {
-          const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
-          const segDistM = Math.round(
-            Math.hypot(activeEndPt[0] - lastPt[0], activeEndPt[1] - lastPt[1]) * metersPerUnit
-          );
-          const totalDistM = Math.round(
-            (polylineLength(drawingTownPoints) +
-              Math.hypot(activeEndPt[0] - lastPt[0], activeEndPt[1] - lastPt[1])) *
-              metersPerUnit
-          );
-
-          const midX = (lastPt[0] + activeEndPt[0]) * 0.5;
-          const midY = (lastPt[1] + activeEndPt[1]) * 0.5;
-
-          const label = `${segDistM}m (計 ${totalDistM}m)`;
-          ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
-          ctx.setLineDash([]);
-          const textMetrics = ctx.measureText(label);
-          const pad = 3.5 / viewport.zoom;
-          ctx.fillStyle = 'rgba(28, 25, 23, 0.9)';
-          ctx.fillRect(
-            midX - pad,
-            midY - 12 / viewport.zoom - pad,
-            textMetrics.width + pad * 2,
-            14 / viewport.zoom
-          );
-          ctx.fillStyle = '#fef3c7';
-          ctx.fillText(label, midX, midY - 2 / viewport.zoom);
-        }
-
-        ctx.restore();
-      }
-
-      // D. Rotation Handle for Selected Town Objects
-      if (brushSettings.mode === 'townSelect' && townRotationHandle) {
-        const { handlePos, stemTop } = townRotationHandle;
-        ctx.save();
-        // Stem line
-        ctx.beginPath();
-        ctx.moveTo(stemTop[0], stemTop[1]);
-        ctx.lineTo(handlePos[0], handlePos[1]);
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 1.5 / zoomPx;
-        ctx.setLineDash([3 / zoomPx, 3 / zoomPx]);
-        ctx.stroke();
-
-        // Rotation Handle Circle (constant screen size)
-        const handleR = 6 / zoomPx;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.arc(handlePos[0], handlePos[1], handleR, 0, Math.PI * 2);
-        ctx.fillStyle = '#0284c7';
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.8 / zoomPx;
-        ctx.stroke();
-
-        // Small circular rotation arrow indicator inside handle
-        ctx.beginPath();
-        ctx.arc(handlePos[0], handlePos[1], handleR * 0.55, -Math.PI * 0.7, Math.PI * 0.7);
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.2 / zoomPx;
-        ctx.stroke();
-
-        ctx.restore();
-      }
-
-      // E. Town Building Drawing Overlays
-      if (brushSettings.mode === 'townBuilding') {
-        const curPos = cursorPosRef.current;
-
-        // 1. Preset Size Mode Preview
-        if (townToolConfig.buildingDrawMode === 'preset' && curPos) {
-          const angleRad =
-            townToolConfig.buildingOrientationMode === 'auto'
-              ? (nearestSegmentDirection(townObjects, [curPos.x, curPos.y], 40, metersPerUnit)?.angleRad ?? 0)
-              : ((townToolConfig.buildingFixedAngleDeg || 0) * Math.PI) / 180;
-
-          const poly = generatePresetPolygon(
-            [curPos.x, curPos.y],
-            townToolConfig.buildingKind,
-            townToolConfig.buildingPresetWidthM,
-            townToolConfig.buildingPresetDepthM,
-            angleRad,
-            metersPerUnit
-          );
-
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(poly[0][0], poly[0][1]);
-          for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
-          ctx.fill();
-          ctx.strokeStyle = '#f59e0b';
-          ctx.lineWidth = 1.8 / zoomPx;
-          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-          ctx.stroke();
-
-          // Dimension badge
-          const label =
-            townToolConfig.buildingKind === 'tower'
-              ? `塔 φ${townToolConfig.buildingPresetWidthM}m (クリックで配置)`
-              : `${BUILDING_KIND_LABELS[townToolConfig.buildingKind] || '建物'} ${townToolConfig.buildingPresetWidthM}×${townToolConfig.buildingPresetDepthM}m`;
-          ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
-          ctx.setLineDash([]);
-          const tm = ctx.measureText(label);
-          const pad = 3.5 / zoomPx;
-          ctx.fillStyle = 'rgba(28, 25, 23, 0.88)';
-          ctx.fillRect(
-            curPos.x - tm.width / 2 - pad,
-            curPos.y - 18 / zoomPx - pad,
-            tm.width + pad * 2,
-            15 / zoomPx
-          );
-          ctx.fillStyle = '#fef3c7';
-          ctx.textAlign = 'center';
-          ctx.fillText(label, curPos.x, curPos.y - 7 / zoomPx);
-          ctx.restore();
-        }
-
-        // 2. 3-Point Rectangle Mode In-Progress
-        if (townToolConfig.buildingDrawMode === '3point') {
-          if (drawingTownPoints.length === 1 && curPos) {
-            const p0 = drawingTownPoints[0];
-            let p1: Pt = [curPos.x, curPos.y];
-            if (townToolConfig.snapEnabled) {
-              const snapRes = snapPoint(p1, townSnapCandidates, 8 / zoomPx);
-              if (snapRes.didSnap) p1 = snapRes.snapped;
-            }
-            const lenM = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) * metersPerUnit;
-
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(p0[0], p0[1]);
-            ctx.lineTo(p1[0], p1[1]);
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 2.0 / zoomPx;
-            ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-            ctx.stroke();
-
-            // Point 0 dot
-            ctx.beginPath();
-            ctx.arc(p0[0], p0[1], 4.5 / zoomPx, 0, Math.PI * 2);
-            ctx.fillStyle = '#f59e0b';
-            ctx.fill();
-            ctx.strokeStyle = '#1c1917';
-            ctx.lineWidth = 1.0 / zoomPx;
-            ctx.stroke();
-
-            // Label
-            const label = `辺: ${lenM.toFixed(1)}m (Shiftで15°固定)`;
-            ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
-            ctx.setLineDash([]);
-            const midX = (p0[0] + p1[0]) * 0.5;
-            const midY = (p0[1] + p1[1]) * 0.5;
-            const tm = ctx.measureText(label);
-            const pad = 3.5 / zoomPx;
-            ctx.fillStyle = 'rgba(28, 25, 23, 0.88)';
-            ctx.fillRect(midX - pad, midY - 14 / zoomPx - pad, tm.width + pad * 2, 14 / zoomPx);
-            ctx.fillStyle = '#fef3c7';
-            ctx.fillText(label, midX, midY - 3 / zoomPx);
-            ctx.restore();
-          } else if (drawingTownPoints.length === 2 && curPos) {
-            const p0 = drawingTownPoints[0];
-            const p1 = drawingTownPoints[1];
-            const rect = rectangleFrom3Points(p0, p1, [curPos.x, curPos.y]);
-            const edgeM = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) * metersPerUnit;
-            const vx = p1[0] - p0[0];
-            const vy = p1[1] - p0[1];
-            const elen = Math.hypot(vx, vy) || 1;
-            const nx = -vy / elen;
-            const ny = vx / elen;
-            const depthM = Math.abs((curPos.x - p0[0]) * nx + (curPos.y - p0[1]) * ny) * metersPerUnit;
-
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(rect[0][0], rect[0][1]);
-            for (let i = 1; i < 4; i++) ctx.lineTo(rect[i][0], rect[i][1]);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
-            ctx.fill();
-            ctx.strokeStyle = '#f59e0b';
-            ctx.lineWidth = 1.8 / zoomPx;
-            ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-            ctx.stroke();
-
-            // Point dots
-            for (const pt of [p0, p1]) {
-              ctx.beginPath();
-              ctx.arc(pt[0], pt[1], 4 / zoomPx, 0, Math.PI * 2);
-              ctx.fillStyle = '#f59e0b';
-              ctx.fill();
-              ctx.strokeStyle = '#1c1917';
-              ctx.lineWidth = 1.0 / zoomPx;
-              ctx.stroke();
-            }
-
-            const label = `幅: ${edgeM.toFixed(1)}m × 奥行: ${depthM.toFixed(1)}m (クリックで確定)`;
-            ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
-            ctx.setLineDash([]);
-            const cx = (rect[0][0] + rect[2][0]) * 0.5;
-            const cy = (rect[0][1] + rect[2][1]) * 0.5;
-            const tm = ctx.measureText(label);
-            const pad = 3.5 / zoomPx;
-            ctx.fillStyle = 'rgba(28, 25, 23, 0.88)';
-            ctx.fillRect(cx - tm.width / 2 - pad, cy - 8 / zoomPx - pad, tm.width + pad * 2, 16 / zoomPx);
-            ctx.fillStyle = '#fef3c7';
-            ctx.textAlign = 'center';
-            ctx.fillText(label, cx, cy + 4 / zoomPx);
-            ctx.restore();
-          }
-        }
-
-        // 3. Polygon Building Mode In-Progress
-        if (townToolConfig.buildingDrawMode === 'polygon' && drawingTownPoints.length > 0) {
-          ctx.save();
-          ctx.beginPath();
-          ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
-          for (let i = 1; i < drawingTownPoints.length; i++) {
-            ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
-          }
-          if (curPos) {
-            ctx.lineTo(curPos.x, curPos.y);
-          }
-
-          if (drawingTownPoints.length >= 2 && curPos) {
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
-            ctx.fill();
-          }
-
-          ctx.strokeStyle = '#f59e0b';
-          ctx.lineWidth = 1.8 / zoomPx;
-          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-          ctx.stroke();
-
-          // Dots
-          for (let i = 0; i < drawingTownPoints.length; i++) {
-            const pt = drawingTownPoints[i];
-            ctx.beginPath();
-            ctx.arc(pt[0], pt[1], (i === 0 ? 5 : 3.5) / zoomPx, 0, Math.PI * 2);
-            ctx.fillStyle = i === 0 ? '#34d399' : '#f59e0b';
-            ctx.fill();
-            ctx.strokeStyle = '#1c1917';
-            ctx.lineWidth = 1.0 / zoomPx;
-            ctx.stroke();
-          }
-          ctx.restore();
-        }
-      }
-
-      // F. Town District Drawing Overlay
-      if (brushSettings.mode === 'townDistrict' && drawingTownPoints.length > 0) {
-        const curPos = cursorPosRef.current;
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
-        for (let i = 1; i < drawingTownPoints.length; i++) {
-          ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
-        }
-        if (curPos) {
-          ctx.lineTo(curPos.x, curPos.y);
-        }
-
-        if (drawingTownPoints.length >= 2 && curPos) {
-          ctx.closePath();
-          ctx.fillStyle = 'rgba(168, 85, 247, 0.25)';
-          ctx.fill();
-        }
-
-        ctx.strokeStyle = '#c084fc';
-        ctx.lineWidth = 2.0 / zoomPx;
-        ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
-        ctx.stroke();
-
-        for (let i = 0; i < drawingTownPoints.length; i++) {
-          const pt = drawingTownPoints[i];
-          ctx.beginPath();
-          ctx.arc(pt[0], pt[1], (i === 0 ? 5.5 : 3.5) / zoomPx, 0, Math.PI * 2);
-          ctx.fillStyle = i === 0 ? '#34d399' : '#c084fc';
-          ctx.fill();
-          ctx.strokeStyle = '#1c1917';
-          ctx.lineWidth = 1.0 / zoomPx;
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-    }
+    townPerf.end('townObjects');
 
     // 4. Cartographic Tolkien-style Symbols (Mountains, Forests, Settlements, Maritime)
+    townPerf.start('symbols');
     const effectiveSymbols = isSymbolStrokeActiveRef.current
       ? activeStrokeSymbolsRef.current
       : (symbols || []);
@@ -2238,8 +1636,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         symbolToolSettings?.colorTheme
       );
     }
+    townPerf.end('symbols');
 
     // 5. Antique Brass & Crimson Compass Rose
+    townPerf.start('compassAndFrame');
     if (showCompass) {
       drawCompassRose(ctx, cPos.x, cPos.y, 72, viewport.zoom * dpr);
     }
@@ -2250,11 +1650,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     ctx.strokeRect(0, 0, currentWidth, currentHeight);
 
     ctx.restore();
+    townPerf.end('compassAndFrame');
+    townPerf.end('renderOverlay_total');
   }, [
     viewport,
     selectionBox,
-    polygonPoints,
-    freehandPoints,
     confirmedShape,
     isRegion,
     activeRegionalMap,
@@ -2277,8 +1677,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     showTownObjects,
     selectedTownObjectId,
     selectedTownObjectIds,
-    selectedVertex,
-    selectedGate,
     activeRegionalMap?.townStyle?.roofTheme,
     activeRegionalMap?.townStyle?.textures,
     textureCacheVersion,
@@ -2287,40 +1685,33 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     selectedWaterId,
     selectedWaterType,
     activeWaterVertexIndex,
-    drawingRiverPoints,
-    drawingLakeStart,
-    drawingLakePolygon,
     waterSettings,
-    autoFillPreviewBuildings,
-    templatePlacement,
   ]);
 
   // Keep water bodies overlay in sync
   useEffect(() => {
-    renderOverlay();
-  }, [effectiveRivers, effectiveLakes, selectedWaterId, selectedWaterType, activeWaterVertexIndex, renderOverlay]);
+    scheduleOverlayRender();
+  }, [effectiveRivers, effectiveLakes, selectedWaterId, selectedWaterType, activeWaterVertexIndex, scheduleOverlayRender]);
 
-  // Keep town objects overlay in sync whenever showTownObjects, townObjects, roofTheme, textures, textureCacheVersion, templatePlacement, or vertex/gate selection updates
+  // Keep town objects overlay in sync
   useEffect(() => {
-    renderOverlay();
+    scheduleOverlayRender();
   }, [
     showTownObjects,
     townObjects,
-    autoFillPreviewBuildings,
-    templatePlacement,
-    selectedVertex,
-    selectedGate,
+    selectedTownObjectId,
+    selectedTownObjectIds,
     activeRegionalMap?.townStyle?.roofTheme,
     activeRegionalMap?.townStyle?.textures,
     textureCacheVersion,
-    renderOverlay,
+    scheduleOverlayRender,
   ]);
 
   // Keep offscreen biome canvas in sync when map switches or biomeGrid reference updates
   useEffect(() => {
     rebuildBiomeCanvas(currentBiomeGrid, currentCols, currentRows);
-    renderOverlay();
-  }, [currentBiomeGrid, currentCols, currentRows, rebuildBiomeCanvas, renderOverlay]);
+    scheduleOverlayRender();
+  }, [currentBiomeGrid, currentCols, currentRows, rebuildBiomeCanvas, scheduleOverlayRender]);
 
   // Finalize River Drawing
   const finalizeRiverDrawing = useCallback(
@@ -2401,7 +1792,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       if (hasEdgeLessThanM(pts, 1.5, metersPerUnit)) {
         showToast('辺の長さが1.5m未満のため作成できません');
         setDrawingTownPoints([]);
-        renderOverlay();
+        triggerPreviewOverlay();
         return;
       }
 
@@ -2424,6 +1815,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       };
 
       const next = [...townObjects, newBuilding];
+      townPerf.startConfirmation('建物を追加');
       onCommitHistory({
         description: '建物を追加',
         timestamp: Date.now(),
@@ -2436,7 +1828,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       onSelectTownObjectIds?.([newBuilding.id]);
       onSelectTownObjectId?.(newBuilding.id);
       setDrawingTownPoints([]);
-      renderOverlay();
+      scheduleOverlayRender();
+      triggerPreviewOverlay();
     },
     [
       townObjects,
@@ -2447,7 +1840,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       onSelectTownObjectIds,
       onSelectTownObjectId,
       showToast,
-      renderOverlay,
+      scheduleOverlayRender,
+      triggerPreviewOverlay,
     ]
   );
 
@@ -2476,6 +1870,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       };
 
       const next = [...townObjects, newDistrict];
+      townPerf.startConfirmation('区画を追加');
       onCommitHistory({
         description: '区画を追加',
         timestamp: Date.now(),
@@ -2488,7 +1883,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       onSelectTownObjectIds?.([newDistrict.id]);
       onSelectTownObjectId?.(newDistrict.id);
       setDrawingTownPoints([]);
-      renderOverlay();
+      scheduleOverlayRender();
+      triggerPreviewOverlay();
     },
     [
       townObjects,
@@ -2498,16 +1894,19 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       onSelectTownObjectIds,
       onSelectTownObjectId,
       showToast,
-      renderOverlay,
+      scheduleOverlayRender,
+      triggerPreviewOverlay,
     ]
   );
 
-  // 3. Render 2D Cursor Overlay (brush circle, stamp ghost - ultra-fast, only on mouse position update)
-  const renderCursorOverlay = useCallback(() => {
+  // 3. Render 2D Preview Overlay on cursorCanvas (brush circle, rubberband lines, placement previews, draft dragging - ultra-fast)
+  const renderPreviewOverlay = useCallback(() => {
     const cursorCanvas = cursorCanvasRef.current;
     if (!cursorCanvas) return;
     const ctx = cursorCanvas.getContext('2d');
     if (!ctx) return;
+
+    townPerf.start('previewOverlay');
 
     const dpr = cursorCanvas.clientWidth > 0
       ? cursorCanvas.width / cursorCanvas.clientWidth
@@ -2515,57 +1914,859 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     ctx.clearRect(0, 0, cursorCanvas.width, cursorCanvas.height);
 
     const curPos = cursorPosRef.current;
-    const isTownMode =
-      brushSettings.mode === 'townSelect' ||
-      brushSettings.mode === 'townRoad' ||
-      brushSettings.mode === 'townWall' ||
-      brushSettings.mode === 'townPier';
-    if (!curPos || brushSettings.mode === 'pan' || brushSettings.mode === 'selectRegion' || isTownMode) {
-      return;
-    }
+    const zoomPx = viewport.zoom * dpr;
 
     ctx.save();
     ctx.setTransform(viewport.zoom * dpr, 0, 0, viewport.zoom * dpr, viewport.x * dpr, viewport.y * dpr);
 
-    const { x, y } = curPos;
-    const isSymbolTool = brushSettings.mode === 'symbolBrush' || brushSettings.mode === 'symbolEraser';
-    const radius = isSymbolTool
-      ? (symbolToolSettings?.scatterRadius ?? 60)
-      : brushSettings.radius;
-    const active = isMouseDownRef.current && !isPanningRef.current;
+    const isTownMode =
+      brushSettings.mode === 'townSelect' ||
+      brushSettings.mode === 'townRoad' ||
+      brushSettings.mode === 'townWall' ||
+      brushSettings.mode === 'townPier' ||
+      brushSettings.mode === 'townBuilding' ||
+      brushSettings.mode === 'townDistrict';
 
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.strokeStyle = active
-      ? 'rgba(215, 65, 35, 0.95)'
-      : isSymbolTool
-      ? 'rgba(245, 158, 11, 0.85)'
-      : 'rgba(255, 255, 255, 0.75)';
-    ctx.lineWidth = (active ? 2.5 : 1.5) / viewport.zoom;
-    ctx.stroke();
+    // 1. Terrain / Symbol brush circle
+    if (!isTownMode && curPos && brushSettings.mode !== 'pan' && brushSettings.mode !== 'selectRegion') {
+      const { x, y } = curPos;
+      const isSymbolTool = brushSettings.mode === 'symbolBrush' || brushSettings.mode === 'symbolEraser';
+      const radius = isSymbolTool
+        ? (symbolToolSettings?.scatterRadius ?? 60)
+        : brushSettings.radius;
+      const active = isMouseDownRef.current && !isPanningRef.current;
 
-    ctx.fillStyle = active
-      ? 'rgba(215, 65, 35, 0.16)'
-      : isSymbolTool
-      ? 'rgba(245, 158, 11, 0.08)'
-      : 'rgba(255, 255, 255, 0.05)';
-    ctx.fill();
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = active
+        ? 'rgba(215, 65, 35, 0.95)'
+        : isSymbolTool
+        ? 'rgba(245, 158, 11, 0.85)'
+        : 'rgba(255, 255, 255, 0.75)';
+      ctx.lineWidth = (active ? 2.5 : 1.5) / viewport.zoom;
+      ctx.stroke();
 
+      ctx.fillStyle = active
+        ? 'rgba(215, 65, 35, 0.16)'
+        : isSymbolTool
+        ? 'rgba(245, 158, 11, 0.08)'
+        : 'rgba(255, 255, 255, 0.05)';
+      ctx.fill();
+    }
+
+    // 2. Region Selection previews
+    if (brushSettings.mode === 'selectRegion') {
+      if (selectMethod === 'rect2' && followCoastline && rect2Start && curPos) {
+        const startPt: [number, number] = [rect2Start.x, rect2Start.y];
+        const endPt: [number, number] = (snappedCoastRef.current && (snapCoastline || followCoastline))
+          ? [snappedCoastRef.current.point[0], snappedCoastRef.current.point[1]]
+          : [curPos.x, curPos.y];
+        const traced = traceCoastlinePath(
+          startPt,
+          endPt,
+          currentElevation,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          currentSeaLevel,
+          40 / viewport.zoom
+        );
+
+        ctx.save();
+        if (traced.length > 2) {
+          ctx.beginPath();
+          ctx.moveTo(traced[0][0], traced[0][1]);
+          for (let i = 1; i < traced.length; i++) ctx.lineTo(traced[i][0], traced[i][1]);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(34, 211, 238, 0.14)';
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.moveTo(traced[0][0], traced[0][1]);
+          for (let i = 1; i < traced.length; i++) ctx.lineTo(traced[i][0], traced[i][1]);
+          ctx.strokeStyle = '#22d3ee';
+          ctx.lineWidth = 2.4 / viewport.zoom;
+          ctx.setLineDash([5 / viewport.zoom, 3 / viewport.zoom]);
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.moveTo(endPt[0], endPt[1]);
+          ctx.lineTo(startPt[0], startPt[1]);
+          ctx.strokeStyle = 'rgba(34, 211, 238, 0.6)';
+          ctx.lineWidth = 1.4 / viewport.zoom;
+          ctx.setLineDash([3 / viewport.zoom, 3 / viewport.zoom]);
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(startPt[0], startPt[1], 5.5 / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = '#22d3ee';
+        ctx.fill();
+        ctx.strokeStyle = '#08111c';
+        ctx.lineWidth = 1.2 / viewport.zoom;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      if (polygonPoints.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2.0 / viewport.zoom;
+        ctx.beginPath();
+        ctx.moveTo(polygonPoints[0][0], polygonPoints[0][1]);
+        for (let i = 1; i < polygonPoints.length; i++) {
+          ctx.lineTo(polygonPoints[i][0], polygonPoints[i][1]);
+        }
+        ctx.stroke();
+
+        if (curPos) {
+          const lastPt = polygonPoints[polygonPoints.length - 1];
+          const isCurCoastSnapped = !!(followCoastline && snapCoastline && snappedCoastRef.current);
+          let rubberPath: [number, number][] = [[lastPt[0], lastPt[1]], [curPos.x, curPos.y]];
+
+          if (selectMethod === 'polygon' && followCoastline && isCurCoastSnapped) {
+            const snapLast = findNearestCoastlinePoint(
+              lastPt[0],
+              lastPt[1],
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel,
+              COASTLINE_SNAP_PX / viewport.zoom
+            );
+            if (snapLast && snapLast.contourIndex === snappedCoastRef.current!.contourIndex) {
+              rubberPath = traceCoastlinePath(
+                lastPt,
+                [curPos.x, curPos.y],
+                currentElevation,
+                currentCols,
+                currentRows,
+                currentWidth,
+                currentHeight,
+                currentSeaLevel,
+                COASTLINE_SNAP_PX / viewport.zoom
+              );
+            }
+          }
+
+          ctx.beginPath();
+          ctx.moveTo(rubberPath[0][0], rubberPath[0][1]);
+          for (let i = 1; i < rubberPath.length; i++) {
+            ctx.lineTo(rubberPath[i][0], rubberPath[i][1]);
+          }
+          if (rubberPath.length > 2) {
+            ctx.strokeStyle = '#22d3ee';
+            ctx.lineWidth = 2.4 / viewport.zoom;
+            ctx.setLineDash([5 / viewport.zoom, 3 / viewport.zoom]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          } else {
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 1.8 / viewport.zoom;
+            ctx.setLineDash([4 / viewport.zoom, 4 / viewport.zoom]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+
+        for (let i = 0; i < polygonPoints.length; i++) {
+          const [vx, vy] = polygonPoints[i];
+          ctx.beginPath();
+          ctx.arc(vx, vy, (i === 0 ? 5.5 : 3.5) / viewport.zoom, 0, Math.PI * 2);
+          ctx.fillStyle = i === 0 ? '#fbbf24' : '#f59e0b';
+          ctx.fill();
+          ctx.strokeStyle = '#1c1917';
+          ctx.lineWidth = 1.0 / viewport.zoom;
+          ctx.stroke();
+        }
+
+        if (curPos && polygonPoints.length >= 3) {
+          const distToP0 = Math.hypot(curPos.x - polygonPoints[0][0], curPos.y - polygonPoints[0][1]);
+          if (distToP0 <= 18 / viewport.zoom) {
+            ctx.beginPath();
+            ctx.arc(polygonPoints[0][0], polygonPoints[0][1], 10 / viewport.zoom, 0, Math.PI * 2);
+            ctx.strokeStyle = '#34d399';
+            ctx.lineWidth = 2.0 / viewport.zoom;
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+
+      if (snappedCoastRef.current) {
+        const sp = snappedCoastRef.current.point;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(sp[0], sp[1], 5.5 / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(34, 211, 238, 0.35)';
+        ctx.fill();
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 1.8 / viewport.zoom;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(sp[0], sp[1], 1.8 / viewport.zoom, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+
+        ctx.font = `bold ${Math.max(9, 10 / viewport.zoom)}px sans-serif`;
+        ctx.fillStyle = '#67e8f9';
+        ctx.fillText('海岸線', sp[0] + 8 / viewport.zoom, sp[1] - 4 / viewport.zoom);
+        ctx.restore();
+      }
+    }
+
+    // 3. Water In-Progress Previews
+    if (brushSettings.mode === 'river' && drawingRiverPoints.length > 0) {
+      const pts = curPos ? [...drawingRiverPoints, [curPos.x, curPos.y] as [number, number]] : drawingRiverPoints;
+      ctx.save();
+      ctx.beginPath();
+      pts.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p[0], p[1]);
+        else ctx.lineTo(p[0], p[1]);
+      });
+      ctx.strokeStyle = '#2b7fb3';
+      ctx.lineWidth = Math.max(2, (waterSettings?.riverWidthStart || 2.5) / zoomPx);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      pts.forEach((p) => {
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], 4 / zoomPx, 0, Math.PI * 2);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fill();
+        ctx.strokeStyle = '#0369a1';
+        ctx.lineWidth = 1.5 / zoomPx;
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+
+    if (brushSettings.mode === 'lake') {
+      if (drawingLakeStart && curPos) {
+        const rad = Math.hypot(curPos.x - drawingLakeStart[0], curPos.y - drawingLakeStart[1]);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(drawingLakeStart[0], drawingLakeStart[1], Math.max(4, rad), 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 2 / zoomPx;
+        ctx.setLineDash([6 / zoomPx, 4 / zoomPx]);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      } else if (drawingLakePolygon.length > 0) {
+        const pts = curPos ? [...drawingLakePolygon, [curPos.x, curPos.y] as [number, number]] : drawingLakePolygon;
+        ctx.save();
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          if (i === 0) ctx.moveTo(p[0], p[1]);
+          else ctx.lineTo(p[0], p[1]);
+        });
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 2 / zoomPx;
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // 4. Town Mode In-Progress Previews & Overlays
+    if (activeRegionalMap?.kind === 'town') {
+      const metersPerUnit = (effectiveWidthKm * 1000) / currentWidth;
+
+      // 4a. Auto-Fill Preview Buildings
+      if (showTownObjects && autoFillPreviewBuildings && autoFillPreviewBuildings.length > 0) {
+        ctx.save();
+        ctx.strokeStyle = '#f59e0b';
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.25)';
+        ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
+        ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+
+        for (const bld of autoFillPreviewBuildings) {
+          if (!bld.polygon || bld.polygon.length < 3) continue;
+          ctx.beginPath();
+          ctx.moveTo(bld.polygon[0][0], bld.polygon[0][1]);
+          for (let i = 1; i < bld.polygon.length; i++) {
+            ctx.lineTo(bld.polygon[i][0], bld.polygon[i][1]);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 4b. Template Placement Preview
+      if (showTownObjects && templatePlacement && curPos) {
+        ctx.save();
+        const curPt: Pt = [curPos.x, curPos.y];
+        const previewObjs = instantiateTemplate(
+          templatePlacement.template,
+          curPt,
+          metersPerUnit,
+          {
+            angleDeg: templatePlacement.angleDeg,
+            flipX: templatePlacement.flipX,
+          }
+        );
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.28)';
+        ctx.lineWidth = Math.max(1, 1.5 / zoomPx);
+        ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+
+        for (const obj of previewObjs) {
+          if (obj.kind === 'building' || obj.kind === 'district') {
+            if (!obj.polygon || obj.polygon.length < 3) continue;
+            ctx.beginPath();
+            ctx.moveTo(obj.polygon[0][0], obj.polygon[0][1]);
+            for (let i = 1; i < obj.polygon.length; i++) ctx.lineTo(obj.polygon[i][0], obj.polygon[i][1]);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          } else if (obj.kind === 'road' || obj.kind === 'wall' || obj.kind === 'pier') {
+            if (!obj.points || obj.points.length < 2) continue;
+            const wM = obj.kind === 'wall' ? obj.thicknessM : obj.widthM;
+            ctx.lineWidth = Math.max(2 / zoomPx, metersToUnits(wM || 3, metersPerUnit));
+            ctx.beginPath();
+            ctx.moveTo(obj.points[0][0], obj.points[0][1]);
+            for (let i = 1; i < obj.points.length; i++) ctx.lineTo(obj.points[i][0], obj.points[i][1]);
+            if (obj.kind === 'wall' && obj.closed) ctx.closePath();
+            ctx.stroke();
+          }
+        }
+
+        const crossSize = 6 / zoomPx;
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1.5 / zoomPx;
+        ctx.strokeStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.moveTo(curPt[0] - crossSize, curPt[1]);
+        ctx.lineTo(curPt[0] + crossSize, curPt[1]);
+        ctx.moveTo(curPt[0], curPt[1] - crossSize);
+        ctx.lineTo(curPt[0], curPt[1] + crossSize);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 4c. Town Dragging Draft
+      if (townDragRef.current && townDragRef.current.draftObjects) {
+        const selectedSet = new Set(effectiveTownSelectedIds);
+        const draftSelected = townDragRef.current.draftObjects.filter((o) => selectedSet.has(o.id));
+        ctx.save();
+        ctx.strokeStyle = '#f59e0b';
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
+        ctx.lineWidth = 2.0 / zoomPx;
+        ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+
+        for (const obj of draftSelected) {
+          const pts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
+          if (!pts || pts.length < 2) continue;
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+          if (obj.kind === 'district' || obj.kind === 'building' || (obj.kind === 'wall' && obj.closed)) {
+            ctx.closePath();
+            ctx.fill();
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+
+        if (townDragRef.current.type === 'vertex' && townToolConfig.snapEnabled && curPos) {
+          const snapRes = snapPoint([curPos.x, curPos.y], townSnapCandidates, 8 / zoomPx);
+          if (snapRes.didSnap) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(snapRes.snapped[0], snapRes.snapped[1], 5 / zoomPx, 0, Math.PI * 2);
+            ctx.strokeStyle = '#06b6d4';
+            ctx.lineWidth = 2.0 / zoomPx;
+            ctx.fillStyle = 'rgba(6, 182, 212, 0.35)';
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      }
+
+      // 4d. Selection Handles
+      if (brushSettings.mode === 'townSelect' && effectiveTownSelectedIds.length > 0 && !townDragRef.current?.draftObjects) {
+        const selectedSet = new Set(effectiveTownSelectedIds);
+        const selectedObjs = townObjects.filter((o) => selectedSet.has(o.id));
+        const midpointRadius = 3.5 / zoomPx;
+
+        for (const obj of selectedObjs) {
+          const pts = obj.kind === 'district' || obj.kind === 'building' ? obj.polygon : obj.points;
+          const isClosed =
+            obj.kind === 'district' ||
+            obj.kind === 'building' ||
+            (obj.kind === 'wall' && obj.closed);
+
+          const numEdges = isClosed ? pts.length : pts.length - 1;
+          for (let eIdx = 0; eIdx < numEdges; eIdx++) {
+            const p0 = pts[eIdx];
+            const p1 = pts[(eIdx + 1) % pts.length];
+            const mx = (p0[0] + p1[0]) * 0.5;
+            const my = (p0[1] + p1[1]) * 0.5;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(mx, my, midpointRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#d97706';
+            ctx.lineWidth = 1.2 / zoomPx;
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          for (let vIdx = 0; vIdx < pts.length; vIdx++) {
+            const p = pts[vIdx];
+            const isVertexSelected =
+              selectedVertex?.objectId === obj.id && selectedVertex?.index === vIdx;
+            const sz = (isVertexSelected ? 9 : 7) / zoomPx;
+            ctx.save();
+            ctx.fillStyle = isVertexSelected ? '#ffffff' : '#f59e0b';
+            ctx.strokeStyle = isVertexSelected ? '#2563eb' : '#1c1917';
+            ctx.lineWidth = (isVertexSelected ? 2.5 : 1.5) / zoomPx;
+            ctx.fillRect(p[0] - sz * 0.5, p[1] - sz * 0.5, sz, sz);
+            ctx.strokeRect(p[0] - sz * 0.5, p[1] - sz * 0.5, sz, sz);
+            ctx.restore();
+          }
+
+          if (obj.kind === 'wall') {
+            for (let gIdx = 0; gIdx < obj.gates.length; gIdx++) {
+              const g = obj.gates[gIdx];
+              const gp = getGateWorldPosition(obj, g);
+              const isGateSelected =
+                selectedGate?.objectId === obj.id && selectedGate?.index === gIdx;
+              const gs = (isGateSelected ? 11 : 8) / zoomPx;
+              ctx.save();
+              ctx.translate(gp[0], gp[1]);
+              ctx.rotate(Math.PI / 4);
+              ctx.fillStyle = isGateSelected ? '#ffffff' : '#38bdf8';
+              ctx.strokeStyle = isGateSelected ? '#2563eb' : '#0f172a';
+              ctx.lineWidth = (isGateSelected ? 2.5 : 1.5) / zoomPx;
+              ctx.fillRect(-gs * 0.5, -gs * 0.5, gs, gs);
+              ctx.strokeRect(-gs * 0.5, -gs * 0.5, gs, gs);
+              ctx.restore();
+            }
+          }
+        }
+
+        if (townRotationHandle) {
+          const { handlePos, stemTop } = townRotationHandle;
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(stemTop[0], stemTop[1]);
+          ctx.lineTo(handlePos[0], handlePos[1]);
+          ctx.strokeStyle = '#38bdf8';
+          ctx.lineWidth = 1.5 / zoomPx;
+          ctx.setLineDash([3 / zoomPx, 3 / zoomPx]);
+          ctx.stroke();
+
+          const handleR = 6 / zoomPx;
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.arc(handlePos[0], handlePos[1], handleR, 0, Math.PI * 2);
+          ctx.fillStyle = '#0284c7';
+          ctx.fill();
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.8 / zoomPx;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(handlePos[0], handlePos[1], handleR * 0.55, -Math.PI * 0.7, Math.PI * 0.7);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1.2 / zoomPx;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // 4e. Marquee Box
+      if (townMarqueeBox) {
+        const minX = Math.min(townMarqueeBox.startX, townMarqueeBox.currentX);
+        const maxX = Math.max(townMarqueeBox.startX, townMarqueeBox.currentX);
+        const minY = Math.min(townMarqueeBox.startY, townMarqueeBox.currentY);
+        const maxY = Math.max(townMarqueeBox.startY, townMarqueeBox.currentY);
+
+        ctx.save();
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.12)';
+        ctx.fillRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 1.5 / zoomPx;
+        ctx.setLineDash([5 / zoomPx, 4 / zoomPx]);
+        ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+        ctx.restore();
+      }
+
+      // 4f. In-progress Line Drawing (Road, Wall, Pier)
+      if (
+        (brushSettings.mode === 'townRoad' ||
+          brushSettings.mode === 'townWall' ||
+          brushSettings.mode === 'townPier') &&
+        drawingTownPoints.length > 0
+      ) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
+        for (let i = 1; i < drawingTownPoints.length; i++) {
+          ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
+        }
+
+        let activeEndPt: Pt | null = null;
+        let didSnapActive = false;
+        let snappedCoord: Pt = [0, 0];
+        if (curPos) {
+          let targetPt: Pt = [curPos.x, curPos.y];
+          const snapTol = 8 / zoomPx;
+          if (townToolConfig.snapEnabled) {
+            const snapRes = snapPoint(targetPt, townSnapCandidates, snapTol);
+            if (snapRes.didSnap) {
+              targetPt = snapRes.snapped;
+              didSnapActive = true;
+              snappedCoord = snapRes.snapped;
+            }
+          }
+          activeEndPt = targetPt;
+          ctx.lineTo(targetPt[0], targetPt[1]);
+        }
+
+        ctx.strokeStyle = '#f59e0b';
+        ctx.lineWidth = 2.0 / zoomPx;
+        ctx.setLineDash([5 / zoomPx, 4 / zoomPx]);
+        ctx.stroke();
+
+        if (didSnapActive) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(snappedCoord[0], snappedCoord[1], 5 / zoomPx, 0, Math.PI * 2);
+          ctx.strokeStyle = '#06b6d4';
+          ctx.lineWidth = 2.0 / zoomPx;
+          ctx.fillStyle = 'rgba(6, 182, 212, 0.35)';
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        for (let i = 0; i < drawingTownPoints.length; i++) {
+          const pt = drawingTownPoints[i];
+          const isStartWall = i === 0 && brushSettings.mode === 'townWall';
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], (isStartWall ? 5.5 : 3.5) / zoomPx, 0, Math.PI * 2);
+          ctx.fillStyle = isStartWall ? '#34d399' : '#f59e0b';
+          ctx.fill();
+          ctx.strokeStyle = '#1c1917';
+          ctx.lineWidth = 1.0 / zoomPx;
+          ctx.stroke();
+        }
+
+        if (activeEndPt && townToolConfig.showLengths) {
+          const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
+          const segDistM = Math.round(
+            Math.hypot(activeEndPt[0] - lastPt[0], activeEndPt[1] - lastPt[1]) * metersPerUnit
+          );
+          const totalDistM = Math.round(
+            (polylineLength(drawingTownPoints) +
+              Math.hypot(activeEndPt[0] - lastPt[0], activeEndPt[1] - lastPt[1])) *
+              metersPerUnit
+          );
+
+          const midX = (lastPt[0] + activeEndPt[0]) * 0.5;
+          const midY = (lastPt[1] + activeEndPt[1]) * 0.5;
+          const label = `${segDistM}m (計 ${totalDistM}m)`;
+          ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+          ctx.setLineDash([]);
+          const textMetrics = ctx.measureText(label);
+          const pad = 3.5 / viewport.zoom;
+          ctx.fillStyle = 'rgba(28, 25, 23, 0.9)';
+          ctx.fillRect(
+            midX - pad,
+            midY - 12 / viewport.zoom - pad,
+            textMetrics.width + pad * 2,
+            14 / viewport.zoom
+          );
+          ctx.fillStyle = '#fef3c7';
+          ctx.fillText(label, midX, midY - 2 / viewport.zoom);
+        }
+        ctx.restore();
+      }
+
+      // 4g. Town Building Drawing Overlays
+      if (brushSettings.mode === 'townBuilding') {
+        if (townToolConfig.buildingDrawMode === 'preset' && curPos) {
+          const angleRad =
+            townToolConfig.buildingOrientationMode === 'auto'
+              ? (nearestSegmentDirection(townObjects, [curPos.x, curPos.y], 40, metersPerUnit)?.angleRad ?? 0)
+              : ((townToolConfig.buildingFixedAngleDeg || 0) * Math.PI) / 180;
+
+          const poly = generatePresetPolygon(
+            [curPos.x, curPos.y],
+            townToolConfig.buildingKind,
+            townToolConfig.buildingPresetWidthM,
+            townToolConfig.buildingPresetDepthM,
+            angleRad,
+            metersPerUnit
+          );
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(poly[0][0], poly[0][1]);
+          for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
+          ctx.fill();
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1.8 / zoomPx;
+          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+          ctx.stroke();
+
+          const label =
+            townToolConfig.buildingKind === 'tower'
+              ? `塔 φ${townToolConfig.buildingPresetWidthM}m (クリックで配置)`
+              : `${BUILDING_KIND_LABELS[townToolConfig.buildingKind] || '建物'} ${townToolConfig.buildingPresetWidthM}×${townToolConfig.buildingPresetDepthM}m`;
+          ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+          ctx.setLineDash([]);
+          const tm = ctx.measureText(label);
+          const pad = 3.5 / zoomPx;
+          ctx.fillStyle = 'rgba(28, 25, 23, 0.88)';
+          ctx.fillRect(curPos.x - tm.width / 2 - pad, curPos.y - 18 / zoomPx - pad, tm.width + pad * 2, 15 / zoomPx);
+          ctx.fillStyle = '#fef3c7';
+          ctx.textAlign = 'center';
+          ctx.fillText(label, curPos.x, curPos.y - 7 / zoomPx);
+          ctx.restore();
+        }
+
+        if (townToolConfig.buildingDrawMode === '3point') {
+          if (drawingTownPoints.length === 1 && curPos) {
+            const p0 = drawingTownPoints[0];
+            let p1: Pt = [curPos.x, curPos.y];
+            if (townToolConfig.snapEnabled) {
+              const snapRes = snapPoint(p1, townSnapCandidates, 8 / zoomPx);
+              if (snapRes.didSnap) p1 = snapRes.snapped;
+            }
+            const lenM = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) * metersPerUnit;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(p0[0], p0[1]);
+            ctx.lineTo(p1[0], p1[1]);
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 2.0 / zoomPx;
+            ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(p0[0], p0[1], 4.5 / zoomPx, 0, Math.PI * 2);
+            ctx.fillStyle = '#f59e0b';
+            ctx.fill();
+            ctx.strokeStyle = '#1c1917';
+            ctx.lineWidth = 1.0 / zoomPx;
+            ctx.stroke();
+
+            const label = `辺: ${lenM.toFixed(1)}m (Shiftで15°固定)`;
+            ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+            ctx.setLineDash([]);
+            const midX = (p0[0] + p1[0]) * 0.5;
+            const midY = (p0[1] + p1[1]) * 0.5;
+            const tm = ctx.measureText(label);
+            const pad = 3.5 / zoomPx;
+            ctx.fillStyle = 'rgba(28, 25, 23, 0.88)';
+            ctx.fillRect(midX - pad, midY - 14 / zoomPx - pad, tm.width + pad * 2, 14 / zoomPx);
+            ctx.fillStyle = '#fef3c7';
+            ctx.fillText(label, midX, midY - 3 / zoomPx);
+            ctx.restore();
+          } else if (drawingTownPoints.length === 2 && curPos) {
+            const p0 = drawingTownPoints[0];
+            const p1 = drawingTownPoints[1];
+            const rect = rectangleFrom3Points(p0, p1, [curPos.x, curPos.y]);
+            const edgeM = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) * metersPerUnit;
+            const vx = p1[0] - p0[0];
+            const vy = p1[1] - p0[1];
+            const elen = Math.hypot(vx, vy) || 1;
+            const nx = -vy / elen;
+            const ny = vx / elen;
+            const depthM = Math.abs((curPos.x - p0[0]) * nx + (curPos.y - p0[1]) * ny) * metersPerUnit;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(rect[0][0], rect[0][1]);
+            for (let i = 1; i < 4; i++) ctx.lineTo(rect[i][0], rect[i][1]);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
+            ctx.fill();
+            ctx.strokeStyle = '#f59e0b';
+            ctx.lineWidth = 1.8 / zoomPx;
+            ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+            ctx.stroke();
+
+            for (const pt of [p0, p1]) {
+              ctx.beginPath();
+              ctx.arc(pt[0], pt[1], 4 / zoomPx, 0, Math.PI * 2);
+              ctx.fillStyle = '#f59e0b';
+              ctx.fill();
+              ctx.strokeStyle = '#1c1917';
+              ctx.lineWidth = 1.0 / zoomPx;
+              ctx.stroke();
+            }
+
+            const label = `幅: ${edgeM.toFixed(1)}m × 奥行: ${depthM.toFixed(1)}m (クリックで確定)`;
+            ctx.font = `bold ${Math.max(10, 11 / viewport.zoom)}px sans-serif`;
+            ctx.setLineDash([]);
+            const cx = (rect[0][0] + rect[2][0]) * 0.5;
+            const cy = (rect[0][1] + rect[2][1]) * 0.5;
+            const tm = ctx.measureText(label);
+            const pad = 3.5 / zoomPx;
+            ctx.fillStyle = 'rgba(28, 25, 23, 0.88)';
+            ctx.fillRect(cx - tm.width / 2 - pad, cy - 8 / zoomPx - pad, tm.width + pad * 2, 16 / zoomPx);
+            ctx.fillStyle = '#fef3c7';
+            ctx.textAlign = 'center';
+            ctx.fillText(label, cx, cy + 4 / zoomPx);
+            ctx.restore();
+          }
+        }
+
+        if (townToolConfig.buildingDrawMode === 'polygon' && drawingTownPoints.length > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
+          for (let i = 1; i < drawingTownPoints.length; i++) ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
+          if (curPos) ctx.lineTo(curPos.x, curPos.y);
+
+          if (drawingTownPoints.length >= 2 && curPos) {
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.2)';
+            ctx.fill();
+          }
+
+          ctx.strokeStyle = '#f59e0b';
+          ctx.lineWidth = 1.8 / zoomPx;
+          ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+          ctx.stroke();
+
+          for (let i = 0; i < drawingTownPoints.length; i++) {
+            const pt = drawingTownPoints[i];
+            ctx.beginPath();
+            ctx.arc(pt[0], pt[1], (i === 0 ? 5 : 3.5) / zoomPx, 0, Math.PI * 2);
+            ctx.fillStyle = i === 0 ? '#34d399' : '#f59e0b';
+            ctx.fill();
+            ctx.strokeStyle = '#1c1917';
+            ctx.lineWidth = 1.0 / zoomPx;
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+      }
+
+      // 4h. Town District Drawing Overlay
+      if (brushSettings.mode === 'townDistrict' && drawingTownPoints.length > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(drawingTownPoints[0][0], drawingTownPoints[0][1]);
+        for (let i = 1; i < drawingTownPoints.length; i++) ctx.lineTo(drawingTownPoints[i][0], drawingTownPoints[i][1]);
+        if (curPos) ctx.lineTo(curPos.x, curPos.y);
+
+        if (drawingTownPoints.length >= 2 && curPos) {
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(168, 85, 247, 0.25)';
+          ctx.fill();
+        }
+
+        ctx.strokeStyle = '#c084fc';
+        ctx.lineWidth = 2.0 / zoomPx;
+        ctx.setLineDash([4 / zoomPx, 4 / zoomPx]);
+        ctx.stroke();
+
+        for (let i = 0; i < drawingTownPoints.length; i++) {
+          const pt = drawingTownPoints[i];
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], (i === 0 ? 5.5 : 3.5) / zoomPx, 0, Math.PI * 2);
+          ctx.fillStyle = i === 0 ? '#34d399' : '#c084fc';
+          ctx.fill();
+          ctx.strokeStyle = '#1c1917';
+          ctx.lineWidth = 1.0 / zoomPx;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    townPerf.end('previewOverlay');
     ctx.restore();
-  }, [viewport, brushSettings.mode, brushSettings.radius, symbolToolSettings?.scatterRadius]);
+  }, [
+    viewport,
+    brushSettings.mode,
+    brushSettings.radius,
+    symbolToolSettings?.scatterRadius,
+    activeRegionalMap?.kind,
+    effectiveWidthKm,
+    currentWidth,
+    currentHeight,
+    currentElevation,
+    currentCols,
+    currentRows,
+    currentSeaLevel,
+    showTownObjects,
+    townObjects,
+    effectiveTownSelectedIds,
+    selectedVertex,
+    selectedGate,
+    townRotationHandle,
+    townSnapCandidates,
+    townToolConfig,
+    drawingTownPoints,
+    townMarqueeBox,
+    templatePlacement,
+    autoFillPreviewBuildings,
+    selectMethod,
+    followCoastline,
+    snapCoastline,
+    rect2Start,
+    polygonPoints,
+    drawingRiverPoints,
+    drawingLakeStart,
+    drawingLakePolygon,
+    waterSettings,
+  ]);
+
+  renderPreviewOverlayRef.current = renderPreviewOverlay;
+  const renderCursorOverlay = renderPreviewOverlay;
+
+  // Keep preview overlay in sync whenever selection, preview, or tool states change
+  useEffect(() => {
+    renderPreviewOverlay();
+  }, [
+    selectedTownObjectId,
+    selectedTownObjectIds,
+    selectedVertex,
+    selectedGate,
+    templatePlacement,
+    autoFillPreviewBuildings,
+    drawingTownPoints,
+    townMarqueeBox,
+    renderPreviewOverlay,
+  ]);
 
   // Unified redraw
   const redraw = useCallback(() => {
     renderWebGL();
-    renderOverlay();
-    renderCursorOverlay();
-  }, [renderWebGL, renderOverlay, renderCursorOverlay]);
+    scheduleOverlayRender();
+    renderPreviewOverlay();
+  }, [renderWebGL, scheduleOverlayRender, renderPreviewOverlay]);
 
   // Load background image when mapBackgroundUrl changes
   useEffect(() => {
     if (!mapBackgroundUrl) {
       bgImageRef.current = null;
-      renderOverlay();
+      scheduleOverlayRender();
       return;
     }
     const img = new Image();
@@ -2573,9 +2774,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     img.src = mapBackgroundUrl;
     img.onload = () => {
       bgImageRef.current = img;
-      renderOverlay();
+      scheduleOverlayRender();
     };
-  }, [mapBackgroundUrl, renderOverlay]);
+  }, [mapBackgroundUrl, scheduleOverlayRender]);
 
   useEffect(() => {
     redraw();
@@ -2584,12 +2785,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   // Redraw overlay whenever a newly referenced custom pixel asset finishes loading
   useEffect(() => {
     setCustomImageLoadedCallback(() => {
-      renderOverlay();
+      scheduleOverlayRender();
     });
     return () => {
       setCustomImageLoadedCallback(null);
     };
-  }, [renderOverlay]);
+  }, [scheduleOverlayRender]);
 
   // Handle Resize & Canvas Initialization
   useEffect(() => {
@@ -2771,7 +2972,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 if (hasEdgeLessThanM(rect, 1.5, metersPerUnit)) {
                   showToast('辺の長さが1.5m未満のため作成できません');
                   setDrawingTownPoints([]);
-                  renderOverlay();
+                  renderPreviewOverlay();
                   return;
                 }
                 const now = Date.now();
@@ -2791,6 +2992,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                   tone,
                 };
                 const next = [...townObjects, newBuilding];
+                townPerf.startConfirmation('建物を追加');
                 onCommitHistory({
                   description: '建物を追加',
                   timestamp: Date.now(),
@@ -2803,7 +3005,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 onSelectTownObjectIds?.([newBuilding.id]);
                 onSelectTownObjectId?.(newBuilding.id);
                 setDrawingTownPoints([]);
-                renderOverlay();
+                scheduleOverlayRender();
+                renderPreviewOverlay();
               }
             } else if (brushSettings.mode === 'townDistrict') {
               finalizeTownDistrict(drawingTownPoints);
@@ -2815,13 +3018,13 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           if (e.key === 'Escape') {
             e.preventDefault();
             setDrawingTownPoints([]);
-            renderOverlay();
+            renderPreviewOverlay();
             return;
           }
           if (e.key === 'Backspace' && drawingTownPoints.length > 0) {
             e.preventDefault();
             setDrawingTownPoints((prev) => prev.slice(0, prev.length - 1));
-            renderOverlay();
+            renderPreviewOverlay();
             return;
           }
         }
@@ -3380,7 +3583,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         } else if (e.button === 2) {
           e.preventDefault();
           onCancelTemplatePlacement?.();
-          renderOverlay();
+          renderPreviewOverlay();
           return;
         } else if (e.button === 0) {
           const anchor: Pt = [worldPos.x, worldPos.y];
@@ -3395,6 +3598,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             }
           );
 
+          townPerf.startConfirmation(`テンプレート「${templatePlacement.template.name}」を配置`);
           onCommitHistory({
             description: `テンプレート「${templatePlacement.template.name}」を配置`,
             timestamp: Date.now(),
@@ -3407,7 +3611,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           onSelectTownObjectIds?.(placedIds);
           onSelectTownObjectId?.(placedIds[0] ?? null);
           showToast(`テンプレート「${templatePlacement.template.name}」を配置しました`);
-          renderOverlay();
+          scheduleOverlayRender();
+          renderPreviewOverlay();
           return;
         }
       }
@@ -3429,8 +3634,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             finalizeTownDrawing(drawingTownPoints);
           } else {
             setDrawingTownPoints([]);
+            renderPreviewOverlay();
           }
-          renderOverlay();
           return;
         }
 
@@ -3457,7 +3662,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             drawingTownPoints.length >= 2
           ) {
             finalizeTownDrawing(drawingTownPoints, true);
-            renderOverlay();
             return;
           }
 
@@ -3465,13 +3669,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const lastPt = drawingTownPoints[drawingTownPoints.length - 1];
           if (Math.hypot(clickPt[0] - lastPt[0], clickPt[1] - lastPt[1]) <= 2 / viewport.zoom) {
             finalizeTownDrawing(drawingTownPoints);
-            renderOverlay();
             return;
           }
         }
 
         setDrawingTownPoints((prev) => [...prev, clickPt]);
-        renderOverlay();
+        renderPreviewOverlay();
         return;
       }
 
@@ -3480,7 +3683,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         if (e.button === 2) {
           e.preventDefault();
           setDrawingTownPoints([]);
-          renderOverlay();
+          renderPreviewOverlay();
           return;
         }
 
@@ -3525,6 +3728,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           };
 
           const next = [...townObjects, newBuilding];
+          townPerf.startConfirmation('建物を追加');
           onCommitHistory({
             description: '建物を追加',
             timestamp: Date.now(),
@@ -3536,7 +3740,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           onUpdateTownObjects?.(next);
           onSelectTownObjectIds?.([newBuilding.id]);
           onSelectTownObjectId?.(newBuilding.id);
-          renderOverlay();
+          scheduleOverlayRender();
+          renderPreviewOverlay();
           return;
         }
 
@@ -3550,7 +3755,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
 
           if (drawingTownPoints.length === 0) {
             setDrawingTownPoints([clickPt]);
-            renderOverlay();
+            renderPreviewOverlay();
             return;
           }
 
@@ -3566,7 +3771,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               return;
             }
             setDrawingTownPoints([drawingTownPoints[0], clickPt]);
-            renderOverlay();
+            renderPreviewOverlay();
             return;
           }
 
@@ -3578,7 +3783,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             if (hasEdgeLessThanM(rect, 1.5, metersPerUnit)) {
               showToast('辺の長さが1.5m未満のため作成できません');
               setDrawingTownPoints([]);
-              renderOverlay();
+              renderPreviewOverlay();
               return;
             }
 
@@ -3601,6 +3806,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             };
 
             const next = [...townObjects, newBuilding];
+            townPerf.startConfirmation('建物を追加');
             onCommitHistory({
               description: '建物を追加',
               timestamp: Date.now(),
@@ -3613,7 +3819,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             onSelectTownObjectIds?.([newBuilding.id]);
             onSelectTownObjectId?.(newBuilding.id);
             setDrawingTownPoints([]);
-            renderOverlay();
+            scheduleOverlayRender();
+            renderPreviewOverlay();
             return;
           }
         }
@@ -3643,7 +3850,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           }
 
           setDrawingTownPoints((prev) => [...prev, clickPt]);
-          renderOverlay();
+          renderPreviewOverlay();
           return;
         }
       }
@@ -3653,7 +3860,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         if (e.button === 2) {
           e.preventDefault();
           setDrawingTownPoints([]);
-          renderOverlay();
+          renderPreviewOverlay();
           return;
         }
 
@@ -3675,7 +3882,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         }
 
         setDrawingTownPoints((prev) => [...prev, clickPt]);
-        renderOverlay();
+        renderPreviewOverlay();
         return;
       }
 
@@ -4525,7 +4732,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const worldPos = screenToWorld(e.clientX, e.clientY);
     cursorPosRef.current = worldPos;
 
-    // Town Dragging (Marquee / Translate / Vertex / Gate)
+    // Town Dragging (Marquee / Translate / Vertex / Gate / Rotate)
     if (activeRegionalMap?.kind === 'town') {
       if (townDragRef.current) {
         townDragRef.current.hasMoved = true;
@@ -4538,7 +4745,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             currentX: worldPos.x,
             currentY: worldPos.y,
           });
-          renderOverlay();
+          renderPreviewOverlay();
           return;
         }
 
@@ -4549,8 +4756,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const next = drag.initialObjects.map((o) =>
             selectedSet.has(o.id) ? translateObject(o, dx, dy) : o
           );
-          onUpdateTownObjects?.(next);
-          renderOverlay();
+          drag.draftObjects = next;
+          renderPreviewOverlay();
           return;
         }
 
@@ -4579,8 +4786,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const next = drag.initialObjects.map((o) =>
             o.id === objId ? moveVertex(o, vIdx, targetP) : o
           );
-          onUpdateTownObjects?.(next);
-          renderOverlay();
+          drag.draftObjects = next;
+          renderPreviewOverlay();
           return;
         }
 
@@ -4592,8 +4799,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             const nearest = nearestPointOnPolyline(wall.points, [worldPos.x, worldPos.y], wall.closed);
             const updatedWall = moveGate(wall, gIdx, nearest.segmentIndex, nearest.t);
             const next = drag.initialObjects.map((o) => (o.id === objId ? updatedWall : o));
-            onUpdateTownObjects?.(next);
-            renderOverlay();
+            drag.draftObjects = next;
+            renderPreviewOverlay();
             return;
           }
         }
@@ -4611,15 +4818,16 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           const next = drag.initialObjects.map((o) =>
             selectedSet.has(o.id) ? rotateObject(o, center, delta) : o
           );
-          onUpdateTownObjects?.(next);
-          renderOverlay();
+          drag.draftObjects = next;
+          renderPreviewOverlay();
           return;
         }
       }
 
-      // Update rubberband line or preset preview when mouse moves
+      // Update rubberband line, preset preview, or handles when mouse moves
       if (
         templatePlacement ||
+        brushSettings.mode === 'townSelect' ||
         ((brushSettings.mode === 'townRoad' ||
           brushSettings.mode === 'townWall' ||
           brushSettings.mode === 'townPier' ||
@@ -4627,7 +4835,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           brushSettings.mode === 'townDistrict') &&
         (drawingTownPoints.length > 0 || (brushSettings.mode === 'townBuilding' && townToolConfig.buildingDrawMode === 'preset')))
       ) {
-        renderOverlay();
+        renderPreviewOverlay();
       }
     }
 
@@ -4998,11 +5206,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           }
           setTownMarqueeBox(null);
         }
-        renderOverlay();
+        renderPreviewOverlay();
         return;
       }
 
-      if (drag.hasMoved) {
+      if (drag.hasMoved && drag.draftObjects) {
         const desc =
           drag.type === 'translate'
             ? '町部品の移動'
@@ -5012,16 +5220,22 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             ? '町部品の回転'
             : '城門の移動';
 
+        townPerf.startConfirmation(desc);
         onCommitHistory({
           description: desc,
           timestamp: Date.now(),
           townChanges: {
             prevObjects: drag.initialObjects,
-            newObjects: currentTownObjectsRef.current,
+            newObjects: drag.draftObjects,
           },
         });
+        onUpdateTownObjects?.(drag.draftObjects);
+        scheduleOverlayRender();
+        renderPreviewOverlay();
+        return;
       }
-      renderOverlay();
+      scheduleOverlayRender();
+      renderPreviewOverlay();
       return;
     }
 
