@@ -16,6 +16,8 @@ export interface WaterGenStats {
   riverCount: number;
   lakeCount: number;
   totalRiverLength?: number;
+  longestRiverKm?: number;
+  avgRiverLengthKm?: number;
   computationTimeMs?: number;
 }
 
@@ -27,6 +29,7 @@ export interface WaterGenOptions {
   worldWidthKm?: number;
   riverDensity?: number; // 0 ~ 100, default 40
   meander?: number;      // 0 ~ 1.0 (or 0 ~ 100%), default 0.6
+  headExtension?: number;// 0 ~ 1.0 (or 0 ~ 100%), default 0.8
   onProgress?: (percent: number, message: string) => void;
 }
 
@@ -247,6 +250,9 @@ export function generateRiversAndLakes(
   const worldWidthKm = options.worldWidthKm || 40000;
   const riverDensity = options.riverDensity ?? 40;
   const meander = options.meander ?? 0.6;
+  const headExtension = typeof options.headExtension === 'number'
+    ? Math.max(0, Math.min(1, options.headExtension > 1 ? options.headExtension / 100 : options.headExtension))
+    : 0.8;
   const onProgress = options.onProgress;
 
   if (!enableRivers && !enableLakes) {
@@ -299,6 +305,7 @@ export function generateRiversAndLakes(
       worldWidthKm,
       riverDensity,
       meander,
+      headExtension,
       maxMainRivers: targetRiverCount,
     });
   }
@@ -306,15 +313,24 @@ export function generateRiversAndLakes(
   onProgress?.(100, '水系生成完了！');
 
   const elapsed = performance.now() - startTime;
+  const kmPerUnit = Math.max(0.001, worldWidthKm / mapWidth);
   let totalRiverLength = 0;
+  let maxRiverLength = 0;
   for (const r of rivers) {
+    let rLen = 0;
     for (let i = 0; i < r.points.length - 1; i++) {
-      totalRiverLength += Math.hypot(
+      rLen += Math.hypot(
         r.points[i + 1][0] - r.points[i][0],
         r.points[i + 1][1] - r.points[i][1]
       );
     }
+    totalRiverLength += rLen;
+    if (rLen > maxRiverLength) {
+      maxRiverLength = rLen;
+    }
   }
+
+  const avgRiverLength = rivers.length > 0 ? totalRiverLength / rivers.length : 0;
 
   return {
     rivers,
@@ -323,6 +339,8 @@ export function generateRiversAndLakes(
       riverCount: rivers.length,
       lakeCount: lakes.length,
       totalRiverLength: Math.round(totalRiverLength),
+      longestRiverKm: Number((maxRiverLength * kmPerUnit).toFixed(1)),
+      avgRiverLengthKm: Number((avgRiverLength * kmPerUnit).toFixed(1)),
       computationTimeMs: Math.round(elapsed),
     },
   };

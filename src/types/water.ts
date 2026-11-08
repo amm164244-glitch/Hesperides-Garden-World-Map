@@ -39,6 +39,7 @@ export interface WaterToolSettings {
   meander?: number;
   riverCount?: number;
   lakeCount?: number;
+  headExtension?: number; // 0 ~ 100, default 80
 }
 
 export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
@@ -51,5 +52,6 @@ export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
   meander: 60,
   riverCount: 14,
   lakeCount: 6,
+  headExtension: 80,
 };
 

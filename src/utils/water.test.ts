@@ -16,6 +16,7 @@ import {
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
 import { computeHydrology, downsampleForHydrology } from './hydrology';
+import { hasSelfIntersection, clampSharpCorners } from './riverExtraction';
 
 /**
  * Asserts that river elevations monotonically decrease downstream (towards mouth).
@@ -385,3 +386,302 @@ test('Large grid downsampling scales massive 4096x2048 grid to <= 2048x1024', ()
   assert.ok(result.rows <= 1024);
   assert.equal(result.grid.length, result.cols * result.rows);
 });
+
+// =========================================================================
+// River Improvements: Headwaters, Smoothness, Estuary & Confluence Tests
+// =========================================================================
+
+function computeTotalRiverLength(rivers: RiverData[]): number {
+  let total = 0;
+  for (const r of rivers) {
+    for (let i = 0; i < r.points.length - 1; i++) {
+      total += Math.hypot(r.points[i + 1][0] - r.points[i][0], r.points[i + 1][1] - r.points[i][1]);
+    }
+  }
+  return total;
+}
+
+test('River Improvement: Headwaters extension significantly increases river length compared to extension=0', () => {
+  const cols = 96;
+  const rows = 96;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // Sloping terrain with converging central valley draining down to ocean on the right
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      const valley = Math.abs(v - 0.5) * 25.0;
+      grid[r * cols + c] = 85.0 - u * 60.0 + valley;
+    }
+  }
+
+  // Generate with headExtension = 0 (no head extension)
+  const res0 = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    777,
+    { riverCount: 8, lakeCount: 0, riverDensity: 50, headExtension: 0 }
+  );
+
+  // Generate with headExtension = 0.8 (extended headwaters)
+  const res80 = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    777,
+    { riverCount: 8, lakeCount: 0, riverDensity: 50, headExtension: 0.8 }
+  );
+
+  assert.ok(res0.rivers.length > 0);
+  assert.ok(res80.rivers.length > 0);
+
+  const len0 = computeTotalRiverLength(res0.rivers);
+  const len80 = computeTotalRiverLength(res80.rivers);
+
+  // Extended rivers must be significantly longer than unextended rivers
+  assert.ok(
+    len80 > len0 + 25,
+    `Headwaters extension (0.8) total length (${len80.toFixed(1)}) must be significantly longer than extension=0 (${len0.toFixed(1)})`
+  );
+
+  // Verify monotonicity of extended rivers
+  assertElevationMonotonicity(res80.rivers, grid, cols, rows, mapW, mapH);
+});
+
+test('River Improvement: Smoothness - eliminates acute corner foldbacks and relaxes corners', () => {
+  // Test direct corner clamp helper
+  const sharpCornerPts: [number, number][] = [
+    [0, 0],
+    [10, 0],
+    [0, 5], // acute hairpin turn
+  ];
+  const clamped = clampSharpCorners(sharpCornerPts);
+  // Corner at index 1 must be relaxed toward midpoint of neighbors
+  assert.notDeepEqual(clamped[1], [10, 0]);
+  assert.ok(clamped[1][0] < 10);
+
+  // Test generated rivers for absence of sharp foldbacks
+  const cols = 64;
+  const rows = 64;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      grid[r * cols + c] = 80.0 - u * 55.0 + Math.sin(v * 6) * 5;
+    }
+  }
+
+  const { rivers } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    999,
+    { riverCount: 6, lakeCount: 0, riverDensity: 50, meander: 0.6 }
+  );
+
+  for (const river of rivers) {
+    for (let i = 1; i < river.points.length - 1; i++) {
+      const v1x = river.points[i][0] - river.points[i - 1][0];
+      const v1y = river.points[i][1] - river.points[i - 1][1];
+      const v2x = river.points[i + 1][0] - river.points[i][0];
+      const v2y = river.points[i + 1][1] - river.points[i][1];
+      const len1 = Math.hypot(v1x, v1y);
+      const len2 = Math.hypot(v2x, v2y);
+      if (len1 > 1e-4 && len2 > 1e-4) {
+        const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
+        // dot >= -0.25 ensures turn angle <= 104 deg, strictly eliminating sharp < 90 deg foldbacks
+        assert.ok(
+          dot >= -0.25,
+          `River ${river.id} at point ${i} has acute turn (dot=${dot.toFixed(2)})`
+        );
+      }
+    }
+  }
+});
+
+test('River Improvement: Estuaries & Confluences - coastline snapping, estuary expansion, and confluence alignment', () => {
+  const cols = 80;
+  const rows = 80;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // Diagonal slope from (0,0) down to (1000, 1000)
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const dist = Math.hypot(c, r);
+      grid[r * cols + c] = 80.0 - dist * 0.65;
+    }
+  }
+
+  const { rivers } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    1234,
+    { riverCount: 10, lakeCount: 0, riverDensity: 70 }
+  );
+
+  const cellSize = mapW / cols;
+
+  for (const r of rivers) {
+    if (r.terminatesAt === 'ocean') {
+      const pLast = r.points[r.points.length - 1];
+      const eMouth = sampleElev(grid, cols, rows, mapW, mapH, pLast[0], pLast[1]);
+      // Mouth endpoint should be snapped to coast (near seaLevel) or border
+      const isBorder = pLast[0] <= 1 || pLast[0] >= mapW - 1 || pLast[1] <= 1 || pLast[1] >= mapH - 1;
+      if (!isBorder) {
+        assert.ok(
+          Math.abs(eMouth - seaLevel) <= 2.0 || eMouth <= seaLevel,
+          `River ${r.id} ocean mouth at (${pLast[0].toFixed(1)}, ${pLast[1].toFixed(1)}) elevation ${eMouth.toFixed(2)} should be near seaLevel ${seaLevel}`
+        );
+      }
+      // Estuary width expanded
+      assert.ok(r.widthEnd >= r.widthStart, `Estuary widthEnd must be >= widthStart`);
+    } else if (r.terminatesAt === 'river' && r.connectedRiverId) {
+      const mainRiver = rivers.find((m) => m.id === r.connectedRiverId);
+      if (mainRiver) {
+        const pLast = r.points[r.points.length - 1];
+        // Must lie on one of the segments of mainRiver
+        let minDist = Infinity;
+        let bestSegTangent: [number, number] = [0, 0];
+        for (let s = 0; s < mainRiver.points.length - 1; s++) {
+          const A = mainRiver.points[s];
+          const B = mainRiver.points[s + 1];
+          const ABx = B[0] - A[0];
+          const ABy = B[1] - A[1];
+          const len2 = ABx * ABx + ABy * ABy;
+          if (len2 < 1e-6) continue;
+          const t = Math.max(0, Math.min(1, ((pLast[0] - A[0]) * ABx + (pLast[1] - A[1]) * ABy) / len2));
+          const projX = A[0] + t * ABx;
+          const projY = A[1] + t * ABy;
+          const d = Math.hypot(pLast[0] - projX, pLast[1] - projY);
+          if (d < minDist) {
+            minDist = d;
+            const l = Math.hypot(ABx, ABy) || 1;
+            bestSegTangent = [ABx / l, ABy / l];
+          }
+        }
+        assert.ok(
+          minDist <= 0.5 * cellSize,
+          `Tributary ${r.id} final point must snap onto main river ${mainRiver.id} segment (dist: ${minDist.toFixed(2)}, max allowed: ${0.5 * cellSize})`
+        );
+
+        // Check confluence angle: tributary incoming direction should align favorably with main stream direction (dot product >= 0, angle <= 90 deg)
+        if (r.points.length >= 2) {
+          const inDx = pLast[0] - r.points[r.points.length - 2][0];
+          const inDy = pLast[1] - r.points[r.points.length - 2][1];
+          const inLen = Math.hypot(inDx, inDy) || 1;
+          const dot = (inDx / inLen) * bestSegTangent[0] + (inDy / inLen) * bestSegTangent[1];
+          assert.ok(
+            dot >= -0.1,
+            `Tributary ${r.id} confluence angle should flow in direction of main river (dot=${dot.toFixed(2)})`
+          );
+        }
+      }
+    }
+  }
+});
+
+test('River Improvement: Rivers do not self-intersect', () => {
+  const cols = 64;
+  const rows = 64;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      grid[r * cols + c] = 85.0 - u * 55.0 + Math.sin(v * 8) * 8;
+    }
+  }
+
+  const { rivers } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    5555,
+    { riverCount: 8, lakeCount: 0, riverDensity: 50, meander: 0.8 }
+  );
+
+  for (const r of rivers) {
+    const selfIntersects = hasSelfIntersection(r.points);
+    assert.equal(selfIntersects, false, `River ${r.id} must not self-intersect`);
+  }
+});
+
+test('River Improvement: Determinism and summary statistics', () => {
+  const cols = 64;
+  const rows = 64;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      grid[r * cols + c] = 75.0 - (c / cols) * 50.0;
+    }
+  }
+
+  const run1 = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    8888,
+    { riverCount: 6, lakeCount: 1, riverDensity: 40, headExtension: 0.8 }
+  );
+
+  const run2 = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    8888,
+    { riverCount: 6, lakeCount: 1, riverDensity: 40, headExtension: 0.8 }
+  );
+
+  assert.deepEqual(run1.rivers, run2.rivers, 'Rivers must be strictly deterministic given same seed');
+  assert.deepEqual(run1.lakes, run2.lakes, 'Lakes must be strictly deterministic given same seed');
+
+  // Verify stats include longestRiverKm and avgRiverLengthKm
+  assert.ok(run1.stats, 'Stats should be present');
+  assert.ok(typeof run1.stats.longestRiverKm === 'number' && run1.stats.longestRiverKm > 0);
+  assert.ok(typeof run1.stats.avgRiverLengthKm === 'number' && run1.stats.avgRiverLengthKm > 0);
+  assert.ok(run1.stats.longestRiverKm >= run1.stats.avgRiverLengthKm);
+});
+

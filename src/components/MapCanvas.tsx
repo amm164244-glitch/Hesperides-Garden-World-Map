@@ -1791,6 +1791,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       meander: number;
       riverCount: number;
       lakeCount: number;
+      headExtension?: number;
       onProgress?: (percent: number, message: string) => void;
       signal?: AbortSignal;
     }) => {
@@ -1825,6 +1826,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               {
                 riverDensity: opts.riverDensity,
                 meander: opts.meander,
+                headExtension: opts.headExtension,
                 riverCount: opts.riverCount,
                 lakeCount: opts.lakeCount,
                 worldWidthKm: effectiveWidthKm,
@@ -1880,6 +1882,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             waterOptions: {
               riverDensity: opts.riverDensity,
               meander: opts.meander,
+              headExtension: opts.headExtension,
               riverCount: opts.riverCount,
               lakeCount: opts.lakeCount,
               worldWidthKm: effectiveWidthKm,
@@ -1901,6 +1904,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           {
             riverDensity: opts.riverDensity,
             meander: opts.meander,
+            headExtension: opts.headExtension,
             riverCount: opts.riverCount,
             lakeCount: opts.lakeCount,
             worldWidthKm: effectiveWidthKm,
@@ -5836,6 +5840,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             setDrawingLakeStart(null);
             renderOverlay();
           }}
+          kmPerUnit={currentWidth > 0 ? effectiveWidthKm / currentWidth : 1.0}
           onAutoGenerateWater={handleAutoGenerateWater}
         />
       )}

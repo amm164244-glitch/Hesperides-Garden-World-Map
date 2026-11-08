@@ -21,6 +21,8 @@ export interface AutoGenResult {
   riverCount: number;
   lakeCount: number;
   computationTimeMs?: number;
+  longestRiverKm?: number;
+  avgRiverLengthKm?: number;
 }
 
 interface WaterPanelProps {
@@ -41,11 +43,13 @@ interface WaterPanelProps {
   inProgressCount?: number;
   onCommitRiverDrawing?: () => void;
   onCancelRiverDrawing?: () => void;
+  kmPerUnit?: number;
   onAutoGenerateWater?: (options: {
     riverDensity: number;
     meander: number;
     riverCount: number;
     lakeCount: number;
+    headExtension: number;
     onProgress?: (percent: number, message: string) => void;
     signal?: AbortSignal;
   }) => Promise<AutoGenResult | void> | void;
@@ -69,6 +73,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
   inProgressCount = 0,
   onCommitRiverDrawing,
   onCancelRiverDrawing,
+  kmPerUnit = 1.0,
   onAutoGenerateWater,
 }) => {
   const selectedRiver = selectedWaterType === 'river' ? rivers.find((r) => r.id === selectedWaterId) : null;
@@ -85,6 +90,21 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
   const meander = waterSettings.meander ?? 60;
   const riverCount = waterSettings.riverCount ?? 14;
   const lakeCount = waterSettings.lakeCount ?? 6;
+  const headExtension = waterSettings.headExtension ?? 80;
+
+  // River length statistics
+  const riverLengthsKm = rivers.map((r) => {
+    let len = 0;
+    for (let i = 0; i < r.points.length - 1; i++) {
+      len += Math.hypot(r.points[i + 1][0] - r.points[i][0], r.points[i + 1][1] - r.points[i][1]);
+    }
+    return len * kmPerUnit;
+  });
+
+  const longestRiverKm = riverLengthsKm.length > 0 ? Math.max(...riverLengthsKm) : 0;
+  const avgRiverLengthKm = riverLengthsKm.length > 0
+    ? riverLengthsKm.reduce((a, b) => a + b, 0) / riverLengthsKm.length
+    : 0;
 
   const handleStartAutoGenerate = async () => {
     if (!onAutoGenerateWater || isGenerating) return;
@@ -102,6 +122,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
         meander,
         riverCount,
         lakeCount,
+        headExtension,
         onProgress: (percent, message) => {
           setGenProgress({ percent, message });
         },
@@ -261,6 +282,26 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
                 className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
               />
             </div>
+
+            {/* 5. Headwaters Extension */}
+            <div className="flex flex-col gap-1 col-span-2">
+              <div className="flex justify-between text-stone-300">
+                <span title="大きいほど、川が上流(山の奥)まで延びます">源流の延長:</span>
+                <span className="font-mono text-cyan-300 font-bold">{headExtension}%</span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={headExtension}
+                disabled={isGenerating}
+                onChange={(e) => onChangeWaterSettings({ headExtension: Number(e.target.value) })}
+                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+                title="大きいほど、川が上流(山の奥)まで延びます"
+              />
+              <span className="text-[10px] text-stone-400">大きいほど、川が上流(山の奥)まで延びます</span>
+            </div>
           </div>
         )}
 
@@ -295,12 +336,20 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
               </button>
 
               {lastResult && (
-                <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-2.5 py-1 rounded">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>
-                    生成完了: 川 {lastResult.riverCount}本 / 湖 {lastResult.lakeCount}個
-                    {lastResult.computationTimeMs ? ` (${lastResult.computationTimeMs}ms)` : ''}
-                  </span>
+                <div className="flex flex-col gap-0.5 text-[11px] text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-2.5 py-1 rounded">
+                  <div className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>
+                      生成完了: 川 {lastResult.riverCount}本 / 湖 {lastResult.lakeCount}個
+                      {lastResult.computationTimeMs ? ` (${lastResult.computationTimeMs}ms)` : ''}
+                    </span>
+                  </div>
+                  {rivers.length > 0 && (
+                    <div className="text-[10px] text-stone-300 pl-5 flex items-center gap-3">
+                      <span>最長の川: {longestRiverKm.toFixed(1)} km</span>
+                      <span>川の平均の長さ: {avgRiverLengthKm.toFixed(1)} km</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -357,7 +406,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
       {mode === 'river' && (
         <div className="flex flex-col gap-2 bg-stone-950/50 p-2.5 rounded-lg border border-stone-800">
           <div className="flex items-center justify-between text-stone-400 text-[11px]">
-            <span>💡 地図をクリックして頂点を配置。Enterまたはダブルクリックで完了</span>
+            <span>地図をクリックして頂点を配置。Enterまたはダブルクリックで完了</span>
             {inProgressCount > 0 && (
               <div className="flex items-center gap-1">
                 <button
@@ -420,8 +469,8 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-stone-400 text-[11px]">
               {waterSettings.lakeMode === 'drag'
-                ? '💡 地図上をドラッグするとその位置に自然な湖が配置されます'
-                : '💡 地図をクリックして湖の輪郭多角形を描画。Enterで完了'}
+                ? '地図上をドラッグするとその位置に自然な湖が配置されます'
+                : '地図をクリックして湖の輪郭多角形を描画。Enterで完了'}
             </span>
             <div className="flex items-center gap-1 bg-stone-900 p-0.5 rounded border border-stone-800">
               <button
@@ -474,7 +523,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
           {selectedRiver ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-amber-300">🌊 選択中の川:</span>
+                <span className="font-semibold text-amber-300">選択中の川:</span>
                 <button
                   type="button"
                   onClick={() => onDeleteWater(selectedRiver.id, 'river')}
@@ -536,7 +585,7 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
           ) : selectedLake ? (
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-amber-300">🏞️ 選択中の湖:</span>
+                <span className="font-semibold text-amber-300">選択中の湖:</span>
                 <button
                   type="button"
                   onClick={() => onDeleteWater(selectedLake.id, 'lake')}
