@@ -74,6 +74,102 @@ export function generateTectonicWorld(
   const warpStrength = 0.35 + ((config.coastlineComplexity ?? 8) / 10) * 0.45;
   const mountainMult = (config.mountainStrength / 5.0); // 0.2 ~ 2.0
   const islandDensityFactor = Math.max(1, Math.min(10, config.islandDensity || 5)) / 5.0; // 0.2 ~ 2.0
+  const boundarySoftness = config.boundarySoftness !== undefined ? Math.max(0, Math.min(10, config.boundarySoftness)) : 5;
+  const blendWidth = width * (0.006 * boundarySoftness);
+  const continentReach = width * 0.24 * (config.continentSize / 5.0);
+  const boundaryScale = width * 0.14;
+
+  /**
+   * Evaluates terrain elevation for primary plate `pa` interacting with secondary plate `pb`.
+   * Boundary normal is directed from `pa` to `pb`.
+   * Swapping `pa` and `pb` negates both drift vector difference and normal vector, so relMotion is identical.
+   */
+  function evalElev(
+    pa: TectonicPlate,
+    pb: TectonicPlate,
+    dA: number,
+    gap: number,
+    wx: number,
+    wy: number,
+    macroSwell: number,
+    interiorRidges: number,
+    mainSpine: number
+  ): number {
+    const boundaryFactor = Math.min(1.0, Math.max(0.0, gap / boundaryScale));
+
+    // Relative motion vector along boundary normal
+    const nx = pb.x - pa.x;
+    const ny = pb.y - pa.y;
+    const nLen = Math.hypot(nx, ny) || 1.0;
+    const normX = nx / nLen;
+    const normY = ny / nLen;
+
+    // Convergence rate: positive means plates colliding, negative means pulling apart
+    const relMotion = (pa.driftX - pb.driftX) * normX + (pa.driftY - pb.driftY) * normY;
+
+    let el = pa.baseElevation + macroSwell + (pa.isContinental ? interiorRidges : interiorRidges * 0.35);
+
+    // Continental interior core boost
+    if (pa.isContinental) {
+      const coreDist = 1.0 - Math.min(1.0, dA / continentReach);
+      el += Math.pow(Math.max(0.0, coreDist), 1.2) * 18.0;
+    }
+
+    // Mountain ranges at tectonic boundaries with wide foothills and branched spurs
+    const nearBoundary = 1.0 - boundaryFactor;
+    if (nearBoundary > 0.0) {
+      const foothillBelt = Math.exp(-Math.pow(boundaryFactor / 0.65, 1.8)); // broad foothill envelope
+      const spineBelt = Math.exp(-Math.pow(boundaryFactor / 0.30, 2.0)); // central sharp ridge
+
+      // Branching cross-spurs perpendicular to boundary (支脈)
+      const crossSpurs = mountainNoise.ridged(wx * 0.0075 + normY * 0.7, wy * 0.0075 - normX * 0.7, 3, 0.52, 2.1);
+
+      if (relMotion > 0.05) {
+        // Convergent boundary (衝突・沈み込み)
+        if (pa.isContinental && pb.isContinental) {
+          // Continental-continental collision -> High fold mountain ranges with wide foothills
+          const mountainHeight = (mainSpine * 0.65 + crossSpurs * 0.35) * (34.0 * mountainMult);
+          const foothillHeight = foothillBelt * (18.0 * mountainMult);
+          el += spineBelt * mountainHeight + foothillHeight;
+        } else if (pa.isContinental && !pb.isContinental) {
+          // Continental margin subduction (e.g. Andes / Cascades)
+          const mountainHeight = (mainSpine * 0.70 + crossSpurs * 0.30) * (26.0 * mountainMult);
+          const foothillHeight = foothillBelt * (14.0 * mountainMult);
+          el += spineBelt * mountainHeight + foothillHeight;
+        } else if (!pa.isContinental && pb.isContinental) {
+          // Ocean trench side: subduction trench (deep abyss)
+          el -= 26.0 * Math.pow(nearBoundary, 2.0);
+        } else {
+          // Oceanic-oceanic: volcanic island arcs (scales with islandDensity)
+          const arcNoise = macroNoise.sample(wx * 0.008, wy * 0.008);
+          const arcThresh = 0.35 - (islandDensityFactor - 1.0) * 0.15;
+          if (arcNoise > arcThresh) {
+            el += ((arcNoise - arcThresh) * 36.0 + 8.0) * foothillBelt * islandDensityFactor;
+          }
+        }
+      } else if (relMotion < -0.05) {
+        // Divergent boundary (拡大境界 / 中央海嶺 or 大陸地溝帯)
+        if (!pa.isContinental) {
+          // Mid-ocean ridge
+          el += 12.0 * foothillBelt;
+        } else {
+          // Continental rift valley
+          el -= 14.0 * Math.pow(nearBoundary, 2.0);
+        }
+      }
+    }
+
+    // Oceanic hotspots / archipelagos outside boundaries (scales with islandDensity)
+    if (!pa.isContinental && nearBoundary < 0.35) {
+      const hotspotVal = macroNoise.sample(wx * 0.012, wy * 0.012);
+      const hotspotThresh = 0.55 - (islandDensityFactor - 1.0) * 0.15;
+      if (hotspotVal > hotspotThresh) {
+        el += (hotspotVal - hotspotThresh) * 35.0 * islandDensityFactor;
+      }
+    }
+
+    return el;
+  }
 
   // 2. Compute Elevation per grid node
   for (let r = 0; r < gridRows; r++) {
@@ -118,89 +214,30 @@ export function generateTectonicWorld(
       }
       const d1 = Math.sqrt(Math.max(0, d1Sq));
       const d2 = Math.sqrt(Math.max(0, d2Sq));
+      const gap = d2 - d1;
 
-      // Plate boundary proximity with broader transition zone
-      const boundaryFactor = Math.min(1.0, Math.max(0.0, (d2 - d1) / (width * 0.14)));
-
-      // Relative motion vector along boundary normal
-      const nx = (p2.x - p1.x);
-      const ny = (p2.y - p1.y);
-      const nLen = Math.hypot(nx, ny) || 1.0;
-      const normX = nx / nLen;
-      const normY = ny / nLen;
-
-      // Convergence rate: positive means plates colliding, negative means pulling apart
-      const relMotion = (p1.driftX - p2.driftX) * normX + (p1.driftY - p2.driftY) * normY;
-
-      // 2.2 Synthesize rich elevation inside the plate:
-      // Base elevation + fBm macro swell (大きなうねり) + ridged interior hills/ridges (山の尾根)
+      // 2.2 Shared plate-independent noise computed once per cell
       const macroSwell = macroNoise.fbm(warpedX * 0.0013, warpedY * 0.0013, 4, 0.5, 2.0) * 24.0 - 12.0;
       const interiorRidges = mountainNoise.ridged(warpedX * 0.0028, warpedY * 0.0028, 3, 0.55, 2.1) * 16.0;
 
-      let elev = p1.baseElevation + macroSwell + (p1.isContinental ? interiorRidges : interiorRidges * 0.35);
-
-      // Continental interior core boost
-      if (p1.isContinental) {
-        const coreDist = 1.0 - Math.min(1.0, d1 / (width * 0.24 * (config.continentSize / 5.0)));
-        elev += Math.pow(Math.max(0.0, coreDist), 1.2) * 18.0;
-      }
-
-      // 2.3 Mountain ranges at tectonic boundaries with wide foothills and branched spurs
+      // Precalculate mainSpine once per cell only when near boundary
+      const boundaryFactor = Math.min(1.0, Math.max(0.0, gap / boundaryScale));
       const nearBoundary = 1.0 - boundaryFactor;
-      if (nearBoundary > 0.0) {
-        const foothillBelt = Math.exp(-Math.pow(boundaryFactor / 0.65, 1.8)); // broad foothill envelope
-        const spineBelt = Math.exp(-Math.pow(boundaryFactor / 0.30, 2.0)); // central sharp ridge
+      const mainSpine = nearBoundary > 0.0 ? mountainNoise.ridged(wx * 0.0032, wy * 0.0032, 4, 0.58, 2.2) : 0.0;
 
-        // Main collision spine (主稜線)
-        const mainSpine = mountainNoise.ridged(wx * 0.0032, wy * 0.0032, 4, 0.58, 2.2);
-        // Branching cross-spurs perpendicular to boundary (支脈)
-        const crossSpurs = mountainNoise.ridged(wx * 0.0075 + normY * 0.7, wy * 0.0075 - normX * 0.7, 3, 0.52, 2.1);
-
-        if (relMotion > 0.05) {
-          // Convergent boundary (衝突・沈み込み)
-          if (p1.isContinental && p2.isContinental) {
-            // Continental-continental collision -> High fold mountain ranges with wide foothills
-            const mountainHeight = (mainSpine * 0.65 + crossSpurs * 0.35) * (34.0 * mountainMult);
-            const foothillHeight = foothillBelt * (18.0 * mountainMult);
-            elev += spineBelt * mountainHeight + foothillHeight;
-          } else if (p1.isContinental && !p2.isContinental) {
-            // Continental margin subduction (e.g. Andes / Cascades)
-            const mountainHeight = (mainSpine * 0.70 + crossSpurs * 0.30) * (26.0 * mountainMult);
-            const foothillHeight = foothillBelt * (14.0 * mountainMult);
-            elev += spineBelt * mountainHeight + foothillHeight;
-          } else if (!p1.isContinental && p2.isContinental) {
-            // Ocean trench side: subduction trench (deep abyss)
-            elev -= 26.0 * Math.pow(nearBoundary, 2.0);
-          } else {
-            // Oceanic-oceanic: volcanic island arcs (scales with islandDensity)
-            const arcNoise = macroNoise.sample(wx * 0.008, wy * 0.008);
-            const arcThresh = 0.35 - (islandDensityFactor - 1.0) * 0.15;
-            if (arcNoise > arcThresh) {
-              elev += ((arcNoise - arcThresh) * 36.0 + 8.0) * foothillBelt * islandDensityFactor;
-            }
-          }
-        } else if (relMotion < -0.05) {
-          // Divergent boundary (拡大境界 / 中央海嶺 or 大陸地溝帯)
-          if (!p1.isContinental) {
-            // Mid-ocean ridge
-            elev += 12.0 * foothillBelt;
-          } else {
-            // Continental rift valley
-            elev -= 14.0 * Math.pow(nearBoundary, 2.0);
-          }
-        }
+      let elev: number;
+      if (gap < blendWidth && boundarySoftness > 0) {
+        const t = Math.min(1.0, Math.max(0.0, gap / blendWidth));
+        const s = t * t * (3.0 - 2.0 * t);
+        const wSec = 0.5 * (1.0 - s);
+        const e1 = evalElev(p1, p2, d1, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
+        const e2 = evalElev(p2, p1, d2, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
+        elev = e1 * (1.0 - wSec) + e2 * wSec;
+      } else {
+        elev = evalElev(p1, p2, d1, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
       }
 
-      // Oceanic hotspots / archipelagos outside boundaries (scales with islandDensity)
-      if (!p1.isContinental && nearBoundary < 0.35) {
-        const hotspotVal = macroNoise.sample(wx * 0.012, wy * 0.012);
-        const hotspotThresh = 0.55 - (islandDensityFactor - 1.0) * 0.15;
-        if (hotspotVal > hotspotThresh) {
-          elev += (hotspotVal - hotspotThresh) * 35.0 * islandDensityFactor;
-        }
-      }
-
-      // Multi-scale fine fractal details
+      // Multi-scale fine fractal details (applied post-blend, independent of plates)
       const detail = detailNoise.sample(wx * 0.015, wy * 0.015) * 3.5;
       elev += detail;
 

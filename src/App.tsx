@@ -26,7 +26,7 @@ import {
 import { SpatialIndex } from './utils/terrainEditor';
 import { Toolbar } from './components/Toolbar';
 import { GeneratorPanel } from './components/GeneratorPanel';
-import { smoothCoastBand } from './utils/coastSmoothing';
+import { smoothCoastBand, smoothSteps } from './utils/coastSmoothing';
 import { MapCanvas } from './components/MapCanvas';
 import { InspectorBar } from './components/InspectorBar';
 import { TownObjectsPanel } from './components/TownObjectsPanel';
@@ -123,6 +123,7 @@ export default function App() {
     erosionStrength: 5,
     coastlineComplexity: 4,
     coastSmoothing: 5,
+    boundarySoftness: 5,
   });
 
   // Toolbar collapsed state persisted in localStorage
@@ -160,6 +161,9 @@ export default function App() {
       minIslandArea: 15,
       erosionIterations: 15,
       erosionStrength: 5,
+      coastlineComplexity: 4,
+      coastSmoothing: 5,
+      boundarySoftness: 5,
     });
     return {
       ...initial,
@@ -1221,7 +1225,7 @@ export default function App() {
     }
   }, [config, biomeTypes]);
 
-  // Apply Coast Smoothing to Current World Map
+  // Apply Step & Coast Smoothing to Current World Map
   const handleApplyCoastSmoothingToCurrentMap = useCallback(() => {
     if (activeRegionalMap) return;
     const coastSmoothing = config.coastSmoothing ?? 5;
@@ -1230,7 +1234,7 @@ export default function App() {
     const blend = coastSmoothing / 10.0;
     const sigmaCells = 1.0 + coastSmoothing * 0.12;
 
-    const newElevationGrid = smoothCoastBand(
+    const newElevationGrid = smoothSteps(
       mapData.elevationGrid,
       mapData.gridCols,
       mapData.gridRows,
