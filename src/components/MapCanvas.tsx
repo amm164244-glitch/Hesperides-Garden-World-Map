@@ -1576,6 +1576,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       drawWaterBodies(ctx, activeRivers, activeLakes, {
         zoom: viewport.zoom * dpr,
         dpr,
+        cellSize: mapData.width / Math.max(1, (mapData.gridCols || 1024) - 1),
         selectedId: selectedWaterId,
         selectedVertexIndex: activeWaterVertexIndex,
         showLabels: true,

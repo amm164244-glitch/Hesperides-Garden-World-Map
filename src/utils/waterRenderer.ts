@@ -10,6 +10,7 @@ import { pointInLake } from './waterGenerator';
 export interface DrawWaterOptions {
   zoom: number;
   dpr?: number;
+  cellSize?: number;
   selectedId?: string | null;
   hoveredId?: string | null;
   selectedVertexIndex?: number | null;
@@ -28,29 +29,190 @@ export const WATER_STYLE = {
 };
 
 /**
- * Computes normal offsets for variable-width polyline with estuary flare support.
+ * Converts a hex or rgb CSS color string to rgba with specified alpha opacity.
  */
-function computeVariableWidthPolyline(
+export function colorWithAlpha(color: string, alpha: number): string {
+  if (color.startsWith('#')) {
+    let hex = color.slice(1);
+    if (hex.length === 3) {
+      hex = hex.split('').map((c) => c + c).join('');
+    }
+    if (hex.length >= 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+  } else if (color.startsWith('rgb')) {
+    const match = color.match(/\d+(\.\d+)?/g);
+    if (match && match.length >= 3) {
+      return `rgba(${match[0]}, ${match[1]}, ${match[2]}, ${alpha})`;
+    }
+  }
+  return `rgba(42, 91, 103, ${alpha})`;
+}
+
+/**
+ * Generates a semicircle cap at the river mouth protruding downstream.
+ * The vertices form a semicircle centered at mouthPt with radius halfWidth.
+ */
+export function createRiverMouthCap(
+  mouthPt: [number, number],
+  tangent: [number, number],
+  halfWidth: number,
+  numSegments: number = 12
+): [number, number][] {
+  const theta = Math.atan2(tangent[1], tangent[0]);
+  const cap: [number, number][] = [];
+
+  for (let k = 0; k <= numSegments; k++) {
+    const a = (theta + Math.PI * 0.5) - (k / numSegments) * Math.PI;
+    cap.push([
+      mouthPt[0] + halfWidth * Math.cos(a),
+      mouthPt[1] + halfWidth * Math.sin(a),
+    ]);
+  }
+
+  return cap;
+}
+
+/**
+ * Strokes a river bank with the last portion fading alpha from 1.0 to 0.0.
+ */
+function strokeFadingBank(
+  ctx: CanvasRenderingContext2D,
+  bankPts: [number, number][],
+  fadeDist: number,
+  borderColor: string
+): void {
+  const n = bankPts.length;
+  if (n < 2) return;
+
+  const cumDists: number[] = [0];
+  for (let i = 0; i < n - 1; i++) {
+    cumDists.push(cumDists[i] + Math.hypot(bankPts[i + 1][0] - bankPts[i][0], bankPts[i + 1][1] - bankPts[i][1]));
+  }
+  const totalLen = cumDists[n - 1];
+  const targetFadeStart = Math.max(0, totalLen - fadeDist);
+
+  let splitIdx = n - 2;
+  while (splitIdx > 0 && cumDists[splitIdx] > targetFadeStart) {
+    splitIdx--;
+  }
+
+  const d0 = cumDists[splitIdx];
+  const d1 = cumDists[splitIdx + 1];
+  const segLen = d1 - d0;
+  const frac = segLen > 1e-6 ? Math.max(0, Math.min(1, (targetFadeStart - d0) / segLen)) : 0;
+
+  const pFadeStart: [number, number] = [
+    bankPts[splitIdx][0] + frac * (bankPts[splitIdx + 1][0] - bankPts[splitIdx][0]),
+    bankPts[splitIdx][1] + frac * (bankPts[splitIdx + 1][1] - bankPts[splitIdx][1]),
+  ];
+
+  // 1. Solid bank stroke up to fade start
+  if (targetFadeStart > 0) {
+    ctx.strokeStyle = borderColor;
+    ctx.beginPath();
+    ctx.moveTo(bankPts[0][0], bankPts[0][1]);
+    for (let i = 1; i <= splitIdx; i++) {
+      ctx.lineTo(bankPts[i][0], bankPts[i][1]);
+    }
+    ctx.lineTo(pFadeStart[0], pFadeStart[1]);
+    ctx.stroke();
+  }
+
+  // 2. Fading bank stroke from fade start to mouth point
+  const grad = ctx.createLinearGradient(pFadeStart[0], pFadeStart[1], bankPts[n - 1][0], bankPts[n - 1][1]);
+  grad.addColorStop(0, colorWithAlpha(borderColor, 1.0));
+  grad.addColorStop(1, colorWithAlpha(borderColor, 0.0));
+
+  ctx.strokeStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(pFadeStart[0], pFadeStart[1]);
+  for (let i = splitIdx + 1; i < n; i++) {
+    ctx.lineTo(bankPts[i][0], bankPts[i][1]);
+  }
+  ctx.stroke();
+}
+
+/**
+ * Computes normal offsets for variable-width polyline with smooth distance-based estuary flare support.
+ */
+export function computeVariableWidthPolyline(
   points: [number, number][],
   widthStart: number,
   widthEnd: number,
-  isEstuary: boolean = false
-): { left: [number, number][]; right: [number, number][] } {
+  isEstuary: boolean = false,
+  cellSize: number = 1.0
+): {
+  left: [number, number][];
+  right: [number, number][];
+  halfWidths: number[];
+  mouthCap?: [number, number][];
+} {
   const n = points.length;
-  if (n < 2) return { left: points, right: points };
+  if (n < 2) {
+    const hw = [widthStart * 0.5];
+    return { left: points, right: points, halfWidths: hw };
+  }
 
   const left: [number, number][] = [];
   const right: [number, number][] = [];
+  const halfWidths: number[] = [];
+
+  if (!isEstuary) {
+    // Non-estuary (lake or tributary river): identical to baseline behavior
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const halfW = (widthStart + (widthEnd - widthStart) * t) * 0.5;
+      halfWidths.push(halfW);
+
+      let dx = 0;
+      let dy = 0;
+
+      if (i === 0) {
+        dx = points[1][0] - points[0][0];
+        dy = points[1][1] - points[0][1];
+      } else if (i === n - 1) {
+        dx = points[n - 1][0] - points[n - 2][0];
+        dy = points[n - 1][1] - points[n - 2][1];
+      } else {
+        dx = points[i + 1][0] - points[i - 1][0];
+        dy = points[i + 1][1] - points[i - 1][1];
+      }
+
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+
+      left.push([points[i][0] + nx * halfW, points[i][1] + ny * halfW]);
+      right.push([points[i][0] - nx * halfW, points[i][1] - ny * halfW]);
+    }
+
+    return { left, right, halfWidths };
+  }
+
+  // Estuary: distance-based smoothstep flare over max(6 * widthEnd, 6 * cellSize) up to 1.6x at mouth
+  const cumDists: number[] = [0];
+  for (let i = 0; i < n - 1; i++) {
+    cumDists.push(cumDists[i] + Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]));
+  }
+  const totalLength = cumDists[n - 1];
+  const flareLength = Math.max(widthEnd * 6, cellSize * 6);
 
   for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
+    const t = totalLength > 1e-6 ? cumDists[i] / totalLength : i / (n - 1);
     let halfW = (widthStart + (widthEnd - widthStart) * t) * 0.5;
 
-    // Gracefully flare estuary at river mouth
-    if (isEstuary && i >= n - 3) {
-      const mouthT = (i - (n - 3)) / 2; // 0 to 1
-      halfW *= 1.0 + mouthT * 0.35;
+    const distFromMouth = totalLength - cumDists[i];
+    if (distFromMouth < flareLength) {
+      const u = Math.max(0, Math.min(1, 1 - (distFromMouth / flareLength)));
+      const s = u * u * (3 - 2 * u); // smoothstep
+      halfW *= 1.0 + s * 0.60;
     }
+
+    halfWidths.push(halfW);
 
     let dx = 0;
     let dy = 0;
@@ -67,7 +229,6 @@ function computeVariableWidthPolyline(
     }
 
     const len = Math.hypot(dx, dy) || 1;
-    // Normal vector (-dy, dx)
     const nx = -dy / len;
     const ny = dx / len;
 
@@ -75,7 +236,15 @@ function computeVariableWidthPolyline(
     right.push([points[i][0] - nx * halfW, points[i][1] - ny * halfW]);
   }
 
-  return { left, right };
+  // Generate semicircle cap at the river mouth
+  const lastDx = points[n - 1][0] - points[n - 2][0];
+  const lastDy = points[n - 1][1] - points[n - 2][1];
+  const lastLen = Math.hypot(lastDx, lastDy) || 1;
+  const tangent: [number, number] = [lastDx / lastLen, lastDy / lastLen];
+  const mouthHW = halfWidths[n - 1];
+  const mouthCap = createRiverMouthCap(points[n - 1], tangent, mouthHW, 12);
+
+  return { left, right, halfWidths, mouthCap };
 }
 
 interface LakeRiverJunction {
@@ -158,27 +327,121 @@ export function drawWaterBodies(
     const wStart = river.widthStart ?? 1.5;
     const wEnd = river.widthEnd ?? 4.5;
     const isEstuary = river.terminatesAt === 'ocean';
+    const baseColor = river.color || WATER_STYLE.waterFill;
 
-    const { left, right } = computeVariableWidthPolyline(pts, wStart, wEnd, isEstuary);
+    const { left, right, halfWidths, mouthCap } = computeVariableWidthPolyline(
+      pts,
+      wStart,
+      wEnd,
+      isEstuary,
+      options.cellSize ?? 1.0
+    );
 
-    ctx.beginPath();
-    ctx.moveTo(left[0][0], left[0][1]);
-    for (let i = 1; i < left.length; i++) {
-      ctx.lineTo(left[i][0], left[i][1]);
-    }
-    for (let i = right.length - 1; i >= 0; i--) {
-      ctx.lineTo(right[i][0], right[i][1]);
-    }
-    ctx.closePath();
-
-    ctx.fillStyle = river.color || WATER_STYLE.waterFill;
-    ctx.fill();
-
-    // Spring source cap (only if purely inland spring, not from a lake)
-    if (river.sourceType !== 'lake') {
+    if (!isEstuary) {
+      // Standard inland / lake river fill (unchanged)
       ctx.beginPath();
-      ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
-      ctx.fillStyle = river.color || WATER_STYLE.waterFill;
+      ctx.moveTo(left[0][0], left[0][1]);
+      for (let i = 1; i < left.length; i++) {
+        ctx.lineTo(left[i][0], left[i][1]);
+      }
+      for (let i = right.length - 1; i >= 0; i--) {
+        ctx.lineTo(right[i][0], right[i][1]);
+      }
+      ctx.closePath();
+      ctx.fillStyle = baseColor;
+      ctx.fill();
+
+      // Spring source cap (only if purely inland spring, not from a lake)
+      if (river.sourceType !== 'lake') {
+        ctx.beginPath();
+        ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = baseColor;
+        ctx.fill();
+      }
+    } else {
+      // Ocean estuary river fill:
+      // Last 2x river width length blends opacity from 1.0 -> 0.35
+      const mouthWidth = halfWidths[halfWidths.length - 1] * 2;
+      const blendDist = 2 * mouthWidth;
+
+      const n = pts.length;
+      const cumDists: number[] = [0];
+      for (let i = 0; i < n - 1; i++) {
+        cumDists.push(cumDists[i] + Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]));
+      }
+      const totalLen = cumDists[n - 1];
+      const targetBlendDist = Math.max(0, totalLen - blendDist);
+
+      let splitIdx = n - 2;
+      while (splitIdx > 0 && cumDists[splitIdx] > targetBlendDist) {
+        splitIdx--;
+      }
+
+      const d0 = cumDists[splitIdx];
+      const d1 = cumDists[splitIdx + 1];
+      const segLen = d1 - d0;
+      const frac = segLen > 1e-6 ? Math.max(0, Math.min(1, (targetBlendDist - d0) / segLen)) : 0;
+
+      const splitLeft: [number, number] = [
+        left[splitIdx][0] + frac * (left[splitIdx + 1][0] - left[splitIdx][0]),
+        left[splitIdx][1] + frac * (left[splitIdx + 1][1] - left[splitIdx][1]),
+      ];
+      const splitRight: [number, number] = [
+        right[splitIdx][0] + frac * (right[splitIdx + 1][0] - right[splitIdx][0]),
+        right[splitIdx][1] + frac * (right[splitIdx + 1][1] - right[splitIdx][1]),
+      ];
+      const splitCenter: [number, number] = [
+        pts[splitIdx][0] + frac * (pts[splitIdx + 1][0] - pts[splitIdx][0]),
+        pts[splitIdx][1] + frac * (pts[splitIdx + 1][1] - pts[splitIdx][1]),
+      ];
+
+      // 1. Upstream solid river fill (from source to split point)
+      if (targetBlendDist > 0) {
+        ctx.beginPath();
+        ctx.moveTo(left[0][0], left[0][1]);
+        for (let i = 1; i <= splitIdx; i++) {
+          ctx.lineTo(left[i][0], left[i][1]);
+        }
+        ctx.lineTo(splitLeft[0], splitLeft[1]);
+        ctx.lineTo(splitRight[0], splitRight[1]);
+        for (let i = splitIdx; i >= 0; i--) {
+          ctx.lineTo(right[i][0], right[i][1]);
+        }
+        ctx.closePath();
+        ctx.fillStyle = baseColor;
+        ctx.fill();
+
+        // Spring source cap
+        if (river.sourceType !== 'lake') {
+          ctx.beginPath();
+          ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+          ctx.fillStyle = baseColor;
+          ctx.fill();
+        }
+      }
+
+      // 2. Estuary mouth blend path (from split point through mouth and semicircle cap)
+      ctx.beginPath();
+      ctx.moveTo(splitLeft[0], splitLeft[1]);
+      for (let i = splitIdx + 1; i < n; i++) {
+        ctx.lineTo(left[i][0], left[i][1]);
+      }
+      if (mouthCap && mouthCap.length > 2) {
+        for (let k = 1; k < mouthCap.length - 1; k++) {
+          ctx.lineTo(mouthCap[k][0], mouthCap[k][1]);
+        }
+      }
+      for (let i = n - 1; i > splitIdx; i--) {
+        ctx.lineTo(right[i][0], right[i][1]);
+      }
+      ctx.lineTo(splitRight[0], splitRight[1]);
+      ctx.closePath();
+
+      const pMouth = pts[n - 1];
+      const grad = ctx.createLinearGradient(splitCenter[0], splitCenter[1], pMouth[0], pMouth[1]);
+      grad.addColorStop(0, colorWithAlpha(baseColor, 1.0));
+      grad.addColorStop(1, colorWithAlpha(baseColor, 0.35));
+      ctx.fillStyle = grad;
       ctx.fill();
     }
   }
@@ -198,36 +461,64 @@ export function drawWaterBodies(
     const wEnd = river.widthEnd ?? 4.5;
     const isEstuary = river.terminatesAt === 'ocean';
 
-    const { left, right } = computeVariableWidthPolyline(pts, wStart, wEnd, isEstuary);
+    const { left, right, halfWidths } = computeVariableWidthPolyline(
+      pts,
+      wStart,
+      wEnd,
+      isEstuary,
+      options.cellSize ?? 1.0
+    );
 
-    ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
-    ctx.lineWidth = 1.1 / zoomPx;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    // Left bank stroke
-    ctx.beginPath();
-    ctx.moveTo(left[0][0], left[0][1]);
-    for (let i = 1; i < left.length; i++) {
-      ctx.lineTo(left[i][0], left[i][1]);
-    }
-    ctx.stroke();
-
-    // Right bank stroke
-    ctx.beginPath();
-    ctx.moveTo(right[0][0], right[0][1]);
-    for (let i = 1; i < right.length; i++) {
-      ctx.lineTo(right[i][0], right[i][1]);
-    }
-    ctx.stroke();
-
-    // Mountain Spring source cap stroke (if not lake outlet)
-    if (river.sourceType !== 'lake') {
-      ctx.beginPath();
-      ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+    if (!isEstuary) {
       ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
-      ctx.lineWidth = 1.0 / zoomPx;
+      ctx.lineWidth = 1.1 / zoomPx;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Left bank stroke
+      ctx.beginPath();
+      ctx.moveTo(left[0][0], left[0][1]);
+      for (let i = 1; i < left.length; i++) {
+        ctx.lineTo(left[i][0], left[i][1]);
+      }
       ctx.stroke();
+
+      // Right bank stroke
+      ctx.beginPath();
+      ctx.moveTo(right[0][0], right[0][1]);
+      for (let i = 1; i < right.length; i++) {
+        ctx.lineTo(right[i][0], right[i][1]);
+      }
+      ctx.stroke();
+
+      // Mountain Spring source cap stroke (if not lake outlet)
+      if (river.sourceType !== 'lake') {
+        ctx.beginPath();
+        ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+        ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
+        ctx.lineWidth = 1.0 / zoomPx;
+        ctx.stroke();
+      }
+    } else {
+      const mouthHW = halfWidths[halfWidths.length - 1];
+      const borderColor = river.borderColor || WATER_STYLE.ink;
+      ctx.lineWidth = 1.1 / zoomPx;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      // Left bank (fading over last half-width)
+      strokeFadingBank(ctx, left, mouthHW, borderColor);
+      // Right bank (fading over last half-width)
+      strokeFadingBank(ctx, right, mouthHW, borderColor);
+
+      // Mountain Spring source cap stroke (if not lake outlet)
+      if (river.sourceType !== 'lake') {
+        ctx.beginPath();
+        ctx.arc(pts[0][0], pts[0][1], wStart * 0.5, 0, Math.PI * 2);
+        ctx.strokeStyle = river.borderColor || WATER_STYLE.ink;
+        ctx.lineWidth = 1.0 / zoomPx;
+        ctx.stroke();
+      }
     }
 
     // Selection or hover highlight

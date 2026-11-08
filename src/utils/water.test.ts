@@ -12,6 +12,8 @@ import {
   findNearestRiverVertex,
   findNearestLakeVertex,
   findWaterAtPoint,
+  computeVariableWidthPolyline,
+  createRiverMouthCap,
 } from './waterRenderer';
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
@@ -933,4 +935,119 @@ test('River Improvement: River mouth position pinned within 0.5 * cellSize of un
   }
 });
 
+test('Estuary Improvement: computeVariableWidthPolyline flares to 1.6x smoothly and is spacing-independent', () => {
+  const wStart = 2.0;
+  const wEnd = 10.0;
+  const cellSize = 2.0;
+  // Flare length = max(10 * 6, 2 * 6) = 60.0
 
+  // 1. Fine points (spacing = 1.0, 101 points from 0 to 100)
+  const finePoints: [number, number][] = [];
+  for (let x = 0; x <= 100; x += 1) {
+    finePoints.push([x, 50]);
+  }
+  const fineRes = computeVariableWidthPolyline(finePoints, wStart, wEnd, true, cellSize);
+
+  // 2. Coarse points (spacing = 5.0, 21 points from 0 to 100)
+  const coarsePoints: [number, number][] = [];
+  for (let x = 0; x <= 100; x += 5) {
+    coarsePoints.push([x, 50]);
+  }
+  const coarseRes = computeVariableWidthPolyline(coarsePoints, wStart, wEnd, true, cellSize);
+
+  // Check last point reaches 1.6x of widthEnd
+  const fineLastHW = fineRes.halfWidths[fineRes.halfWidths.length - 1];
+  const coarseLastHW = coarseRes.halfWidths[coarseRes.halfWidths.length - 1];
+  const expectedMouthHW = (wEnd * 0.5) * 1.6;
+
+  assert.ok(
+    Math.abs(fineLastHW - expectedMouthHW) < 1e-4,
+    `Fine mouth half-width ${fineLastHW} should equal ${expectedMouthHW}`
+  );
+  assert.ok(
+    Math.abs(coarseLastHW - expectedMouthHW) < 1e-4,
+    `Coarse mouth half-width ${coarseLastHW} should equal ${expectedMouthHW}`
+  );
+
+  // Check smooth increase before the mouth (at distances 50, 40, 30, 20, 10 from mouth)
+  // Distance from mouth = 100 - x.
+  for (let i = 1; i < fineRes.halfWidths.length; i++) {
+    assert.ok(
+      fineRes.halfWidths[i] >= fineRes.halfWidths[i - 1],
+      `Width should monotonically increase downstream towards estuary mouth`
+    );
+  }
+
+  // Compare widths between fine and coarse at x = 40, 60, 70, 80, 90, 100
+  const testXs = [40, 60, 70, 80, 90, 100];
+  for (const x of testXs) {
+    const fineIdx = x; // step = 1
+    const coarseIdx = x / 5; // step = 5
+    const hwFine = fineRes.halfWidths[fineIdx];
+    const hwCoarse = coarseRes.halfWidths[coarseIdx];
+    const diff = Math.abs(hwFine - hwCoarse);
+    assert.ok(
+      diff < 0.05,
+      `Width difference at x=${x} between fine (${hwFine.toFixed(3)}) and coarse (${hwCoarse.toFixed(3)}) should be < 0.05, got ${diff.toFixed(4)}`
+    );
+  }
+});
+
+test('Estuary Improvement: Semicircle river mouth cap vertices are equidistant from mouth point', () => {
+  const mouthPt: [number, number] = [200, 150];
+  const tangent: [number, number] = [0.8, 0.6]; // diagonal direction
+  const halfWidth = 8.0;
+
+  const cap = createRiverMouthCap(mouthPt, tangent, halfWidth, 16);
+  assert.equal(cap.length, 17);
+
+  for (let i = 0; i < cap.length; i++) {
+    const v = cap[i];
+    const dist = Math.hypot(v[0] - mouthPt[0], v[1] - mouthPt[1]);
+    assert.ok(
+      Math.abs(dist - halfWidth) < 1e-5,
+      `Cap vertex ${i} distance ${dist.toFixed(5)} must equal halfWidth ${halfWidth}`
+    );
+  }
+
+  // First vertex should be at left bank normal (+pi/2 from tangent)
+  // tangent = [0.8, 0.6], normal = [-0.6, 0.8]
+  const expectedLeft: [number, number] = [mouthPt[0] - 0.6 * halfWidth, mouthPt[1] + 0.8 * halfWidth];
+  assert.ok(Math.hypot(cap[0][0] - expectedLeft[0], cap[0][1] - expectedLeft[1]) < 1e-4);
+
+  // Last vertex should be at right bank normal (-pi/2 from tangent)
+  const expectedRight: [number, number] = [mouthPt[0] + 0.6 * halfWidth, mouthPt[1] - 0.8 * halfWidth];
+  assert.ok(Math.hypot(cap[16][0] - expectedRight[0], cap[16][1] - expectedRight[1]) < 1e-4);
+});
+
+test('Estuary Improvement: Rivers terminating at lake or river maintain unchanged baseline geometry', () => {
+  const points: [number, number][] = [
+    [0, 0],
+    [50, 10],
+    [100, 30],
+    [150, 40],
+  ];
+  const wStart = 2.0;
+  const wEnd = 6.0;
+
+  const resNonEstuary = computeVariableWidthPolyline(points, wStart, wEnd, false);
+
+  // No mouth cap for inland rivers
+  assert.equal(resNonEstuary.mouthCap, undefined);
+
+  // End width should be exactly wEnd * 0.5 (multiplier = 1.0, no flare)
+  const lastHW = resNonEstuary.halfWidths[resNonEstuary.halfWidths.length - 1];
+  assert.equal(lastHW, wEnd * 0.5);
+
+  // Baseline verification: t = i / (n - 1)
+  for (let i = 0; i < points.length; i++) {
+    const t = i / (points.length - 1);
+    const expectedHW = (wStart + (wEnd - wStart) * t) * 0.5;
+    assert.equal(resNonEstuary.halfWidths[i], expectedHW);
+
+    const leftPt = resNonEstuary.left[i];
+    const rightPt = resNonEstuary.right[i];
+    const distAcross = Math.hypot(leftPt[0] - rightPt[0], leftPt[1] - rightPt[1]);
+    assert.ok(Math.abs(distAcross - expectedHW * 2) < 1e-4);
+  }
+});
