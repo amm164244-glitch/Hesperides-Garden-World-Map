@@ -137,8 +137,144 @@ function relaxRiverValley(
 }
 
 /**
- * Breaks long 45-degree straight runs (>= 5 consecutive points with < 3 deg direction change)
- * by displacing the midpoint perpendicularly by 0.3 * cellSize if monotonicity allows.
+ * Ramer-Douglas-Peucker polyline simplification.
+ */
+function ramerDouglasPeucker(points: [number, number][], epsilon: number): [number, number][] {
+  if (points.length <= 2) return points;
+
+  let dmax = 0;
+  let index = 0;
+  const end = points.length - 1;
+  const pStart = points[0];
+  const pEnd = points[end];
+  const lineDx = pEnd[0] - pStart[0];
+  const lineDy = pEnd[1] - pStart[1];
+  const lineLen = Math.hypot(lineDx, lineDy);
+
+  for (let i = 1; i < end; i++) {
+    const pt = points[i];
+    let d = 0;
+    if (lineLen < 1e-6) {
+      d = Math.hypot(pt[0] - pStart[0], pt[1] - pStart[1]);
+    } else {
+      d = Math.abs(lineDy * pt[0] - lineDx * pt[1] + pEnd[0] * pStart[1] - pEnd[1] * pStart[0]) / lineLen;
+    }
+    if (d > dmax) {
+      index = i;
+      dmax = d;
+    }
+  }
+
+  if (dmax > epsilon) {
+    const rec1 = ramerDouglasPeucker(points.slice(0, index + 1), epsilon);
+    const rec2 = ramerDouglasPeucker(points.slice(index), epsilon);
+    return rec1.slice(0, rec1.length - 1).concat(rec2);
+  } else {
+    return [pStart, pEnd];
+  }
+}
+
+/**
+ * Iteratively removes middle points where the direction change angle exceeds maxAngleDeg (up to 20 passes).
+ */
+function cleanAcuteHooks(points: [number, number][], maxAngleDeg: number = 110): [number, number][] {
+  if (points.length < 3) return points;
+  const pts = points.map((p) => [p[0], p[1]] as [number, number]);
+  const maxCos = Math.cos((maxAngleDeg * Math.PI) / 180);
+
+  for (let iter = 0; iter < 20; iter++) {
+    let removed = false;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const v1x = pts[i][0] - pts[i - 1][0];
+      const v1y = pts[i][1] - pts[i - 1][1];
+      const v2x = pts[i + 1][0] - pts[i][0];
+      const v2y = pts[i + 1][1] - pts[i][1];
+      const len1 = Math.hypot(v1x, v1y);
+      const len2 = Math.hypot(v2x, v2y);
+      if (len1 < 1e-6 || len2 < 1e-6) continue;
+
+      const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
+      if (dot < maxCos) {
+        pts.splice(i, 1);
+        removed = true;
+        break;
+      }
+    }
+    if (!removed || pts.length < 3) break;
+  }
+  return pts;
+}
+
+/**
+ * Checks if any segment pair within the first checkCount points has a direction change > maxAngleDeg.
+ */
+function hasHeadwaterHook(points: [number, number][], checkCount: number = 12, maxAngleDeg: number = 100): boolean {
+  if (points.length < 3) return false;
+  const maxCos = Math.cos((maxAngleDeg * Math.PI) / 180);
+  const n = Math.min(points.length - 1, checkCount);
+
+  for (let i = 1; i < n; i++) {
+    const v1x = points[i][0] - points[i - 1][0];
+    const v1y = points[i][1] - points[i - 1][1];
+    const v2x = points[i + 1][0] - points[i][0];
+    const v2y = points[i + 1][1] - points[i][1];
+    const len1 = Math.hypot(v1x, v1y);
+    const len2 = Math.hypot(v2x, v2y);
+    if (len1 < 1e-6 || len2 < 1e-6) continue;
+
+    const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
+    if (dot < maxCos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Resamples polyline at approximately targetSpacing while keeping endpoints fixed.
+ */
+function resamplePolyline(points: [number, number][], targetSpacing: number): [number, number][] {
+  if (points.length < 2) return points;
+
+  const cumDists: number[] = [0];
+  for (let i = 0; i < points.length - 1; i++) {
+    const d = Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+    cumDists.push(cumDists[i] + d);
+  }
+
+  const totalLength = cumDists[cumDists.length - 1];
+  if (totalLength < 1e-4) return points;
+
+  const numSegments = Math.max(points.length - 1, Math.round(totalLength / targetSpacing));
+  const step = totalLength / numSegments;
+
+  const result: [number, number][] = [points[0]];
+  let segIdx = 0;
+
+  for (let s = 1; s < numSegments; s++) {
+    const targetD = s * step;
+    while (segIdx < cumDists.length - 2 && cumDists[segIdx + 1] < targetD) {
+      segIdx++;
+    }
+    const d0 = cumDists[segIdx];
+    const d1 = cumDists[segIdx + 1];
+    const segLen = d1 - d0;
+    const t = segLen > 1e-6 ? (targetD - d0) / segLen : 0;
+    const p0 = points[segIdx];
+    const p1 = points[segIdx + 1];
+    result.push([
+      p0[0] + t * (p1[0] - p0[0]),
+      p0[1] + t * (p1[1] - p0[1]),
+    ]);
+  }
+
+  result.push(points[points.length - 1]);
+  return result;
+}
+
+/**
+ * Breaks straight runs of >= 12 consecutive points with < 3 deg direction change
+ * using sinusoidal displacement (amplitude 0.5 * cellSize, wavelength 12 * cellSize).
  */
 function breakStraightRuns(
   points: [number, number][],
@@ -150,35 +286,39 @@ function breakStraightRuns(
   cellSize: number,
   seed: number
 ): [number, number][] {
-  if (points.length < 5) return points;
+  const n = points.length;
+  if (n < 12) return points;
 
   const pts = points.map((p) => [p[0], p[1]] as [number, number]);
-  const n = pts.length;
   const threeDegRad = (3 * Math.PI) / 180;
 
+  const cumDists: number[] = [0];
+  for (let i = 0; i < n - 1; i++) {
+    cumDists.push(cumDists[i] + Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]));
+  }
+
   let i = 0;
-  while (i < n - 4) {
-    let runEnd = i;
-    while (runEnd < n - 2) {
-      const pA = pts[runEnd];
-      const pB = pts[runEnd + 1];
-      const pC = pts[runEnd + 2];
+  while (i < n - 7) {
+    let runEnd = i + 1;
+    const vBaseX = pts[i + 1][0] - pts[i][0];
+    const vBaseY = pts[i + 1][1] - pts[i][1];
+    const lenBase = Math.hypot(vBaseX, vBaseY);
+    if (lenBase < 1e-6) {
+      i++;
+      continue;
+    }
 
-      const v1x = pB[0] - pA[0];
-      const v1y = pB[1] - pA[1];
-      const v2x = pC[0] - pB[0];
-      const v2y = pC[1] - pB[1];
-
-      const len1 = Math.hypot(v1x, v1y);
-      const len2 = Math.hypot(v2x, v2y);
-      if (len1 < 1e-6 || len2 < 1e-6) {
+    while (runEnd < n - 1) {
+      const vCurrX = pts[runEnd + 1][0] - pts[runEnd][0];
+      const vCurrY = pts[runEnd + 1][1] - pts[runEnd][1];
+      const lenCurr = Math.hypot(vCurrX, vCurrY);
+      if (lenCurr < 1e-6) {
         runEnd++;
         continue;
       }
 
-      const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
+      const dot = (vBaseX * vCurrX + vBaseY * vCurrY) / (lenBase * lenCurr);
       const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
-
       if (angle < threeDegRad) {
         runEnd++;
       } else {
@@ -186,15 +326,23 @@ function breakStraightRuns(
       }
     }
 
-    if (runEnd - i >= 3) {
-      const startPtIdx = i;
-      const endPtIdx = runEnd + 1;
-      const midIdx = Math.floor((startPtIdx + endPtIdx) / 2);
+    const runPtCount = runEnd + 1 - i;
+    if (runPtCount >= 8) {
+      const runStart = i;
+      const runEndIdx = runEnd;
+      const sStart = cumDists[runStart];
+      const lambdaRun = Math.max(8 * cellSize, (cumDists[runEndIdx] - sStart));
+      const amp = 0.5 * cellSize;
 
-      if (midIdx > 0 && midIdx < n - 1) {
-        const pPrev = pts[midIdx - 1];
-        const pNext = pts[midIdx + 1];
-        const pMid = pts[midIdx];
+      const savedRun: [number, number][] = [];
+      for (let k = runStart; k <= runEndIdx; k++) {
+        savedRun.push([pts[k][0], pts[k][1]]);
+      }
+
+      for (let k = runStart + 1; k < runEndIdx; k++) {
+        const pPrev = pts[k - 1];
+        const pCurr = pts[k];
+        const pNext = pts[k + 1];
 
         const tx = pNext[0] - pPrev[0];
         const ty = pNext[1] - pPrev[1];
@@ -202,23 +350,42 @@ function breakStraightRuns(
         const nx = -ty / tLen;
         const ny = tx / tLen;
 
-        const rVal = Math.sin(seed * 71.3 + midIdx * 133.7) * 43758.5453;
-        const side = (rVal - Math.floor(rVal)) < 0.5 ? -1 : 1;
-        const shift = cellSize * 0.3 * side;
+        const sK = cumDists[k];
+        const windowFactor = Math.sin(((k - runStart) / (runEndIdx - runStart)) * Math.PI);
+        let disp = amp * Math.sin(((sK - sStart) / lambdaRun) * 2 * Math.PI) * windowFactor;
 
-        const candX = pMid[0] + nx * shift;
-        const candY = pMid[1] + ny * shift;
+        let candX = pCurr[0] + nx * disp;
+        let candY = pCurr[1] + ny * disp;
 
-        const prevElev = sampleElev(filledGrid, cols, rows, mapW, mapH, pPrev[0], pPrev[1]);
-        const candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
-        const nextElev = sampleElev(filledGrid, cols, rows, mapW, mapH, pNext[0], pNext[1]);
+        const prevElev = sampleElev(filledGrid, cols, rows, mapW, mapH, pts[k - 1][0], pts[k - 1][1]);
+        let candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
 
-        if (candElev <= prevElev + 0.3 && nextElev <= candElev + 0.3) {
-          pts[midIdx] = [candX, candY];
+        let accepted = candElev <= prevElev + 0.3;
+        if (!accepted) {
+          for (let h = 1; h <= 5; h++) {
+            disp *= 0.5;
+            candX = pCurr[0] + nx * disp;
+            candY = pCurr[1] + ny * disp;
+            candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
+            if (candElev <= prevElev + 0.3) {
+              accepted = true;
+              break;
+            }
+          }
+        }
+
+        if (accepted) {
+          pts[k] = [candX, candY];
         }
       }
 
-      i = endPtIdx;
+      if (hasSelfIntersection(pts)) {
+        for (let k = runStart; k <= runEndIdx; k++) {
+          pts[k] = savedRun[k - runStart];
+        }
+      }
+
+      i = runEndIdx;
     } else {
       i++;
     }
@@ -307,7 +474,7 @@ function adjustRiverMouthToCoastline(
 }
 
 /**
- * Checks if 2D polyline self-intersects.
+ * Checks if 2D polyline self-intersects using bounding boxes and spatial hashing.
  */
 export function hasSelfIntersection(points: [number, number][]): boolean {
   const n = points.length;
@@ -316,17 +483,84 @@ export function hasSelfIntersection(points: [number, number][]): boolean {
   const ccw = (p1: [number, number], p2: [number, number], p3: [number, number]) =>
     (p3[1] - p1[1]) * (p2[0] - p1[0]) > (p2[1] - p1[1]) * (p3[0] - p1[0]);
 
-  for (let i = 0; i < n - 3; i++) {
-    for (let j = i + 2; j < n - 1; j++) {
-      const a = points[i];
-      const b = points[i + 1];
-      const c = points[j];
-      const d = points[j + 1];
-      if (ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d)) {
-        return true;
+  const segsIntersect = (
+    p1: [number, number],
+    p2: [number, number],
+    p3: [number, number],
+    p4: [number, number]
+  ): boolean => {
+    if (
+      Math.max(p1[0], p2[0]) < Math.min(p3[0], p4[0]) ||
+      Math.min(p1[0], p2[0]) > Math.max(p3[0], p4[0]) ||
+      Math.max(p1[1], p2[1]) < Math.min(p3[1], p4[1]) ||
+      Math.min(p1[1], p2[1]) > Math.max(p3[1], p4[1])
+    ) {
+      return false;
+    }
+    return ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4);
+  };
+
+  if (n < 60) {
+    for (let i = 0; i < n - 3; i++) {
+      for (let j = i + 2; j < n - 1; j++) {
+        if (segsIntersect(points[i], points[i + 1], points[j], points[j + 1])) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  let totalLen = 0;
+  for (let i = 0; i < n - 1; i++) {
+    totalLen += Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+  }
+  const avgLen = totalLen / (n - 1) || 10;
+  const hashCellSize = Math.max(avgLen * 2.5, 10);
+  const grid = new Map<string, number[]>();
+
+  for (let i = 0; i < n - 1; i++) {
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const minX = Math.floor(Math.min(p1[0], p2[0]) / hashCellSize);
+    const maxX = Math.floor(Math.max(p1[0], p2[0]) / hashCellSize);
+    const minY = Math.floor(Math.min(p1[1], p2[1]) / hashCellSize);
+    const maxY = Math.floor(Math.max(p1[1], p2[1]) / hashCellSize);
+
+    for (let gx = minX; gx <= maxX; gx++) {
+      for (let gy = minY; gy <= maxY; gy++) {
+        const key = `${gx},${gy}`;
+        let list = grid.get(key);
+        if (!list) {
+          list = [];
+          grid.set(key, list);
+        }
+        list.push(i);
       }
     }
   }
+
+  const checkedPairs = new Set<number>();
+  for (const list of grid.values()) {
+    if (list.length <= 1) continue;
+    for (let a = 0; a < list.length; a++) {
+      const i = list[a];
+      for (let b = a + 1; b < list.length; b++) {
+        const j = list[b];
+        if (Math.abs(i - j) <= 1) continue;
+        const u = Math.min(i, j);
+        const v = Math.max(i, j);
+        const pairKey = u * n + v;
+        if (checkedPairs.has(pairKey)) continue;
+        checkedPairs.add(pairKey);
+
+        if (segsIntersect(points[u], points[u + 1], points[v], points[v + 1])) {
+          return true;
+        }
+      }
+    }
+  }
+
   return false;
 }
 
@@ -449,6 +683,202 @@ function alignTributaryConfluences(
       }
     }
   }
+}
+
+/**
+ * Standard cubic smoothstep between a and b.
+ */
+function smoothstep(a: number, b: number, x: number): number {
+  if (x <= a) return 0;
+  if (x >= b) return 1;
+  const t = (x - a) / (b - a);
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Applies natural, continuous meandering:
+ * - Distance-based taper (6 cells from source, 4 cells from ocean mouth or 6 from lake/confluence)
+ * - Plain factor based on terrain slope (slope < 0.25 -> 1.5, steep -> 0.4)
+ * - Dynamic wavelength lambda = max(16 * w, 24 * cellSize)
+ * - Curvature limit |off| <= 0.4 / kappa
+ * - Rate-of-change limit |doff/ds| <= 0.5
+ * - Elevation monotonicity preservation
+ * - Spatial hash self-intersection check with retry fallbacks (K = 1.2 -> 0.6 -> 0.3 -> 0)
+ */
+function applyNaturalMeander(
+  points: [number, number][],
+  filledGrid: Float32Array,
+  cols: number,
+  rows: number,
+  mapW: number,
+  mapH: number,
+  cellSize: number,
+  meanderFactor: number,
+  widthStart: number,
+  widthEnd: number,
+  terminatesAt: 'ocean' | 'lake' | 'river',
+  seed: number,
+  rIdx: number
+): [number, number][] {
+  const n = points.length;
+  if (n < 4 || meanderFactor <= 0) return points;
+
+  // Cumulative distance along points
+  const cumDists: number[] = [0];
+  for (let i = 0; i < n - 1; i++) {
+    cumDists.push(cumDists[i] + Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]));
+  }
+  const L = cumDists[cumDists.length - 1];
+  if (L < 1e-4) return points;
+
+  const T0 = 6 * cellSize;
+  const T1 = terminatesAt === 'ocean' ? 4 * cellSize : 6 * cellSize;
+
+  // Width w(s), slope, plain factor, tangents, and normals
+  const widths: number[] = new Array(n);
+  const plains: number[] = new Array(n);
+  const tangents: [number, number][] = new Array(n);
+  const normals: [number, number][] = new Array(n);
+  const curvatures: number[] = new Array(n);
+
+  for (let i = 0; i < n; i++) {
+    const s = cumDists[i];
+    const rawW = widthStart + (widthEnd - widthStart) * (s / L);
+    widths[i] = Math.max(rawW, rawW * cellSize);
+
+    // Tangents and normals
+    const pPrev = points[Math.max(0, i - 1)];
+    const pNext = points[Math.min(n - 1, i + 1)];
+    const tx = pNext[0] - pPrev[0];
+    const ty = pNext[1] - pPrev[1];
+    const tLen = Math.hypot(tx, ty) || 1;
+    tangents[i] = [tx / tLen, ty / tLen];
+    normals[i] = [-ty / tLen, tx / tLen];
+
+    // Plain factor: slope over 3 points back and 3 points forward
+    const i1 = Math.max(0, i - 3);
+    const i2 = Math.min(n - 1, i + 3);
+    const distSpan = cumDists[i2] - cumDists[i1];
+    const distInCells = Math.max(0.5, distSpan / cellSize);
+    const e1 = sampleElev(filledGrid, cols, rows, mapW, mapH, points[i1][0], points[i1][1]);
+    const e2 = sampleElev(filledGrid, cols, rows, mapW, mapH, points[i2][0], points[i2][1]);
+    const slope = Math.abs(e1 - e2) / distInCells;
+    plains[i] = Math.max(0.4, Math.min(1.5, 1.5 - slope / 1.2));
+  }
+
+  // Local curvature kappa
+  for (let i = 0; i < n; i++) {
+    if (i === 0 || i === n - 1) {
+      curvatures[i] = 0;
+    } else {
+      const dtX = tangents[i + 1][0] - tangents[i - 1][0];
+      const dtY = tangents[i + 1][1] - tangents[i - 1][1];
+      const ds = Math.max(1e-4, 0.5 * (cumDists[i + 1] - cumDists[i - 1]));
+      curvatures[i] = Math.hypot(dtX, dtY) / ds;
+    }
+  }
+
+  // Phase accumulation
+  const phases: number[] = new Array(n);
+  const seedRnd = Math.abs(Math.sin(seed * 71.3 + rIdx * 137.9) * 10000);
+  phases[0] = (seedRnd % 1) * (2 * Math.PI);
+
+  for (let i = 1; i < n; i++) {
+    const ds = cumDists[i] - cumDists[i - 1];
+    const w = widths[i];
+    const lambda = Math.max(16 * w, 24 * cellSize);
+    phases[i] = phases[i - 1] + (ds / lambda) * (2 * Math.PI);
+  }
+
+  // Try K values: 1.2, 0.6, 0.3, 0 (fallback to relaxed)
+  const kValues = [1.2, 0.6, 0.3, 0];
+
+  for (const K of kValues) {
+    if (K === 0) {
+      return points;
+    }
+
+    const offsets: number[] = new Array(n);
+
+    for (let i = 0; i < n; i++) {
+      if (i === 0 || i === n - 1) {
+        offsets[i] = 0;
+        continue;
+      }
+
+      const s = cumDists[i];
+      const taper = smoothstep(0, T0, s) * smoothstep(0, T1, L - s);
+      const wob = 1 + 0.3 * Math.sin(phases[i] * 0.41 + 1.3);
+
+      let off = meanderFactor * K * widths[i] * plains[i] * taper * wob * Math.sin(phases[i]);
+
+      // Curvature limit: |off| <= 0.4 / kappa
+      const kappa = curvatures[i];
+      if (kappa > 1e-4) {
+        const maxOff = 0.4 / kappa;
+        off = Math.max(-maxOff, Math.min(maxOff, off));
+      }
+
+      offsets[i] = off;
+    }
+
+    // Rate-of-change Limit: |doff/ds| <= 0.5 (forward and backward passes)
+    for (let i = 1; i < n; i++) {
+      const ds = cumDists[i] - cumDists[i - 1];
+      const maxDelta = 0.5 * ds;
+      offsets[i] = Math.max(offsets[i - 1] - maxDelta, Math.min(offsets[i - 1] + maxDelta, offsets[i]));
+    }
+    for (let i = n - 2; i >= 0; i--) {
+      const ds = cumDists[i + 1] - cumDists[i];
+      const maxDelta = 0.5 * ds;
+      offsets[i] = Math.max(offsets[i + 1] - maxDelta, Math.min(offsets[i + 1] + maxDelta, offsets[i]));
+    }
+
+    // Compute candidate points with monotonicity check
+    const candPts: [number, number][] = [[points[0][0], points[0][1]]];
+
+    for (let i = 1; i < n; i++) {
+      if (i === n - 1) {
+        candPts.push([points[n - 1][0], points[n - 1][1]]);
+        continue;
+      }
+
+      const norm = normals[i];
+      let curOff = offsets[i];
+      const prevElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candPts[i - 1][0], candPts[i - 1][1]);
+
+      let candX = points[i][0] + norm[0] * curOff;
+      let candY = points[i][1] + norm[1] * curOff;
+      let candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
+
+      let accepted = candElev <= prevElev + 0.3;
+      if (!accepted) {
+        for (let h = 1; h <= 5; h++) {
+          curOff *= 0.5;
+          candX = points[i][0] + norm[0] * curOff;
+          candY = points[i][1] + norm[1] * curOff;
+          candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
+          if (candElev <= prevElev + 0.3) {
+            accepted = true;
+            break;
+          }
+        }
+      }
+
+      if (!accepted) {
+        candX = points[i][0];
+        candY = points[i][1];
+      }
+
+      candPts.push([candX, candY]);
+    }
+
+    if (!hasSelfIntersection(candPts)) {
+      return candPts;
+    }
+  }
+
+  return points;
 }
 
 /**
@@ -793,9 +1223,16 @@ export function extractRivers(
 
     if (pts.length < 2) continue;
 
+    // Headwaters Hook Cleanup: RDP simplification + remove angles > 110 deg
+    const headCount = Math.min(20, pts.length);
+    const headPts = pts.slice(0, headCount);
+    const simplifiedHead = ramerDouglasPeucker(headPts, 0.5 * cellSize);
+    const cleanHead = cleanAcuteHooks(simplifiedHead, 110);
+    const riverPts: [number, number][] = [...cleanHead, ...pts.slice(headCount)];
+
     // 1. Chaikin smoothing (3 iterations unless points would exceed 4000)
-    const iters = (8 * pts.length - 7 > 4000) ? 2 : 3;
-    const smoothed = chaikinOpen(pts, iters);
+    const iters = (8 * riverPts.length - 7 > 4000) ? 2 : 3;
+    const smoothed = chaikinOpen(riverPts, iters);
 
     // 2. Valley relaxation (Laplacian smoothing, 3 iterations, displacement <= 0.8 * cellSize)
     const relaxed = relaxRiverValley(
@@ -809,120 +1246,10 @@ export function extractRivers(
       3
     );
 
-    // 3. Meandering with dual-frequency noise and amplitude scaled by river order
-    const order = riverOrderMap.get(raw.id) ?? 2;
-    const n = relaxed.length;
-    const meandered: [number, number][] = [];
+    // 3. Resample at ~0.5 * cellSize spacing
+    const resampled = resamplePolyline(relaxed, 0.5 * cellSize);
 
-    const lambdaLow = cellSize * 16;
-    const lambdaHigh = cellSize * 5.5;
-    const maxMeanderAmp = meanderFactor * 0.9 * cellSize * (1 + 0.5 * Math.min(3, order));
-
-    for (let i = 0; i < n; i++) {
-      if (i === 0 || i === n - 1 || meanderFactor <= 0) {
-        meandered.push(relaxed[i]);
-        continue;
-      }
-
-      const pPrev = relaxed[i - 1];
-      const pCurr = relaxed[i];
-      const pNext = relaxed[i + 1];
-
-      const tx = pNext[0] - pPrev[0];
-      const ty = pNext[1] - pPrev[1];
-      const tLen = Math.hypot(tx, ty) || 1;
-      const nx = -ty / tLen;
-      const ny = tx / tLen;
-
-      const progress = i / (n - 1);
-      const taper = Math.sin(progress * Math.PI);
-
-      const nLow = meanderNoiseLow.sample(pCurr[0] / lambdaLow, pCurr[1] / lambdaLow);
-      const nHigh = meanderNoiseHigh.sample(pCurr[0] / lambdaHigh, pCurr[1] / lambdaHigh);
-      const noiseVal = nLow + 0.35 * nHigh;
-
-      const amp = maxMeanderAmp * taper * noiseVal;
-
-      let candX = pCurr[0] + nx * amp;
-      let candY = pCurr[1] + ny * amp;
-
-      const prevElev = sampleElev(filledF32, cols, rows, mapWidth, mapHeight, meandered[i - 1][0], meandered[i - 1][1]);
-      let candElev = sampleElev(filledF32, cols, rows, mapWidth, mapHeight, candX, candY);
-
-      if (candElev > prevElev + 0.3) {
-        candX = pCurr[0] + nx * (amp * 0.25);
-        candY = pCurr[1] + ny * (amp * 0.25);
-        candElev = sampleElev(filledF32, cols, rows, mapWidth, mapHeight, candX, candY);
-        if (candElev > prevElev + 0.3) {
-          candX = pCurr[0];
-          candY = pCurr[1];
-        }
-      }
-
-      meandered.push([candX, candY]);
-    }
-
-    // 4. Break straight 45-degree runs (>= 5 consecutive points with < 3 deg angle change)
-    const straightBroken = breakStraightRuns(
-      meandered,
-      filledF32,
-      cols,
-      rows,
-      mapWidth,
-      mapHeight,
-      cellSize,
-      seed + rIdx * 19
-    );
-
-    // 5. Ensure direction change between any 3 adjacent points is <= 90 degrees
-    let processedPoints = clampSharpCorners(straightBroken);
-
-    // 6. Connect source to lake perimeter if applicable
-    if (raw.sourceType === 'lake' && raw.sourceLakeId) {
-      const srcLake = lakes.find((l) => l.id === raw.sourceLakeId);
-      if (srcLake) {
-        processedPoints[0] = findNearestLakePerimeterPoint(srcLake.polygon, processedPoints[0]);
-      }
-    }
-
-    // 7. Connect mouth to target lake perimeter if applicable
-    if (raw.terminatesAt === 'lake' && raw.targetLakeId) {
-      const tgtLake = lakes.find((l) => l.id === raw.targetLakeId);
-      if (tgtLake) {
-        processedPoints[processedPoints.length - 1] = findNearestLakePerimeterPoint(tgtLake.polygon, processedPoints[processedPoints.length - 1]);
-      }
-    }
-
-    // 8. Place ocean river mouth precisely onto the coastline (seaLevel contour)
-    if (raw.terminatesAt === 'ocean') {
-      processedPoints = adjustRiverMouthToCoastline(
-        processedPoints,
-        filledF32,
-        cols,
-        rows,
-        mapWidth,
-        mapHeight,
-        seaLevel
-      );
-    }
-
-    // 9. If meandering ever caused self-intersection, revert to relaxed path
-    if (hasSelfIntersection(processedPoints)) {
-      processedPoints = relaxed;
-      if (raw.terminatesAt === 'ocean') {
-        processedPoints = adjustRiverMouthToCoastline(
-          processedPoints,
-          filledF32,
-          cols,
-          rows,
-          mapWidth,
-          mapHeight,
-          seaLevel
-        );
-      }
-    }
-
-    // 10. Calculate river widths (tapering down to 0.5 * wMin at extended headwaters, 1.25 * widthEnd at estuary)
+    // 4. Calculate river widths (tapering down to 0.5 * wMin at extended headwaters, 1.25 * widthEnd at estuary)
     let widthStart: number;
     if (raw.sourceAcc < T) {
       const tRatio = Math.max(0, Math.min(1, (raw.sourceAcc - 2) / Math.max(1, T - 2)));
@@ -938,6 +1265,100 @@ export function extractRivers(
 
     if (raw.terminatesAt === 'ocean') {
       widthEnd = Number((widthEnd * 1.25).toFixed(2));
+    }
+
+    // 5. Natural Meandering
+    const meandered = applyNaturalMeander(
+      resampled,
+      filledF32,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight,
+      cellSize,
+      meanderFactor,
+      widthStart,
+      widthEnd,
+      raw.terminatesAt,
+      seed,
+      rIdx
+    );
+
+    // 6. Break straight runs
+    const straightBroken = breakStraightRuns(
+      meandered,
+      filledF32,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight,
+      cellSize,
+      seed + rIdx * 19
+    );
+
+    // 7. Headwaters Hook check: if any angle in first 12 points has direction change > 100 deg, revert headwater
+    let processedPoints = straightBroken;
+    if (hasHeadwaterHook(processedPoints, 12, 100) && cleanHead.length >= 2) {
+      const pLast = cleanHead[cleanHead.length - 1];
+      let bestIdx = 0;
+      let bestDist = Infinity;
+      for (let i = 1; i < processedPoints.length; i++) {
+        const d = Math.hypot(processedPoints[i][0] - pLast[0], processedPoints[i][1] - pLast[1]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      processedPoints = [...cleanHead, ...processedPoints.slice(bestIdx + 1)];
+      processedPoints = clampSharpCorners(processedPoints);
+    }
+
+    // 8. Ensure corners are smooth
+    processedPoints = clampSharpCorners(processedPoints);
+
+    // 9. Connect source to lake perimeter if applicable
+    if (raw.sourceType === 'lake' && raw.sourceLakeId) {
+      const srcLake = lakes.find((l) => l.id === raw.sourceLakeId);
+      if (srcLake) {
+        processedPoints[0] = findNearestLakePerimeterPoint(srcLake.polygon, processedPoints[0]);
+      }
+    }
+
+    // 10. Connect mouth to target lake perimeter if applicable
+    if (raw.terminatesAt === 'lake' && raw.targetLakeId) {
+      const tgtLake = lakes.find((l) => l.id === raw.targetLakeId);
+      if (tgtLake) {
+        processedPoints[processedPoints.length - 1] = findNearestLakePerimeterPoint(tgtLake.polygon, processedPoints[processedPoints.length - 1]);
+      }
+    }
+
+    // 11. Place ocean river mouth precisely onto the coastline (seaLevel contour)
+    if (raw.terminatesAt === 'ocean') {
+      processedPoints = adjustRiverMouthToCoastline(
+        processedPoints,
+        filledF32,
+        cols,
+        rows,
+        mapWidth,
+        mapHeight,
+        seaLevel
+      );
+    }
+
+    // 12. If meandering ever caused self-intersection, revert to relaxed path
+    if (hasSelfIntersection(processedPoints)) {
+      processedPoints = relaxed;
+      if (raw.terminatesAt === 'ocean') {
+        processedPoints = adjustRiverMouthToCoastline(
+          processedPoints,
+          filledF32,
+          cols,
+          rows,
+          mapWidth,
+          mapHeight,
+          seaLevel
+        );
+      }
     }
 
     const isMain = raw.terminatesAt !== 'river';

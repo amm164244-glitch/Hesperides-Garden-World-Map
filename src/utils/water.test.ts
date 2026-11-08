@@ -685,3 +685,252 @@ test('River Improvement: Determinism and summary statistics', () => {
   assert.ok(run1.stats.longestRiverKm >= run1.stats.avgRiverLengthKm);
 });
 
+test('River Improvement: Sinuosity, straight-run elimination, mouth variance, and headwater hook prevention', () => {
+  const cols = 160;
+  const rows = 120;
+  const mapW = 1600;
+  const mapH = 1200;
+  const seaLevel = 35.0;
+  const cellSize = mapW / (cols - 1);
+  const grid = new Float32Array(cols * rows);
+
+  // Broad continent sloping from north-west mountains down to south-east sea
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      const dist = Math.hypot(u, v);
+      const ridge = Math.sin(u * 12 + v * 8) * 4.0;
+      grid[r * cols + c] = 85.0 - dist * 55.0 + ridge;
+    }
+  }
+
+  const { rivers } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    7,
+    { riverCount: 12, lakeCount: 2, riverDensity: 60, meander: 0.8, headExtension: 0.8 }
+  );
+
+  assert.ok(rivers.length >= 4, 'Should extract multiple rivers');
+
+  // 1. Zero self-intersections across all rivers
+  for (const r of rivers) {
+    assert.equal(hasSelfIntersection(r.points), false, `River ${r.id} must not self-intersect`);
+  }
+
+  // 2. Headwater hook check: angle change between adjacent segments in first 12 points <= 100 deg
+  const maxHookCos = Math.cos((100 * Math.PI) / 180);
+  for (const r of rivers) {
+    const pts = r.points;
+    const checkN = Math.min(pts.length - 1, 12);
+    for (let i = 1; i < checkN; i++) {
+      const v1x = pts[i][0] - pts[i - 1][0];
+      const v1y = pts[i][1] - pts[i - 1][1];
+      const v2x = pts[i + 1][0] - pts[i][0];
+      const v2y = pts[i + 1][1] - pts[i][1];
+      const l1 = Math.hypot(v1x, v1y);
+      const l2 = Math.hypot(v2x, v2y);
+      if (l1 < 1e-4 || l2 < 1e-4) continue;
+      const dot = (v1x * v2x + v1y * v2y) / (l1 * l2);
+      assert.ok(
+        dot >= maxHookCos - 0.05,
+        `River ${r.id} at point ${i} in headwater has hook bend (dot=${dot.toFixed(2)}, cos(100)=${maxHookCos.toFixed(2)})`
+      );
+    }
+  }
+
+  // 3. Sinuosity check for rivers with length >= 80 cells
+  const sinuosities: number[] = [];
+  for (const r of rivers) {
+    const pts = r.points;
+    let totalLen = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      totalLen += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    }
+    const lenCells = totalLen / cellSize;
+    if (lenCells >= 80) {
+      const midIdx = Math.floor(pts.length / 2);
+      let mouthHalfLen = 0;
+      for (let i = midIdx; i < pts.length - 1; i++) {
+        mouthHalfLen += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+      }
+      const eucl = Math.hypot(pts[pts.length - 1][0] - pts[midIdx][0], pts[pts.length - 1][1] - pts[midIdx][1]);
+      if (eucl > 1e-3) {
+        sinuosities.push(mouthHalfLen / eucl);
+      }
+    }
+  }
+
+  if (sinuosities.length > 0) {
+    sinuosities.sort((a, b) => a - b);
+    const medianSinuosity = sinuosities[Math.floor(sinuosities.length / 2)];
+    assert.ok(
+      medianSinuosity >= 1.12 && medianSinuosity <= 1.7,
+      `Median mouth-half sinuosity should be between 1.12 and 1.7, got ${medianSinuosity.toFixed(3)}`
+    );
+  }
+
+  // 4. Straight run check: points in runs of >= 8 consecutive points with < 3 deg change <= 15%
+  let totalRiverPoints = 0;
+  let straightRunPoints = 0;
+  const threeDegRad = (3 * Math.PI) / 180;
+
+  for (const r of rivers) {
+    const pts = r.points;
+    const n = pts.length;
+    totalRiverPoints += n;
+    let i = 0;
+    while (i < n - 8) {
+      let runEnd = i + 1;
+      const vBaseX = pts[i + 1][0] - pts[i][0];
+      const vBaseY = pts[i + 1][1] - pts[i][1];
+      const lenBase = Math.hypot(vBaseX, vBaseY);
+      if (lenBase < 1e-6) {
+        i++;
+        continue;
+      }
+
+      while (runEnd < n - 1) {
+        const vCurrX = pts[runEnd + 1][0] - pts[runEnd][0];
+        const vCurrY = pts[runEnd + 1][1] - pts[runEnd][1];
+        const lenCurr = Math.hypot(vCurrX, vCurrY);
+        if (lenCurr < 1e-6) {
+          runEnd++;
+          continue;
+        }
+        const dot = (vBaseX * vCurrX + vBaseY * vCurrY) / (lenBase * lenCurr);
+        const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+        if (angle < threeDegRad) {
+          runEnd++;
+        } else {
+          break;
+        }
+      }
+
+      const count = runEnd + 1 - i;
+      if (count >= 8) {
+        straightRunPoints += count;
+        i = runEnd;
+      } else {
+        i++;
+      }
+    }
+  }
+
+  const straightRatio = totalRiverPoints > 0 ? straightRunPoints / totalRiverPoints : 0;
+  assert.ok(
+    straightRatio <= 0.15,
+    `Straight-run points ratio (${(straightRatio * 100).toFixed(1)}%) must be <= 15%`
+  );
+
+  // 5. Mouth angle standard deviation: rivers with std dev < 0.5 deg in last 12 cells <= 10%
+  const oceanRivers = rivers.filter((r) => r.terminatesAt === 'ocean');
+  let straightMouthCount = 0;
+
+  for (const r of oceanRivers) {
+    const pts = r.points;
+    let distFromMouth = 0;
+    const angles: number[] = [];
+    for (let i = pts.length - 2; i >= 0; i--) {
+      const dx = pts[i + 1][0] - pts[i][0];
+      const dy = pts[i + 1][1] - pts[i][1];
+      const d = Math.hypot(dx, dy);
+      distFromMouth += d;
+      angles.push(Math.atan2(dy, dx));
+      if (distFromMouth >= 12 * cellSize) break;
+    }
+
+    if (angles.length >= 4) {
+      const mean = angles.reduce((a, b) => a + b, 0) / angles.length;
+      const variance = angles.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / angles.length;
+      const stdDevDeg = (Math.sqrt(variance) * 180) / Math.PI;
+      if (stdDevDeg < 0.5) {
+        straightMouthCount++;
+      }
+    }
+  }
+
+  const straightMouthRatio = oceanRivers.length > 0 ? straightMouthCount / oceanRivers.length : 0;
+  assert.ok(
+    straightMouthRatio <= 0.10,
+    `Rivers with mouth angle std dev < 0.5 deg (${(straightMouthRatio * 100).toFixed(1)}%) must be <= 10%`
+  );
+
+  // 6. Monotonicity: uphill segments <= 1%, disconnected rivers = 0
+  let totalSegments = 0;
+  let uphillSegments = 0;
+  for (const r of rivers) {
+    for (let i = 0; i < r.points.length - 1; i++) {
+      totalSegments++;
+      const e1 = sampleElev(grid, cols, rows, mapW, mapH, r.points[i][0], r.points[i][1]);
+      const e2 = sampleElev(grid, cols, rows, mapW, mapH, r.points[i + 1][0], r.points[i + 1][1]);
+      if (e2 - e1 > 0.35) {
+        uphillSegments++;
+      }
+    }
+  }
+  const uphillRatio = totalSegments > 0 ? uphillSegments / totalSegments : 0;
+  assert.ok(
+    uphillRatio <= 0.01,
+    `Uphill segments ratio (${(uphillRatio * 100).toFixed(2)}%) must be <= 1%`
+  );
+  assertValidTerminations(rivers);
+});
+
+test('River Improvement: River mouth position pinned within 0.5 * cellSize of unmeandered mouth', () => {
+  const cols = 64;
+  const rows = 64;
+  const mapW = 1000;
+  const mapH = 1000;
+  const seaLevel = 35.0;
+  const cellSize = mapW / (cols - 1);
+  const grid = new Float32Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      grid[r * cols + c] = 80.0 - (c / (cols - 1)) * 55.0;
+    }
+  }
+
+  const { rivers: unmeandered } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    999,
+    { riverCount: 6, lakeCount: 0, meander: 0 }
+  );
+
+  const { rivers: meandered } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    999,
+    { riverCount: 6, lakeCount: 0, meander: 0.8 }
+  );
+
+  for (const mRiv of meandered) {
+    if (mRiv.terminatesAt !== 'ocean') continue;
+    const unRiv = unmeandered.find((u) => u.id === mRiv.id);
+    if (!unRiv) continue;
+    const pMouthM = mRiv.points[mRiv.points.length - 1];
+    const pMouthU = unRiv.points[unRiv.points.length - 1];
+    const dist = Math.hypot(pMouthM[0] - pMouthU[0], pMouthM[1] - pMouthU[1]);
+    assert.ok(
+      dist <= 0.5 * cellSize,
+      `River ${mRiv.id} mouth position (${pMouthM[0].toFixed(1)}, ${pMouthM[1].toFixed(1)}) shifted by ${dist.toFixed(2)} > ${0.5 * cellSize}`
+    );
+  }
+});
+
+
