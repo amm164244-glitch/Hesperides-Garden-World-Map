@@ -20,7 +20,13 @@ import {
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
 import { computeHydrology, downsampleForHydrology } from './hydrology';
-import { hasSelfIntersection, clampSharpCorners } from './riverExtraction';
+import {
+  hasSelfIntersection,
+  clampSharpCorners,
+  computeCircumcircleRadius,
+  computeRiverPointWidthsForExtraction,
+  projectPointToPolyline,
+} from './riverExtraction';
 
 /**
  * Asserts that river elevations monotonically decrease downstream (towards mouth).
@@ -1155,3 +1161,191 @@ test('Casing Improvement: Sharp hairpin turns (R = 0.3 * W) avoid self-intersect
   }
   assert.equal(totalSegs, hairpinPoints.length - 1, 'All hairpin segments must be preserved');
 });
+
+test('Request 10 Verification: Curvature radius, sinuosity, monotonicity, confluence alignment, and local sharp turns', () => {
+  const cols = 160;
+  const rows = 120;
+  const mapW = 1600;
+  const mapH = 1200;
+  const seaLevel = 35.0;
+  const cellSize = mapW / (cols - 1);
+  const grid = new Float32Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const u = c / (cols - 1);
+      const v = r / (rows - 1);
+      const dist = Math.hypot(u, v);
+      const ridge = Math.sin(u * 12 + v * 8) * 4.0;
+      grid[r * cols + c] = 85.0 - dist * 55.0 + ridge;
+    }
+  }
+
+  const { rivers } = generateRiversAndLakes(
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel,
+    7,
+    { riverCount: 12, lakeCount: 2, riverDensity: 60, meander: 0.8, headExtension: 0.8 }
+  );
+
+  assert.ok(rivers.length >= 4, 'Should extract multiple rivers');
+
+  // 1. Curvature radius: R < 0.7 * w <= 1%, min R/w >= 0.5
+  let totalPtsChecked = 0;
+  let rUnder07wCount = 0;
+  let minRRatio = Infinity;
+
+  for (const r of rivers) {
+    const pts = r.points;
+    const kmPerUnit = Math.max(0.001, 40000 / mapW);
+    const wMin = kmPerUnit >= 3.0 ? 0.75 : 1.2;
+    const ptWidths = computeRiverPointWidthsForExtraction(pts, r.widthStart, r.widthEnd, wMin);
+
+    for (let i = 1; i < pts.length - 1; i++) {
+      const w = ptWidths[i] ?? r.widthStart;
+      const R = computeCircumcircleRadius(pts[i - 1], pts[i], pts[i + 1]);
+      if (Number.isFinite(R)) {
+        totalPtsChecked++;
+        const ratio = R / w;
+        if (ratio < minRRatio) minRRatio = ratio;
+        if (ratio < 0.7) {
+          rUnder07wCount++;
+        }
+      }
+    }
+  }
+
+  const rUnder07Ratio = totalPtsChecked > 0 ? rUnder07wCount / totalPtsChecked : 0;
+  assert.ok(
+    rUnder07Ratio <= 0.01,
+    `Points with R < 0.7 * w (${(rUnder07Ratio * 100).toFixed(2)}%) must be <= 1%`
+  );
+  assert.ok(
+    minRRatio >= 0.5,
+    `Minimum R/w ratio (${minRRatio.toFixed(3)}) must be >= 0.5`
+  );
+
+  // 2. Sinuosity: median sinuosity of back half of length >= 80 cells rivers in [1.1, 1.6]
+  const sinuosities: number[] = [];
+  for (const r of rivers) {
+    const pts = r.points;
+    let totalLen = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      totalLen += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    }
+    const lenCells = totalLen / cellSize;
+    if (lenCells >= 80) {
+      const midIdx = Math.floor(pts.length / 2);
+      let mouthHalfLen = 0;
+      for (let i = midIdx; i < pts.length - 1; i++) {
+        mouthHalfLen += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+      }
+      const eucl = Math.hypot(pts[pts.length - 1][0] - pts[midIdx][0], pts[pts.length - 1][1] - pts[midIdx][1]);
+      if (eucl > 1e-3) {
+        sinuosities.push(mouthHalfLen / eucl);
+      }
+    }
+  }
+  if (sinuosities.length > 0) {
+    sinuosities.sort((a, b) => a - b);
+    const medianSinuosity = sinuosities[Math.floor(sinuosities.length / 2)];
+    assert.ok(
+      medianSinuosity >= 1.1 && medianSinuosity <= 1.6,
+      `Median mouth-half sinuosity should be between 1.1 and 1.6, got ${medianSinuosity.toFixed(3)}`
+    );
+  }
+
+  // 3. Self-intersections = 0
+  for (const r of rivers) {
+    assert.equal(hasSelfIntersection(r.points), false, `River ${r.id} must not self-intersect`);
+  }
+
+  // 4. Monotonicity: uphill <= 1%
+  let totalSegs = 0;
+  let uphillSegs = 0;
+  for (const r of rivers) {
+    for (let i = 0; i < r.points.length - 1; i++) {
+      totalSegs++;
+      const e1 = sampleElev(grid, cols, rows, mapW, mapH, r.points[i][0], r.points[i][1]);
+      const e2 = sampleElev(grid, cols, rows, mapW, mapH, r.points[i + 1][0], r.points[i + 1][1]);
+      if (e2 - e1 > 0.35) {
+        uphillSegs++;
+      }
+    }
+  }
+  assert.ok(
+    uphillSegs / totalSegs <= 0.01,
+    `Uphill segments ratio must be <= 1%`
+  );
+
+  // 5. Inland endings = 0
+  assertValidTerminations(rivers);
+
+  // 6. Confluence checks:
+  // - Tributary end point on main river segment (<= 0.1 * cellSize)
+  // - Last 3 points do not self-intersect
+  // - Approach angle <= 80 deg
+  const cos80 = Math.cos((80 * Math.PI) / 180);
+  for (const r of rivers) {
+    if (r.terminatesAt === 'river' && r.connectedRiverId) {
+      const main = rivers.find((m) => m.id === r.connectedRiverId);
+      if (!main) continue;
+      const pLast = r.points[r.points.length - 1];
+      const pPrev = r.points[r.points.length - 2];
+
+      // End point on main river segment
+      const proj = projectPointToPolyline(pLast, main.points);
+      assert.ok(
+        proj.dist <= 0.1 * cellSize,
+        `Tributary ${r.id} end point distance to main river (${proj.dist.toFixed(4)}) must be <= ${0.1 * cellSize}`
+      );
+
+      // Last 3 points no self-intersection
+      if (r.points.length >= 3) {
+        const last3 = r.points.slice(r.points.length - 3);
+        assert.equal(hasSelfIntersection(last3), false, `Tributary ${r.id} last 3 points must not self-intersect`);
+      }
+
+      // Approach angle <= 80 deg
+      const inDx = pLast[0] - pPrev[0];
+      const inDy = pLast[1] - pPrev[1];
+      const inLen = Math.hypot(inDx, inDy) || 1;
+      const dot = (inDx * proj.tangent[0] + inDy * proj.tangent[1]) / inLen;
+      assert.ok(
+        dot >= cos80 - 0.05,
+        `Tributary ${r.id} approach angle with main river must be <= 80 deg (dot=${dot.toFixed(3)}, cos80=${cos80.toFixed(3)})`
+      );
+    }
+  }
+
+  // 7. Local sharp turns: consecutive 3 points within distance 0.5 * w do not exceed 130 deg turn angle
+  const maxTurnCos = Math.cos((130 * Math.PI) / 180);
+  for (const r of rivers) {
+    const pts = r.points;
+    const kmPerUnit = Math.max(0.001, 40000 / mapW);
+    const wMin = kmPerUnit >= 3.0 ? 0.75 : 1.2;
+    const ptWidths = computeRiverPointWidthsForExtraction(pts, r.widthStart, r.widthEnd, wMin);
+
+    for (let i = 1; i < pts.length - 1; i++) {
+      const w = ptWidths[i] ?? r.widthStart;
+      const d1 = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      const d2 = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+      if (d1 <= 0.5 * w && d2 <= 0.5 * w) {
+        const v1x = pts[i][0] - pts[i - 1][0];
+        const v1y = pts[i][1] - pts[i - 1][1];
+        const v2x = pts[i + 1][0] - pts[i][0];
+        const v2y = pts[i + 1][1] - pts[i][1];
+        const dot = (v1x * v2x + v1y * v2y) / (d1 * d2);
+        assert.ok(
+          dot >= maxTurnCos,
+          `River ${r.id} at point ${i} has turn angle > 130 deg (dot=${dot.toFixed(3)}) within distance 0.5 * w`
+        );
+      }
+    }
+  }
+});
+

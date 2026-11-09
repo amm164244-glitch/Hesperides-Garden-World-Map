@@ -44,7 +44,7 @@ export function extractClosedContours(
   const interp = (v1: number, v2: number) => {
     const diff = v2 - v1;
     if (Math.abs(diff) < 1e-6) return 0.5;
-    return Math.max(0.01, Math.min(0.99, (isovalue - v1) / diff));
+    return Math.max(0.001, Math.min(0.999, (isovalue - v1) / diff));
   };
 
   // Unique edge keys:

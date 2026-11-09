@@ -287,7 +287,7 @@ function breakStraightRuns(
   seed: number
 ): [number, number][] {
   const n = points.length;
-  if (n < 12) return points;
+  if (n < 8) return points;
 
   const pts = points.map((p) => [p[0], p[1]] as [number, number]);
   const threeDegRad = (3 * Math.PI) / 180;
@@ -585,17 +585,44 @@ export function movingPointCausesSelfIntersection(
   const pPrev = pts[i - 1];
   const pNext = pts[i + 1];
 
+  const minX1 = Math.min(pPrev[0], cand[0]);
+  const maxX1 = Math.max(pPrev[0], cand[0]);
+  const minY1 = Math.min(pPrev[1], cand[1]);
+  const maxY1 = Math.max(pPrev[1], cand[1]);
+
+  const minX2 = Math.min(cand[0], pNext[0]);
+  const maxX2 = Math.max(cand[0], pNext[0]);
+  const minY2 = Math.min(cand[1], pNext[1]);
+  const maxY2 = Math.max(cand[1], pNext[1]);
+
   for (let j = 0; j < n - 1; j++) {
+    const pA = pts[j];
+    const pB = pts[j + 1];
+    const sjMinX = Math.min(pA[0], pB[0]);
+    const sjMaxX = Math.max(pA[0], pB[0]);
+
     // Check segment (pPrev -> cand): ignore adjacent segments j == i - 2, i - 1, i
     if (j !== i - 2 && j !== i - 1 && j !== i) {
-      if (segsIntersect(pPrev, cand, pts[j], pts[j + 1])) {
-        return true;
+      if (maxX1 >= sjMinX && minX1 <= sjMaxX) {
+        const sjMinY = Math.min(pA[1], pB[1]);
+        const sjMaxY = Math.max(pA[1], pB[1]);
+        if (maxY1 >= sjMinY && minY1 <= sjMaxY) {
+          if (segsIntersect(pPrev, cand, pA, pB)) {
+            return true;
+          }
+        }
       }
     }
     // Check segment (cand -> pNext): ignore adjacent segments j == i - 1, i, i + 1
     if (j !== i - 1 && j !== i && j !== i + 1) {
-      if (segsIntersect(cand, pNext, pts[j], pts[j + 1])) {
-        return true;
+      if (maxX2 >= sjMinX && minX2 <= sjMaxX) {
+        const sjMinY = Math.min(pA[1], pB[1]);
+        const sjMaxY = Math.max(pA[1], pB[1]);
+        if (maxY2 >= sjMinY && minY2 <= sjMaxY) {
+          if (segsIntersect(cand, pNext, pA, pB)) {
+            return true;
+          }
+        }
       }
     }
   }
@@ -667,7 +694,7 @@ export function limitRiverCurvature(
   rows: number,
   mapW: number,
   mapH: number,
-  maxIterations: number = 150
+  maxIterations: number = 60
 ): [number, number][] {
   const n = points.length;
   if (n < 3) return points;
@@ -763,8 +790,8 @@ export function smoothRiverGaussian(
 
   for (let i = 1; i < n - 1; i++) {
     const w = widths[i] ?? widths[widths.length - 1] ?? 2.0;
-    // sigma = max(w * 1.0, 1.5 * pointSpacing where pointSpacing = 0.5 * cellSize)
-    const sigma = Math.max(w * 1.0, cellSize * 0.75);
+    // sigma = max(w * 1.0, cellSize * 1.5) per specification
+    const sigma = Math.max(w * 1.0, cellSize * 1.5);
     const windowR = 2.5 * sigma;
     const halfWin = 0.5 * windowR;
 
@@ -936,6 +963,24 @@ function distToPolyline(p: [number, number], poly: [number, number][]): number {
  * - Cleans acute kinks in last 3 points.
  * - Main river remains unchanged.
  */
+function distPointToSegment(p: [number, number], A: [number, number], B: [number, number]): number {
+  const ABx = B[0] - A[0];
+  const ABy = B[1] - A[1];
+  const len2 = ABx * ABx + ABy * ABy;
+  if (len2 < 1e-8) return Math.hypot(p[0] - A[0], p[1] - A[1]);
+  const t = Math.max(0, Math.min(1, ((p[0] - A[0]) * ABx + (p[1] - A[1]) * ABy) / len2));
+  return Math.hypot(p[0] - (A[0] + t * ABx), p[1] - (A[1] + t * ABy));
+}
+
+/**
+ * Aligns tributary confluences cleanly onto their main river stems:
+ * - Clamps mouth width <= main river width at confluence.
+ * - Trims tributary points within W_main * 1.5 of main river centerline to eliminate folding.
+ * - Snaps final point onto main river.
+ * - Realigns approach angle if > 80 deg (bends last 3 points towards tangent by 60%).
+ * - Cleans acute kinks in last 3 points.
+ * - Main river remains unchanged.
+ */
 export function alignTributaryConfluences(
   rivers: RiverData[],
   elevationGrid: Float32Array,
@@ -954,15 +999,39 @@ export function alignTributaryConfluences(
     const mainRiver = riverMap.get(trib.connectedRiverId);
     if (!mainRiver || mainRiver.points.length < 2 || trib.points.length < 3) continue;
 
-    // Clamp tributary mouth width so it does not exceed the main river's width
-    trib.widthEnd = Math.min(trib.widthEnd, mainRiver.widthEnd);
+    // 1. Calculate local main river width at confluence point
+    const mouthProj = projectPointToPolyline(trib.points[trib.points.length - 1], mainRiver.points);
+    let mainCumDist = 0;
+    for (let s = 0; s < mouthProj.segIndex; s++) {
+      mainCumDist += Math.hypot(
+        mainRiver.points[s + 1][0] - mainRiver.points[s][0],
+        mainRiver.points[s + 1][1] - mainRiver.points[s][1]
+      );
+    }
+    const segP0 = mainRiver.points[mouthProj.segIndex];
+    mainCumDist += Math.hypot(mouthProj.point[0] - segP0[0], mouthProj.point[1] - segP0[1]);
+    let mainTotalLen = 0;
+    for (let s = 0; s < mainRiver.points.length - 1; s++) {
+      mainTotalLen += Math.hypot(
+        mainRiver.points[s + 1][0] - mainRiver.points[s][0],
+        mainRiver.points[s + 1][1] - mainRiver.points[s][1]
+      );
+    }
+    const frac = mainTotalLen > 0 ? Math.max(0, Math.min(1, mainCumDist / mainTotalLen)) : 1;
+    const localMainW = mainRiver.widthStart + (mainRiver.widthEnd - mainRiver.widthStart) * frac;
 
-    const originalPoints = trib.points.map((p) => [p[0], p[1]] as [number, number]);
+    // Clamp tributary mouth width so it does not exceed the main river's width at that point
+    trib.widthEnd = Math.min(trib.widthEnd, localMainW);
 
-    // Trim tributary points within W_main * 1.5 of main river centerline
-    const trimDist = mainRiver.widthEnd * 1.5;
+    // 2. Trim tributary points within W_main * 1.5 of main river centerline to eliminate folding
+    const trimDist = localMainW * 1.5;
     let keepIndex = trib.points.length - 1;
-    while (keepIndex > 1 && distToPolyline(trib.points[keepIndex], mainRiver.points) < trimDist) {
+    const mouthElev = sampleElev(elevationGrid, cols, rows, mapW, mapH, mouthProj.point[0], mouthProj.point[1]);
+    while (
+      keepIndex > 1 &&
+      distToPolyline(trib.points[keepIndex], mainRiver.points) < trimDist &&
+      sampleElev(elevationGrid, cols, rows, mapW, mapH, trib.points[keepIndex - 1][0], trib.points[keepIndex - 1][1]) >= mouthElev - 0.35
+    ) {
       keepIndex--;
     }
 
@@ -970,8 +1039,9 @@ export function alignTributaryConfluences(
     const projResult = projectPointToPolyline(working[working.length - 1], mainRiver.points);
     working.push(projResult.point);
 
-    // If tributary intersects main river prior to confluence, cut last 5 points and reconnect
+    // 3. Helper to check if tributary intersects main river prior to confluence
     const checkIntersectsMain = (pts: [number, number][]): boolean => {
+      // Prior to confluence: check segments up to pts.length - 2
       for (let i = 0; i < pts.length - 2; i++) {
         for (let j = 0; j < mainRiver.points.length - 1; j++) {
           if (segsIntersect(pts[i], pts[i + 1], mainRiver.points[j], mainRiver.points[j + 1])) {
@@ -982,17 +1052,38 @@ export function alignTributaryConfluences(
       return false;
     };
 
+    // 4. If tributary intersects main river prior to confluence or self-intersects,
+    // delete last 5 points and reconnect to main river
     if (hasSelfIntersection(working) || checkIntersectsMain(working)) {
       if (working.length > 7) {
-        working = working.slice(0, -6);
+        working = working.slice(0, working.length - 5);
+        const rep = projectPointToPolyline(working[working.length - 1], mainRiver.points);
+        working.push(rep.point);
+      } else if (working.length > 3) {
+        working = working.slice(0, working.length - 2);
         const rep = projectPointToPolyline(working[working.length - 1], mainRiver.points);
         working.push(rep.point);
       }
     }
 
-    // Approach angle check: if incoming angle with main river tangent > 80 deg,
-    // bend up to 3 points towards tangent by 60%
+    // 5. Clean acute kinks in last 3 points & clamp sharp corners
     let m = working.length;
+    if (m >= 4) {
+      for (let k = m - 2; k >= m - 3 && k >= 1; k--) {
+        const R = computeCircumcircleRadius(working[k - 1], working[k], working[k + 1]);
+        if (R < 0.75 * localMainW) {
+          const midX = (working[k - 1][0] + working[k + 1][0]) * 0.5;
+          const midY = (working[k - 1][1] + working[k + 1][1]) * 0.5;
+          working[k] = [working[k][0] * 0.4 + midX * 0.6, working[k][1] * 0.4 + midY * 0.6];
+        }
+      }
+    }
+
+    working = clampSharpCorners(working);
+
+    // 6. Approach angle check: if incoming angle with main river tangent > 80 deg,
+    // bend last 3 points towards tangent by 60%
+    m = working.length;
     if (m >= 3) {
       const pEnd = working[m - 1];
       const pPrev = working[m - 2];
@@ -1004,7 +1095,8 @@ export function alignTributaryConfluences(
       const proj = projectPointToPolyline(pEnd, mainRiver.points);
       const mainTan = proj.tangent;
       const dot = inDir[0] * mainTan[0] + inDir[1] * mainTan[1];
-      const cos80 = Math.cos((80 * Math.PI) / 180); // ~0.1736
+      const cos80 = Math.cos((80 * Math.PI) / 180); // ~0.173648
+      const eEnd = sampleElev(elevationGrid, cols, rows, mapW, mapH, pEnd[0], pEnd[1]);
 
       if (dot < cos80) {
         for (let step = 1; step <= Math.min(3, m - 1); step++) {
@@ -1015,48 +1107,22 @@ export function alignTributaryConfluences(
             pEnd[0] - mainTan[0] * distFromEnd,
             pEnd[1] - mainTan[1] * distFromEnd,
           ];
-          const alpha = 0.65 * (1 - (step - 1) * 0.25);
-          const cand: [number, number] = [
+          const alpha = 0.60;
+          working[ptIdx] = [
             orig[0] * (1 - alpha) + targetPt[0] * alpha,
             orig[1] * (1 - alpha) + targetPt[1] * alpha,
           ];
-          const eBefore =
-            ptIdx > 0
-              ? sampleElev(elevationGrid, cols, rows, mapW, mapH, working[ptIdx - 1][0], working[ptIdx - 1][1])
-              : Infinity;
-          const eCand = sampleElev(elevationGrid, cols, rows, mapW, mapH, cand[0], cand[1]);
-          if (eCand <= eBefore + 0.35) {
-            working[ptIdx] = cand;
-          }
         }
       }
+
+      working = clampSharpCorners(working);
     }
 
-    // Clean acute kinks in last 3 points
-    m = working.length;
-    if (m >= 4) {
-      for (let k = m - 2; k >= m - 3 && k >= 1; k--) {
-        const R = computeCircumcircleRadius(working[k - 1], working[k], working[k + 1]);
-        if (R < 0.5 * trib.widthEnd) {
-          const midX = (working[k - 1][0] + working[k + 1][0]) * 0.5;
-          const midY = (working[k - 1][1] + working[k + 1][1]) * 0.5;
-          working[k] = [working[k][0] * 0.4 + midX * 0.6, working[k][1] * 0.4 + midY * 0.6];
-        }
-      }
-    }
+    // Ensure the last point is strictly snapped onto main river polyline
+    const finalSnap = projectPointToPolyline(working[working.length - 1], mainRiver.points);
+    working[working.length - 1] = finalSnap.point;
 
-    working = clampSharpCorners(working);
-
-    if (hasSelfIntersection(working) || checkIntersectsMain(working)) {
-      trib.points = originalPoints;
-      const snap = projectPointToPolyline(trib.points[trib.points.length - 1], mainRiver.points);
-      trib.points[trib.points.length - 1] = snap.point;
-      if (hasSelfIntersection(trib.points)) {
-        trib.points = originalPoints;
-      }
-    } else {
-      trib.points = working;
-    }
+    trib.points = working;
   }
 }
 
@@ -1161,7 +1227,7 @@ function applyNaturalMeander(
   for (let i = 1; i < n; i++) {
     const ds = cumDists[i] - cumDists[i - 1];
     const w = widths[i];
-    const lambda = Math.max(16 * w, 24 * cellSize);
+    const lambda = Math.max(16 * w, 20 * cellSize);
     phases[i] = phases[i - 1] + (ds / lambda) * (2 * Math.PI);
   }
 
@@ -1185,7 +1251,10 @@ function applyNaturalMeander(
       const taper = smoothstep(0, T0, s) * smoothstep(0, T1, L - s);
       const wob = 1 + 0.3 * Math.sin(phases[i] * 0.41 + 1.3);
 
-      let off = meanderFactor * K * widths[i] * plains[i] * taper * wob * Math.sin(phases[i]);
+      const aThick = meanderFactor * K * widths[i] * plains[i] * taper * wob;
+      const aThin = meanderFactor * (K / 1.2) * 0.5 * cellSize * taper * plains[i];
+      const A = Math.max(aThick, aThin);
+      let off = A * Math.sin(phases[i]);
 
       // Curvature limit: |off| <= 0.4 / kappa
       const kappa = curvatures[i];
@@ -1752,7 +1821,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      100
+      60
     );
     // Pass 2: Fine Gaussian smoothing
     processedPoints = smoothRiverGaussian(
@@ -1774,8 +1843,9 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      100
+      60
     );
+    processedPoints = clampSharpCorners(processedPoints);
 
     const isMain = raw.terminatesAt !== 'river';
     const name = isMain ? FANTASY_RIVER_NAMES[mainNameIndex++ % FANTASY_RIVER_NAMES.length] : undefined;
@@ -1799,22 +1869,18 @@ export function extractRivers(
   // 11. Confluence alignment: place tributary end on main river segment & blend incoming tangent 60%
   alignTributaryConfluences(resultRivers, elevationGrid, cols, rows, mapWidth, mapHeight);
 
-  // 12. If river terminates into a lake, clamp river path so it doesn't cross inside the lake
+  // 12. If river connects to a lake, clamp river path so it doesn't cross inside the lake
   for (const riverObj of resultRivers) {
     if (riverObj.terminatesAt === 'lake' && riverObj.targetLakeId) {
       const tgtLake = lakes.find((l) => l.id === riverObj.targetLakeId);
       if (tgtLake) {
-        clampRiverToLakePerimeter(riverObj, tgtLake);
-        if (riverObj.points.length >= 3) {
-          const n = riverObj.points.length;
-          const d = Math.hypot(
-            riverObj.points[n - 1][0] - riverObj.points[n - 2][0],
-            riverObj.points[n - 1][1] - riverObj.points[n - 2][1]
-          );
-          if (d < 0.25 * cellSize) {
-            riverObj.points.splice(n - 2, 1);
-          }
-        }
+        clampRiverToLakePerimeter(riverObj, tgtLake, cellSize);
+      }
+    }
+    if (riverObj.sourceType === 'lake' && riverObj.sourceLakeId) {
+      const srcLake = lakes.find((l) => l.id === riverObj.sourceLakeId);
+      if (srcLake) {
+        clampRiverToLakePerimeter(riverObj, srcLake, cellSize);
       }
     }
   }
