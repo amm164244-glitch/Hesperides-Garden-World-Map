@@ -474,31 +474,40 @@ function adjustRiverMouthToCoastline(
 }
 
 /**
+ * CCW test for 2D points.
+ */
+export const ccw = (
+  p1: [number, number],
+  p2: [number, number],
+  p3: [number, number]
+): boolean => (p3[1] - p1[1]) * (p2[0] - p1[0]) > (p2[1] - p1[1]) * (p3[0] - p1[0]);
+
+/**
+ * Checks whether two 2D line segments intersect.
+ */
+export const segsIntersect = (
+  p1: [number, number],
+  p2: [number, number],
+  p3: [number, number],
+  p4: [number, number]
+): boolean => {
+  if (
+    Math.max(p1[0], p2[0]) < Math.min(p3[0], p4[0]) ||
+    Math.min(p1[0], p2[0]) > Math.max(p3[0], p4[0]) ||
+    Math.max(p1[1], p2[1]) < Math.min(p3[1], p4[1]) ||
+    Math.min(p1[1], p2[1]) > Math.max(p3[1], p4[1])
+  ) {
+    return false;
+  }
+  return ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4);
+};
+
+/**
  * Checks if 2D polyline self-intersects using bounding boxes and spatial hashing.
  */
 export function hasSelfIntersection(points: [number, number][]): boolean {
   const n = points.length;
   if (n < 4) return false;
-
-  const ccw = (p1: [number, number], p2: [number, number], p3: [number, number]) =>
-    (p3[1] - p1[1]) * (p2[0] - p1[0]) > (p2[1] - p1[1]) * (p3[0] - p1[0]);
-
-  const segsIntersect = (
-    p1: [number, number],
-    p2: [number, number],
-    p3: [number, number],
-    p4: [number, number]
-  ): boolean => {
-    if (
-      Math.max(p1[0], p2[0]) < Math.min(p3[0], p4[0]) ||
-      Math.min(p1[0], p2[0]) > Math.max(p3[0], p4[0]) ||
-      Math.max(p1[1], p2[1]) < Math.min(p3[1], p4[1]) ||
-      Math.min(p1[1], p2[1]) > Math.max(p3[1], p4[1])
-    ) {
-      return false;
-    }
-    return ccw(p1, p3, p4) !== ccw(p2, p3, p4) && ccw(p1, p2, p3) !== ccw(p1, p2, p4);
-  };
 
   if (n < 60) {
     for (let i = 0; i < n - 3; i++) {
@@ -565,10 +574,369 @@ export function hasSelfIntersection(points: [number, number][]): boolean {
 }
 
 /**
- * Aligns tributary confluences cleanly onto their main river stems:
- * Snaps final point directly onto closest main river segment and bends incoming tangent by 60%.
+ * Checks whether moving vertex i of polyline pts to cand causes any self-intersection.
  */
-function alignTributaryConfluences(
+export function movingPointCausesSelfIntersection(
+  pts: [number, number][],
+  i: number,
+  cand: [number, number]
+): boolean {
+  const n = pts.length;
+  const pPrev = pts[i - 1];
+  const pNext = pts[i + 1];
+
+  for (let j = 0; j < n - 1; j++) {
+    // Check segment (pPrev -> cand): ignore adjacent segments j == i - 2, i - 1, i
+    if (j !== i - 2 && j !== i - 1 && j !== i) {
+      if (segsIntersect(pPrev, cand, pts[j], pts[j + 1])) {
+        return true;
+      }
+    }
+    // Check segment (cand -> pNext): ignore adjacent segments j == i - 1, i, i + 1
+    if (j !== i - 1 && j !== i && j !== i + 1) {
+      if (segsIntersect(cand, pNext, pts[j], pts[j + 1])) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Calculates circumcircle radius of three consecutive points.
+ * Returns Infinity if collinear.
+ */
+export function computeCircumcircleRadius(
+  pPrev: [number, number],
+  pCurr: [number, number],
+  pNext: [number, number]
+): number {
+  const a = Math.hypot(pCurr[0] - pPrev[0], pCurr[1] - pPrev[1]);
+  const b = Math.hypot(pNext[0] - pCurr[0], pNext[1] - pCurr[1]);
+  const c = Math.hypot(pNext[0] - pPrev[0], pNext[1] - pPrev[1]);
+  if (a < 1e-6 || b < 1e-6) return 0;
+  const cross = Math.abs(
+    (pCurr[0] - pPrev[0]) * (pNext[1] - pPrev[1]) -
+    (pCurr[1] - pPrev[1]) * (pNext[0] - pPrev[0])
+  );
+  if (cross < 1e-7) return Infinity;
+  return (a * b * c) / (2 * cross);
+}
+
+/**
+ * Computes per-point river width via distance-based linear interpolation,
+ * bounded below by minHeadWidth.
+ */
+export function computeRiverPointWidthsForExtraction(
+  points: [number, number][],
+  widthStart: number,
+  widthEnd: number,
+  wMin: number
+): number[] {
+  const n = points.length;
+  if (n === 0) return [];
+  if (n === 1) return [widthStart];
+
+  let totalDist = 0;
+  const dists: number[] = [0];
+  for (let i = 0; i < n - 1; i++) {
+    totalDist += Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+    dists.push(totalDist);
+  }
+
+  const widths: number[] = [];
+  const minHeadWidth = wMin * 0.6;
+  for (let i = 0; i < n; i++) {
+    const frac = totalDist > 0 ? dists[i] / totalDist : 0;
+    const w = widthStart + (widthEnd - widthStart) * frac;
+    widths.push(Math.max(w, minHeadWidth));
+  }
+  return widths;
+}
+
+/**
+ * Limits river curvature according to river width:
+ * When circumcircle radius R(i) < 0.75 * w(i), relaxes point towards midpoint of neighbors.
+ * Preserves endpoints and checks elevation monotonicity and self-intersection.
+ */
+export function limitRiverCurvature(
+  points: [number, number][],
+  widths: number[],
+  filledGrid: Float32Array,
+  cols: number,
+  rows: number,
+  mapW: number,
+  mapH: number,
+  maxIterations: number = 150
+): [number, number][] {
+  const n = points.length;
+  if (n < 3) return points;
+
+  let totalDist0 = 0;
+  for (let i = 0; i < n - 1; i++) {
+    totalDist0 += Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+  }
+  const minAllowedLen = totalDist0 * 0.85;
+  let curLen = totalDist0;
+
+  const pts: [number, number][] = points.map((p) => [p[0], p[1]]);
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    let movedAny = false;
+
+    for (let i = 1; i < n - 1; i++) {
+      const w = widths[i] ?? widths[widths.length - 1] ?? 2.0;
+      const R = computeCircumcircleRadius(pts[i - 1], pts[i], pts[i + 1]);
+      if (R >= 0.75 * w) continue;
+
+      const pPrev = pts[i - 1];
+      const pCurr = pts[i];
+      const pNext = pts[i + 1];
+      const midX = (pPrev[0] + pNext[0]) * 0.5;
+      const midY = (pPrev[1] + pNext[1]) * 0.5;
+
+      const ePrev = sampleElev(filledGrid, cols, rows, mapW, mapH, pPrev[0], pPrev[1]);
+
+      for (const alpha of [0.6, 0.4, 0.2]) {
+        const candX = pCurr[0] * (1 - alpha) + midX * alpha;
+        const candY = pCurr[1] * (1 - alpha) + midY * alpha;
+        const cand: [number, number] = [candX, candY];
+
+        // Elevation monotonicity check
+        const eCand = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
+        if (eCand > ePrev + 0.3) continue;
+
+        // Self-intersection check
+        if (movingPointCausesSelfIntersection(pts, i, cand)) continue;
+
+        // Length preservation check (at least 85% of original length)
+        const oldSegs =
+          Math.hypot(pCurr[0] - pPrev[0], pCurr[1] - pPrev[1]) +
+          Math.hypot(pNext[0] - pCurr[0], pNext[1] - pCurr[1]);
+        const newSegs =
+          Math.hypot(candX - pPrev[0], candY - pPrev[1]) +
+          Math.hypot(pNext[0] - candX, pNext[1] - candY);
+        const lenDelta = newSegs - oldSegs;
+        if (curLen + lenDelta < minAllowedLen) continue;
+
+        pts[i] = cand;
+        curLen += lenDelta;
+        movedAny = true;
+        break;
+      }
+    }
+
+    if (!movedAny) break;
+  }
+
+  return pts;
+}
+
+/**
+ * Distance-based Gaussian smoothing to eliminate fine jaggedness.
+ * sigma = max(w(i) * 1.0, cellSize * 1.5), window radius = 2.5 * sigma.
+ * Endpoints pinned; weights smoothly tapered to 0 within half-window of ends.
+ * Monotonicity (uphill <= 1%) and self-intersection verified, otherwise reverted.
+ */
+export function smoothRiverGaussian(
+  points: [number, number][],
+  widths: number[],
+  cellSize: number,
+  filledGrid: Float32Array,
+  cols: number,
+  rows: number,
+  mapW: number,
+  mapH: number
+): [number, number][] {
+  const n = points.length;
+  if (n < 4) return points;
+
+  const s: number[] = [0];
+  let totalL = 0;
+  for (let i = 0; i < n - 1; i++) {
+    totalL += Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+    s.push(totalL);
+  }
+  if (totalL <= 1e-4) return points;
+
+  const smoothedPts: [number, number][] = points.map((p) => [p[0], p[1]]);
+
+  for (let i = 1; i < n - 1; i++) {
+    const w = widths[i] ?? widths[widths.length - 1] ?? 2.0;
+    // sigma = max(w * 1.0, 1.5 * pointSpacing where pointSpacing = 0.5 * cellSize)
+    const sigma = Math.max(w * 1.0, cellSize * 0.75);
+    const windowR = 2.5 * sigma;
+    const halfWin = 0.5 * windowR;
+
+    const distFromEnd = Math.min(s[i], totalL - s[i]);
+    const taper = distFromEnd < halfWin ? distFromEnd / Math.max(1e-4, halfWin) : 1.0;
+    if (taper <= 0) continue;
+
+    let sumW = 0;
+    let sumX = 0;
+    let sumY = 0;
+    const twoSigma2 = 2 * sigma * sigma;
+
+    // Accumulate backwards
+    for (let j = i; j >= 0; j--) {
+      const ds = s[i] - s[j];
+      if (ds > windowR) break;
+      const kw = Math.exp(-(ds * ds) / twoSigma2);
+      sumW += kw;
+      sumX += kw * points[j][0];
+      sumY += kw * points[j][1];
+    }
+    // Accumulate forwards
+    for (let j = i + 1; j < n; j++) {
+      const ds = s[j] - s[i];
+      if (ds > windowR) break;
+      const kw = Math.exp(-(ds * ds) / twoSigma2);
+      sumW += kw;
+      sumX += kw * points[j][0];
+      sumY += kw * points[j][1];
+    }
+
+    if (sumW > 0) {
+      const gx = sumX / sumW;
+      const gy = sumY / sumW;
+      smoothedPts[i] = [
+        points[i][0] * (1 - taper) + gx * taper,
+        points[i][1] * (1 - taper) + gy * taper,
+      ];
+    }
+  }
+
+  // Verification 1: Self-intersection
+  if (hasSelfIntersection(smoothedPts)) {
+    return points;
+  }
+
+  // Verification 2: Monotonicity (uphill segments <= 1%)
+  let uphillCount = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const e1 = sampleElev(filledGrid, cols, rows, mapW, mapH, smoothedPts[i][0], smoothedPts[i][1]);
+    const e2 = sampleElev(filledGrid, cols, rows, mapW, mapH, smoothedPts[i + 1][0], smoothedPts[i + 1][1]);
+    if (e2 - e1 > 0.3) {
+      uphillCount++;
+    }
+  }
+  if (uphillCount / (n - 1) > 0.01) {
+    return points;
+  }
+
+  // Verification 3: Straight runs check (do not flatten meanders into straight runs >= 8 points with < 3 deg change)
+  let straightRunPts = 0;
+  const threeDegRad = (3 * Math.PI) / 180;
+  let k = 0;
+  while (k < n - 8) {
+    let runEnd = k + 1;
+    const vBaseX = smoothedPts[k + 1][0] - smoothedPts[k][0];
+    const vBaseY = smoothedPts[k + 1][1] - smoothedPts[k][1];
+    const lenBase = Math.hypot(vBaseX, vBaseY);
+    if (lenBase < 1e-6) {
+      k++;
+      continue;
+    }
+    while (runEnd < n - 1) {
+      const vCurrX = smoothedPts[runEnd + 1][0] - smoothedPts[runEnd][0];
+      const vCurrY = smoothedPts[runEnd + 1][1] - smoothedPts[runEnd][1];
+      const lenCurr = Math.hypot(vCurrX, vCurrY);
+      if (lenCurr < 1e-6) {
+        runEnd++;
+        continue;
+      }
+      const dot = (vBaseX * vCurrX + vBaseY * vCurrY) / (lenBase * lenCurr);
+      const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+      if (angle < threeDegRad) {
+        runEnd++;
+      } else {
+        break;
+      }
+    }
+    const count = runEnd + 1 - k;
+    if (count >= 8) {
+      straightRunPts += count;
+      k = runEnd;
+    } else {
+      k++;
+    }
+  }
+  if (straightRunPts / n > 0.15) {
+    return points;
+  }
+
+  return smoothedPts;
+}
+
+/**
+ * Projects a point onto a polyline and returns the closest point, tangent vector, and distance.
+ */
+export function projectPointToPolyline(
+  p: [number, number],
+  poly: [number, number][]
+): { point: [number, number]; tangent: [number, number]; dist: number; segIndex: number } {
+  let bestDist = Infinity;
+  let bestPt: [number, number] = p;
+  let bestTangent: [number, number] = [1, 0];
+  let bestSeg = 0;
+
+  for (let s = 0; s < poly.length - 1; s++) {
+    const A = poly[s];
+    const B = poly[s + 1];
+    const ABx = B[0] - A[0];
+    const ABy = B[1] - A[1];
+    const len2 = ABx * ABx + ABy * ABy;
+    if (len2 < 1e-8) continue;
+
+    const t = Math.max(0, Math.min(1, ((p[0] - A[0]) * ABx + (p[1] - A[1]) * ABy) / len2));
+    const proj: [number, number] = [A[0] + t * ABx, A[1] + t * ABy];
+    const d = Math.hypot(p[0] - proj[0], p[1] - proj[1]);
+
+    if (d < bestDist) {
+      bestDist = d;
+      bestPt = proj;
+      bestSeg = s;
+      const segLen = Math.hypot(ABx, ABy) || 1;
+      bestTangent = [ABx / segLen, ABy / segLen];
+    }
+  }
+
+  return { point: bestPt, tangent: bestTangent, dist: bestDist, segIndex: bestSeg };
+}
+
+/**
+ * Computes minimum distance from a point to any segment of a polyline.
+ */
+function distToPolyline(p: [number, number], poly: [number, number][]): number {
+  let minD = Infinity;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const A = poly[i];
+    const B = poly[i + 1];
+    const ABx = B[0] - A[0];
+    const ABy = B[1] - A[1];
+    const len2 = ABx * ABx + ABy * ABy;
+    if (len2 < 1e-8) {
+      const d = Math.hypot(p[0] - A[0], p[1] - A[1]);
+      if (d < minD) minD = d;
+      continue;
+    }
+    const t = Math.max(0, Math.min(1, ((p[0] - A[0]) * ABx + (p[1] - A[1]) * ABy) / len2));
+    const d = Math.hypot(p[0] - (A[0] + t * ABx), p[1] - (A[1] + t * ABy));
+    if (d < minD) minD = d;
+  }
+  return minD;
+}
+
+/**
+ * Aligns tributary confluences cleanly onto their main river stems:
+ * - Clamps mouth width <= main river width.
+ * - Trims tributary points within W_main * 1.5 of main river centerline to eliminate folding.
+ * - Snaps final point onto main river.
+ * - Realigns approach angle if > 80 deg.
+ * - Cleans acute kinks in last 3 points.
+ * - Main river remains unchanged.
+ */
+export function alignTributaryConfluences(
   rivers: RiverData[],
   elevationGrid: Float32Array,
   cols: number,
@@ -586,101 +954,108 @@ function alignTributaryConfluences(
     const mainRiver = riverMap.get(trib.connectedRiverId);
     if (!mainRiver || mainRiver.points.length < 2 || trib.points.length < 3) continue;
 
-    const n = trib.points.length;
-    const pEnd = trib.points[n - 1];
-
-    let bestDist = Infinity;
-    let bestProj: [number, number] = pEnd;
-    let bestTangent: [number, number] = [1, 0];
-
-    for (let s = 0; s < mainRiver.points.length - 1; s++) {
-      const A = mainRiver.points[s];
-      const B = mainRiver.points[s + 1];
-      const ABx = B[0] - A[0];
-      const ABy = B[1] - A[1];
-      const len2 = ABx * ABx + ABy * ABy;
-      if (len2 < 1e-8) continue;
-
-      const t = Math.max(0, Math.min(1, ((pEnd[0] - A[0]) * ABx + (pEnd[1] - A[1]) * ABy) / len2));
-      const proj: [number, number] = [A[0] + t * ABx, A[1] + t * ABy];
-      const d = Math.hypot(pEnd[0] - proj[0], pEnd[1] - proj[1]);
-
-      if (d < bestDist) {
-        bestDist = d;
-        bestProj = proj;
-        const segLen = Math.hypot(ABx, ABy) || 1;
-        bestTangent = [ABx / segLen, ABy / segLen];
-      }
-    }
-
     // Clamp tributary mouth width so it does not exceed the main river's width
     trib.widthEnd = Math.min(trib.widthEnd, mainRiver.widthEnd);
 
-    // Save backup in case alignment induces an invalid self-intersection
     const originalPoints = trib.points.map((p) => [p[0], p[1]] as [number, number]);
 
-    // 1. Place final point precisely onto main river's segment
-    trib.points[n - 1] = bestProj;
-
-    // 2. Blend incoming tangent towards main river tangent by 60%
-    const pPrevOrig = trib.points[n - 2];
-    const inDx = bestProj[0] - pPrevOrig[0];
-    const inDy = bestProj[1] - pPrevOrig[1];
-    const inLen = Math.hypot(inDx, inDy) || 1;
-    const inNormX = inDx / inLen;
-    const inNormY = inDy / inLen;
-
-    let blendX = inNormX * 0.4 + bestTangent[0] * 0.6;
-    let blendY = inNormY * 0.4 + bestTangent[1] * 0.6;
-    const bLen = Math.hypot(blendX, blendY) || 1;
-    blendX /= bLen;
-    blendY /= bLen;
-
-    const candPrev: [number, number] = [
-      bestProj[0] - blendX * inLen,
-      bestProj[1] - blendY * inLen,
-    ];
-
-    const pPrev2 = trib.points[n - 3];
-    const eBefore = sampleElev(elevationGrid, cols, rows, mapW, mapH, pPrev2[0], pPrev2[1]);
-    const eProj = sampleElev(elevationGrid, cols, rows, mapW, mapH, bestProj[0], bestProj[1]);
-
-    let acceptedPrev = pPrevOrig;
-    for (const alpha of [1.0, 0.75, 0.5, 0.25, 0.0]) {
-      const testX = pPrevOrig[0] * (1 - alpha) + candPrev[0] * alpha;
-      const testY = pPrevOrig[1] * (1 - alpha) + candPrev[1] * alpha;
-
-      // Check elevation monotonicity
-      const eTest = sampleElev(elevationGrid, cols, rows, mapW, mapH, testX, testY);
-      if (eTest > eBefore + 0.3 || eProj > eTest + 0.3) continue;
-
-      // Check for sharp angle between (pPrev2 -> test) and (test -> bestProj)
-      const v1x = testX - pPrev2[0];
-      const v1y = testY - pPrev2[1];
-      const v2x = bestProj[0] - testX;
-      const v2y = bestProj[1] - testY;
-      const l1 = Math.hypot(v1x, v1y);
-      const l2 = Math.hypot(v2x, v2y);
-      if (l1 > 1e-4 && l2 > 1e-4) {
-        const dot = (v1x * v2x + v1y * v2y) / (l1 * l2);
-        if (dot < 0) continue; // Acute angle (< 90 deg turn), reject
-      }
-
-      acceptedPrev = [testX, testY];
-      break;
+    // Trim tributary points within W_main * 1.5 of main river centerline
+    const trimDist = mainRiver.widthEnd * 1.5;
+    let keepIndex = trib.points.length - 1;
+    while (keepIndex > 1 && distToPolyline(trib.points[keepIndex], mainRiver.points) < trimDist) {
+      keepIndex--;
     }
-    trib.points[n - 2] = acceptedPrev;
 
-    // Ensure no accidental acute angles near confluence
-    trib.points = clampSharpCorners(trib.points);
+    let working = trib.points.slice(0, keepIndex + 1);
+    const projResult = projectPointToPolyline(working[working.length - 1], mainRiver.points);
+    working.push(projResult.point);
 
-    // If confluence adjustment caused self-intersection, restore original points (keeping snapped endpoint if safe)
-    if (hasSelfIntersection(trib.points)) {
+    // If tributary intersects main river prior to confluence, cut last 5 points and reconnect
+    const checkIntersectsMain = (pts: [number, number][]): boolean => {
+      for (let i = 0; i < pts.length - 2; i++) {
+        for (let j = 0; j < mainRiver.points.length - 1; j++) {
+          if (segsIntersect(pts[i], pts[i + 1], mainRiver.points[j], mainRiver.points[j + 1])) {
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+
+    if (hasSelfIntersection(working) || checkIntersectsMain(working)) {
+      if (working.length > 7) {
+        working = working.slice(0, -6);
+        const rep = projectPointToPolyline(working[working.length - 1], mainRiver.points);
+        working.push(rep.point);
+      }
+    }
+
+    // Approach angle check: if incoming angle with main river tangent > 80 deg,
+    // bend up to 3 points towards tangent by 60%
+    let m = working.length;
+    if (m >= 3) {
+      const pEnd = working[m - 1];
+      const pPrev = working[m - 2];
+      const inDx = pEnd[0] - pPrev[0];
+      const inDy = pEnd[1] - pPrev[1];
+      const inLen = Math.hypot(inDx, inDy) || 1;
+      const inDir: [number, number] = [inDx / inLen, inDy / inLen];
+
+      const proj = projectPointToPolyline(pEnd, mainRiver.points);
+      const mainTan = proj.tangent;
+      const dot = inDir[0] * mainTan[0] + inDir[1] * mainTan[1];
+      const cos80 = Math.cos((80 * Math.PI) / 180); // ~0.1736
+
+      if (dot < cos80) {
+        for (let step = 1; step <= Math.min(3, m - 1); step++) {
+          const ptIdx = m - 1 - step;
+          const orig = working[ptIdx];
+          const distFromEnd = Math.hypot(pEnd[0] - orig[0], pEnd[1] - orig[1]);
+          const targetPt: [number, number] = [
+            pEnd[0] - mainTan[0] * distFromEnd,
+            pEnd[1] - mainTan[1] * distFromEnd,
+          ];
+          const alpha = 0.65 * (1 - (step - 1) * 0.25);
+          const cand: [number, number] = [
+            orig[0] * (1 - alpha) + targetPt[0] * alpha,
+            orig[1] * (1 - alpha) + targetPt[1] * alpha,
+          ];
+          const eBefore =
+            ptIdx > 0
+              ? sampleElev(elevationGrid, cols, rows, mapW, mapH, working[ptIdx - 1][0], working[ptIdx - 1][1])
+              : Infinity;
+          const eCand = sampleElev(elevationGrid, cols, rows, mapW, mapH, cand[0], cand[1]);
+          if (eCand <= eBefore + 0.35) {
+            working[ptIdx] = cand;
+          }
+        }
+      }
+    }
+
+    // Clean acute kinks in last 3 points
+    m = working.length;
+    if (m >= 4) {
+      for (let k = m - 2; k >= m - 3 && k >= 1; k--) {
+        const R = computeCircumcircleRadius(working[k - 1], working[k], working[k + 1]);
+        if (R < 0.5 * trib.widthEnd) {
+          const midX = (working[k - 1][0] + working[k + 1][0]) * 0.5;
+          const midY = (working[k - 1][1] + working[k + 1][1]) * 0.5;
+          working[k] = [working[k][0] * 0.4 + midX * 0.6, working[k][1] * 0.4 + midY * 0.6];
+        }
+      }
+    }
+
+    working = clampSharpCorners(working);
+
+    if (hasSelfIntersection(working) || checkIntersectsMain(working)) {
       trib.points = originalPoints;
-      trib.points[n - 1] = bestProj;
+      const snap = projectPointToPolyline(trib.points[trib.points.length - 1], mainRiver.points);
+      trib.points[trib.points.length - 1] = snap.point;
       if (hasSelfIntersection(trib.points)) {
         trib.points = originalPoints;
       }
+    } else {
+      trib.points = working;
     }
   }
 }
@@ -1345,9 +1720,9 @@ export function extractRivers(
       );
     }
 
-    // 12. If meandering ever caused self-intersection, revert to relaxed path
+    // 12. If meandering ever caused self-intersection, revert to resampled path
     if (hasSelfIntersection(processedPoints)) {
-      processedPoints = relaxed;
+      processedPoints = resampled;
       if (raw.terminatesAt === 'ocean') {
         processedPoints = adjustRiverMouthToCoastline(
           processedPoints,
@@ -1360,6 +1735,47 @@ export function extractRivers(
         );
       }
     }
+
+    // 13. Curvature limiting & Fine Gaussian smoothing
+    const pointWidths = computeRiverPointWidthsForExtraction(
+      processedPoints,
+      widthStart,
+      widthEnd,
+      wMin
+    );
+    // Pass 1: Curvature limiting
+    processedPoints = limitRiverCurvature(
+      processedPoints,
+      pointWidths,
+      filledF32,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight,
+      100
+    );
+    // Pass 2: Fine Gaussian smoothing
+    processedPoints = smoothRiverGaussian(
+      processedPoints,
+      pointWidths,
+      cellSize,
+      filledF32,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight
+    );
+    // Pass 3: Re-run curvature limiting
+    processedPoints = limitRiverCurvature(
+      processedPoints,
+      pointWidths,
+      filledF32,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight,
+      100
+    );
 
     const isMain = raw.terminatesAt !== 'river';
     const name = isMain ? FANTASY_RIVER_NAMES[mainNameIndex++ % FANTASY_RIVER_NAMES.length] : undefined;
@@ -1389,6 +1805,16 @@ export function extractRivers(
       const tgtLake = lakes.find((l) => l.id === riverObj.targetLakeId);
       if (tgtLake) {
         clampRiverToLakePerimeter(riverObj, tgtLake);
+        if (riverObj.points.length >= 3) {
+          const n = riverObj.points.length;
+          const d = Math.hypot(
+            riverObj.points[n - 1][0] - riverObj.points[n - 2][0],
+            riverObj.points[n - 1][1] - riverObj.points[n - 2][1]
+          );
+          if (d < 0.25 * cellSize) {
+            riverObj.points.splice(n - 2, 1);
+          }
+        }
       }
     }
   }
