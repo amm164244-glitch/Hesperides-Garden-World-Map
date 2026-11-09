@@ -141,15 +141,32 @@ export interface RiverStrokeGroup {
   width: number;
 }
 
+export interface StrokeBucketOptions {
+  step?: number;
+  zoomPx?: number;
+  maxBuckets?: number;
+  bucketCount?: number;
+}
+
 /**
- * Quantizes river segments into width buckets (default 12), grouping continuous segments
- * of the same bucket so they can be stroked in a single canvas pass.
- * Boundary vertices are shared between adjacent groups to prevent gaps or dropped vertices.
+ * Quantizes river width to the nearest step.
+ * quantizeWidth(w, step) = round(w ÷ step) × step
  */
-export function buildRiverStrokeGroups(
+export function quantizeWidth(w: number, step: number): number {
+  if (step <= 0) return w;
+  return Math.round(w / step) * step;
+}
+
+/**
+ * Quantizes river segments into width buckets, grouping continuous segments
+ * of the same bucket so they can be stroked in a single canvas pass.
+ * Boundary vertices are shared between adjacent groups to prevent gaps.
+ * When screen width is < 2 pixels, draws using a single average width.
+ */
+export function partitionRiverStrokeBuckets(
   points: [number, number][],
   widths: number[],
-  bucketCount: number = 12
+  options?: number | StrokeBucketOptions
 ): RiverStrokeGroup[] {
   const n = points.length;
   if (n < 2) {
@@ -157,21 +174,23 @@ export function buildRiverStrokeGroups(
     return [];
   }
 
-  if (n === 2) {
-    const w = ((widths[0] ?? 1.5) + (widths[1] ?? widths[0] ?? 1.5)) * 0.5;
-    return [{ points: [points[0], points[1]], width: w }];
-  }
-
   // Calculate segment widths (average of endpoints)
   const segWidths: number[] = new Array(n - 1);
   let minW = Infinity;
   let maxW = -Infinity;
+  let sumW = 0;
 
   for (let j = 0; j < n - 1; j++) {
     const sw = ((widths[j] ?? 1.5) + (widths[j + 1] ?? widths[j] ?? 1.5)) * 0.5;
     segWidths[j] = sw;
+    sumW += sw;
     if (sw < minW) minW = sw;
     if (sw > maxW) maxW = sw;
+  }
+  const avgW = sumW / (n - 1);
+
+  if (n === 2) {
+    return [{ points: [points[0], points[1]], width: segWidths[0] }];
   }
 
   // If width is uniform across all segments, return 1 group
@@ -179,42 +198,92 @@ export function buildRiverStrokeGroups(
     return [{ points: points.slice(), width: (minW + maxW) * 0.5 }];
   }
 
-  const B = Math.max(1, Math.min(32, Math.floor(bucketCount || 12)));
-  const step = (maxW - minW) / B;
+  let zoomPx: number | undefined;
+  let explicitStep: number | undefined;
+  let maxBuckets = 128;
+  let legacyBucketCount: number | undefined;
 
-  const getBucket = (w: number): number => {
-    return Math.min(B - 1, Math.max(0, Math.floor((w - minW) / step)));
-  };
+  if (typeof options === 'number') {
+    legacyBucketCount = options;
+  } else if (options) {
+    zoomPx = options.zoomPx;
+    explicitStep = options.step;
+    if (options.maxBuckets !== undefined) maxBuckets = options.maxBuckets;
+    if (options.bucketCount !== undefined) legacyBucketCount = options.bucketCount;
+  }
 
-  const getRepWidth = (bucket: number): number => {
-    return minW + (bucket + 0.5) * step;
-  };
+  // Screen width < 2 pixels: draw using single average width
+  if (zoomPx !== undefined && zoomPx > 0) {
+    const maxScreenW = maxW * zoomPx;
+    if (maxScreenW < 2.0) {
+      return [{ points: points.slice(), width: avgW }];
+    }
+  }
+
+  // Determine step
+  let step: number;
+  if (explicitStep !== undefined && explicitStep > 0) {
+    step = explicitStep;
+    const neededBuckets = (maxW - minW) / step;
+    if (neededBuckets > maxBuckets) {
+      step = (maxW - minW) / maxBuckets;
+    }
+  } else if (legacyBucketCount !== undefined && legacyBucketCount > 0) {
+    const B = Math.max(1, Math.min(maxBuckets, Math.floor(legacyBucketCount)));
+    step = (maxW - minW) / B;
+  } else {
+    const z = zoomPx && zoomPx > 0 ? zoomPx : 1.0;
+    const targetStep = 0.6 / z;
+    const neededBuckets = (maxW - minW) / targetStep;
+    if (neededBuckets > maxBuckets) {
+      step = (maxW - minW) / maxBuckets;
+    } else {
+      step = targetStep;
+    }
+  }
+
+  if (step <= 0) {
+    return [{ points: points.slice(), width: avgW }];
+  }
 
   const groups: RiverStrokeGroup[] = [];
-  let currentBucket = getBucket(segWidths[0]);
+  let currentQuantizedW = quantizeWidth(segWidths[0], step);
   let currentPoints: [number, number][] = [points[0], points[1]];
 
   for (let j = 1; j < n - 1; j++) {
-    const b = getBucket(segWidths[j]);
-    if (b === currentBucket) {
+    const qw = quantizeWidth(segWidths[j], step);
+    if (Math.abs(qw - currentQuantizedW) < 1e-6) {
       currentPoints.push(points[j + 1]);
     } else {
       groups.push({
         points: currentPoints,
-        width: getRepWidth(currentBucket),
+        width: currentQuantizedW,
       });
       // Share endpoint points[j] with next group to prevent gaps
       currentPoints = [points[j], points[j + 1]];
-      currentBucket = b;
+      currentQuantizedW = qw;
     }
   }
 
   groups.push({
     points: currentPoints,
-    width: getRepWidth(currentBucket),
+    width: currentQuantizedW,
   });
 
   return groups;
+}
+
+/**
+ * Quantizes river segments into width buckets, grouping continuous segments
+ * of the same bucket so they can be stroked in a single canvas pass.
+ * Boundary vertices are shared between adjacent groups to prevent gaps or dropped vertices.
+ */
+export function buildRiverStrokeGroups(
+  points: [number, number][],
+  widths: number[],
+  options?: number | StrokeBucketOptions
+): RiverStrokeGroup[] {
+  return partitionRiverStrokeBuckets(points, widths, options);
 }
 
 /**
@@ -420,7 +489,7 @@ export function drawWaterBodies(
     }
 
     const widths = computeRiverPointWidths(pts, wStart, wEnd, isEstuary, options.cellSize ?? 1.0);
-    const strokeGroups = buildRiverStrokeGroups(pts, widths, 12);
+    const strokeGroups = buildRiverStrokeGroups(pts, widths, { zoomPx });
 
     preparedRivers.push({
       river,

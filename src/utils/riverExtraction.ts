@@ -357,29 +357,61 @@ function breakStraightRuns(
         let candX = pCurr[0] + nx * disp;
         let candY = pCurr[1] + ny * disp;
 
+        let accepted = false;
         const prevElev = sampleElev(filledGrid, cols, rows, mapW, mapH, pts[k - 1][0], pts[k - 1][1]);
-        let candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
 
-        let accepted = candElev <= prevElev + 0.3;
-        if (!accepted) {
-          for (let h = 1; h <= 5; h++) {
-            disp *= 0.5;
-            candX = pCurr[0] + nx * disp;
-            candY = pCurr[1] + ny * disp;
+        for (const side of [1, -1]) {
+          let testDisp = disp * side;
+          let candX = pCurr[0] + nx * testDisp;
+          let candY = pCurr[1] + ny * testDisp;
+          let candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
+          if (candElev <= prevElev + 0.3) {
+            pts[k] = [candX, candY];
+            accepted = true;
+            break;
+          }
+          for (let h = 1; h <= 4; h++) {
+            testDisp *= 0.5;
+            candX = pCurr[0] + nx * testDisp;
+            candY = pCurr[1] + ny * testDisp;
             candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
             if (candElev <= prevElev + 0.3) {
+              pts[k] = [candX, candY];
               accepted = true;
               break;
             }
           }
-        }
-
-        if (accepted) {
-          pts[k] = [candX, candY];
+          if (accepted) break;
         }
       }
 
-      if (hasSelfIntersection(pts)) {
+      let runIntersects = false;
+      const checkStart = Math.max(0, runStart - 1);
+      const checkEnd = Math.min(n - 2, runEndIdx);
+      for (let s = checkStart; s <= checkEnd; s++) {
+        const p1 = pts[s];
+        const p2 = pts[s + 1];
+        const sMinX = p1[0] < p2[0] ? p1[0] : p2[0];
+        const sMaxX = p1[0] > p2[0] ? p1[0] : p2[0];
+        const sMinY = p1[1] < p2[1] ? p1[1] : p2[1];
+        const sMaxY = p1[1] > p2[1] ? p1[1] : p2[1];
+
+        for (let j = 0; j < n - 1; j++) {
+          if (Math.abs(s - j) <= 1) continue;
+          const pA = pts[j];
+          const pB = pts[j + 1];
+          if (sMaxX < (pA[0] < pB[0] ? pA[0] : pB[0]) || sMinX > (pA[0] > pB[0] ? pA[0] : pB[0])) continue;
+          if (sMaxY < (pA[1] < pB[1] ? pA[1] : pB[1]) || sMinY > (pA[1] > pB[1] ? pA[1] : pB[1])) continue;
+
+          if (segsIntersect(p1, p2, pA, pB)) {
+            runIntersects = true;
+            break;
+          }
+        }
+        if (runIntersects) break;
+      }
+
+      if (runIntersects) {
         for (let k = runStart; k <= runEndIdx; k++) {
           pts[k] = savedRun[k - runStart];
         }
@@ -526,7 +558,7 @@ export function hasSelfIntersection(points: [number, number][]): boolean {
   }
   const avgLen = totalLen / (n - 1) || 10;
   const hashCellSize = Math.max(avgLen * 2.5, 10);
-  const grid = new Map<string, number[]>();
+  const grid = new Map<number, number[]>();
 
   for (let i = 0; i < n - 1; i++) {
     const p1 = points[i];
@@ -538,7 +570,7 @@ export function hasSelfIntersection(points: [number, number][]): boolean {
 
     for (let gx = minX; gx <= maxX; gx++) {
       for (let gy = minY; gy <= maxY; gy++) {
-        const key = `${gx},${gy}`;
+        const key = ((gx + 32768) & 0xffff) * 65536 + ((gy + 32768) & 0xffff);
         let list = grid.get(key);
         if (!list) {
           list = [];
@@ -579,51 +611,49 @@ export function hasSelfIntersection(points: [number, number][]): boolean {
 export function movingPointCausesSelfIntersection(
   pts: [number, number][],
   i: number,
-  cand: [number, number]
+  cand: [number, number],
+  segBoxes?: Float32Array
 ): boolean {
   const n = pts.length;
   const pPrev = pts[i - 1];
   const pNext = pts[i + 1];
 
-  const minX1 = Math.min(pPrev[0], cand[0]);
-  const maxX1 = Math.max(pPrev[0], cand[0]);
-  const minY1 = Math.min(pPrev[1], cand[1]);
-  const maxY1 = Math.max(pPrev[1], cand[1]);
+  const minX = Math.min(pPrev[0], cand[0], pNext[0]);
+  const maxX = Math.max(pPrev[0], cand[0], pNext[0]);
+  const minY = Math.min(pPrev[1], cand[1], pNext[1]);
+  const maxY = Math.max(pPrev[1], cand[1], pNext[1]);
 
-  const minX2 = Math.min(cand[0], pNext[0]);
-  const maxX2 = Math.max(cand[0], pNext[0]);
-  const minY2 = Math.min(cand[1], pNext[1]);
-  const maxY2 = Math.max(cand[1], pNext[1]);
+  if (segBoxes) {
+    for (let j = 0; j < n - 1; j++) {
+      if (j >= i - 2 && j <= i + 1) continue;
+      const bIdx = j * 4;
+      if (maxX < segBoxes[bIdx] || minX > segBoxes[bIdx + 1]) continue;
+      if (maxY < segBoxes[bIdx + 2] || minY > segBoxes[bIdx + 3]) continue;
 
-  for (let j = 0; j < n - 1; j++) {
-    const pA = pts[j];
-    const pB = pts[j + 1];
-    const sjMinX = Math.min(pA[0], pB[0]);
-    const sjMaxX = Math.max(pA[0], pB[0]);
-
-    // Check segment (pPrev -> cand): ignore adjacent segments j == i - 2, i - 1, i
-    if (j !== i - 2 && j !== i - 1 && j !== i) {
-      if (maxX1 >= sjMinX && minX1 <= sjMaxX) {
-        const sjMinY = Math.min(pA[1], pB[1]);
-        const sjMaxY = Math.max(pA[1], pB[1]);
-        if (maxY1 >= sjMinY && minY1 <= sjMaxY) {
-          if (segsIntersect(pPrev, cand, pA, pB)) {
-            return true;
-          }
-        }
+      if (segsIntersect(pPrev, cand, pts[j], pts[j + 1]) || segsIntersect(cand, pNext, pts[j], pts[j + 1])) {
+        return true;
       }
     }
-    // Check segment (cand -> pNext): ignore adjacent segments j == i - 1, i, i + 1
-    if (j !== i - 1 && j !== i && j !== i + 1) {
-      if (maxX2 >= sjMinX && minX2 <= sjMaxX) {
-        const sjMinY = Math.min(pA[1], pB[1]);
-        const sjMaxY = Math.max(pA[1], pB[1]);
-        if (maxY2 >= sjMinY && minY2 <= sjMaxY) {
-          if (segsIntersect(cand, pNext, pA, pB)) {
-            return true;
-          }
-        }
-      }
+    return false;
+  }
+
+  for (let j = 0; j < n - 1; j++) {
+    if (j >= i - 2 && j <= i + 1) continue;
+    const pA = pts[j];
+    const pB = pts[j + 1];
+
+    const sjMinX = pA[0] < pB[0] ? pA[0] : pB[0];
+    if (maxX < sjMinX) continue;
+    const sjMaxX = pA[0] > pB[0] ? pA[0] : pB[0];
+    if (minX > sjMaxX) continue;
+
+    const sjMinY = pA[1] < pB[1] ? pA[1] : pB[1];
+    if (maxY < sjMinY) continue;
+    const sjMaxY = pA[1] > pB[1] ? pA[1] : pB[1];
+    if (minY > sjMaxY) continue;
+
+    if (segsIntersect(pPrev, cand, pA, pB) || segsIntersect(cand, pNext, pA, pB)) {
+      return true;
     }
   }
   return false;
@@ -694,7 +724,7 @@ export function limitRiverCurvature(
   rows: number,
   mapW: number,
   mapH: number,
-  maxIterations: number = 60
+  maxIterations: number = 8
 ): [number, number][] {
   const n = points.length;
   if (n < 3) return points;
@@ -707,6 +737,20 @@ export function limitRiverCurvature(
   let curLen = totalDist0;
 
   const pts: [number, number][] = points.map((p) => [p[0], p[1]]);
+
+  // Precompute segment bounding boxes: [minX, maxX, minY, maxY] for each segment j in 0..n-2
+  const segBoxes = new Float32Array((n - 1) * 4);
+  for (let s = 0; s < n - 1; s++) {
+    const x1 = pts[s][0];
+    const y1 = pts[s][1];
+    const x2 = pts[s + 1][0];
+    const y2 = pts[s + 1][1];
+    const b = s * 4;
+    segBoxes[b] = x1 < x2 ? x1 : x2;
+    segBoxes[b + 1] = x1 > x2 ? x1 : x2;
+    segBoxes[b + 2] = y1 < y2 ? y1 : y2;
+    segBoxes[b + 3] = y1 > y2 ? y1 : y2;
+  }
 
   for (let iter = 0; iter < maxIterations; iter++) {
     let movedAny = false;
@@ -724,7 +768,7 @@ export function limitRiverCurvature(
 
       const ePrev = sampleElev(filledGrid, cols, rows, mapW, mapH, pPrev[0], pPrev[1]);
 
-      for (const alpha of [0.6, 0.4, 0.2]) {
+      for (const alpha of [0.85, 0.65, 0.45, 0.25]) {
         const candX = pCurr[0] * (1 - alpha) + midX * alpha;
         const candY = pCurr[1] * (1 - alpha) + midY * alpha;
         const cand: [number, number] = [candX, candY];
@@ -733,8 +777,8 @@ export function limitRiverCurvature(
         const eCand = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
         if (eCand > ePrev + 0.3) continue;
 
-        // Self-intersection check
-        if (movingPointCausesSelfIntersection(pts, i, cand)) continue;
+        // Self-intersection check using precomputed segment bounding boxes
+        if (movingPointCausesSelfIntersection(pts, i, cand, segBoxes)) continue;
 
         // Length preservation check (at least 85% of original length)
         const oldSegs =
@@ -749,6 +793,25 @@ export function limitRiverCurvature(
         pts[i] = cand;
         curLen += lenDelta;
         movedAny = true;
+
+        // Update segment bounding boxes for segment i - 1 and segment i
+        const sA = i - 1;
+        const bA = sA * 4;
+        const xA1 = pts[sA][0];
+        const yA1 = pts[sA][1];
+        segBoxes[bA] = xA1 < candX ? xA1 : candX;
+        segBoxes[bA + 1] = xA1 > candX ? xA1 : candX;
+        segBoxes[bA + 2] = yA1 < candY ? yA1 : candY;
+        segBoxes[bA + 3] = yA1 > candY ? yA1 : candY;
+
+        const sB = i;
+        const bB = sB * 4;
+        const xB2 = pts[sB + 1][0];
+        const yB2 = pts[sB + 1][1];
+        segBoxes[bB] = candX < xB2 ? candX : xB2;
+        segBoxes[bB + 1] = candX > xB2 ? candX : xB2;
+        segBoxes[bB + 2] = candY < yB2 ? candY : yB2;
+        segBoxes[bB + 3] = candY > yB2 ? candY : yB2;
         break;
       }
     }
@@ -1805,6 +1868,21 @@ export function extractRivers(
       }
     }
 
+    // 12.5 Collapse points crowded closer than 0.15 * cellSize to prevent artificial micro-radii
+    if (processedPoints.length > 3) {
+      const minSpacing = 0.15 * cellSize;
+      const deduplicated: [number, number][] = [processedPoints[0]];
+      for (let i = 1; i < processedPoints.length - 1; i++) {
+        const last = deduplicated[deduplicated.length - 1];
+        const d = Math.hypot(processedPoints[i][0] - last[0], processedPoints[i][1] - last[1]);
+        if (d >= minSpacing) {
+          deduplicated.push(processedPoints[i]);
+        }
+      }
+      deduplicated.push(processedPoints[processedPoints.length - 1]);
+      processedPoints = deduplicated;
+    }
+
     // 13. Curvature limiting & Fine Gaussian smoothing
     const pointWidths = computeRiverPointWidthsForExtraction(
       processedPoints,
@@ -1821,7 +1899,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      60
+      16
     );
     // Pass 2: Fine Gaussian smoothing
     processedPoints = smoothRiverGaussian(
@@ -1843,7 +1921,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      60
+      16
     );
     processedPoints = clampSharpCorners(processedPoints);
 

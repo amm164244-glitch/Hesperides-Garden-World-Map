@@ -16,10 +16,14 @@ import {
   createRiverMouthCap,
   computeRiverPointWidths,
   buildRiverStrokeGroups,
+  quantizeWidth,
+  partitionRiverStrokeBuckets,
 } from './waterRenderer';
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
 import { computeHydrology, downsampleForHydrology } from './hydrology';
+import { generateTectonicWorld } from './tectonicGenerator';
+import { GeneratorConfig } from '../types/map';
 import {
   hasSelfIntersection,
   clampSharpCorners,
@@ -1348,4 +1352,263 @@ test('Request 10 Verification: Curvature radius, sinuosity, monotonicity, conflu
     }
   }
 });
+
+test('幅の量子化: quantizeWidth と partitionRiverStrokeBuckets による誤差・バケット数・隣接差の検証', () => {
+  // 1. quantizeWidth error <= step * 0.5
+  const step = 0.6;
+  const testWidths = [0.1, 0.45, 0.6, 0.89, 1.2, 2.34, 4.88, 7.5];
+  for (const w of testWidths) {
+    const qw = quantizeWidth(w, step);
+    const err = Math.abs(qw - w);
+    assert.ok(
+      err <= step * 0.5 + 1e-9,
+      `quantizeWidth(${w}, ${step}) = ${qw}, error ${err} must be <= ${step * 0.5}`
+    );
+  }
+
+  // 2. Smoothly changing river: width 1 -> 6 across 500 points
+  const points: [number, number][] = [];
+  const widths: number[] = [];
+  for (let i = 0; i < 500; i++) {
+    points.push([i * 2, 0]);
+    widths.push(1.0 + (i / 499) * 5.0);
+  }
+
+  const riverStep = 0.5;
+  const groups = partitionRiverStrokeBuckets(points, widths, { step: riverStep, maxBuckets: 128 });
+
+  // バケットの数が 128 以下であること
+  assert.ok(groups.length <= 128, `Bucket count ${groups.length} must be <= 128`);
+  assert.ok(groups.length >= 8, `Should create multiple buckets for width 1 -> 6 with step 0.5`);
+
+  // 幅の量子化の誤差が (step の半分) 以下であること
+  for (const grp of groups) {
+    for (let i = 0; i < grp.points.length - 1; i++) {
+      const p0 = grp.points[i];
+      const origIdx = Math.round(p0[0] / 2);
+      const segW = (widths[origIdx] + widths[origIdx + 1]) * 0.5;
+      const err = Math.abs(grp.width - segW);
+      assert.ok(
+        err <= riverStep * 0.5 + 1e-6,
+        `Quantization error ${err.toFixed(4)} must be <= ${(riverStep * 0.5).toFixed(4)}`
+      );
+    }
+  }
+
+  // 隣り合うバケットの幅の差が、step であること
+  for (let g = 0; g < groups.length - 1; g++) {
+    const diff = Math.abs(groups[g + 1].width - groups[g].width);
+    assert.ok(
+      Math.abs(diff - riverStep) < 1e-6,
+      `Adjacent bucket width difference ${diff.toFixed(4)} must equal step ${riverStep}`
+    );
+  }
+
+  // 3. 画面上の幅が 2 ピクセル未満の川は、バケットを使わず、1つの幅(平均)で描く
+  const thinRiverPoints: [number, number][] = [
+    [0, 0], [10, 0], [20, 0], [30, 0], [40, 0]
+  ];
+  const thinWidths = [0.8, 0.9, 1.1, 1.3, 1.4]; // max 1.4, with zoomPx = 1.0 -> screen width 1.4 < 2.0
+  const thinGroups = partitionRiverStrokeBuckets(thinRiverPoints, thinWidths, { zoomPx: 1.0 });
+  assert.equal(thinGroups.length, 1, 'River with screen width < 2px must collapse to exactly 1 group');
+  const expectedAvg = (0.85 + 1.0 + 1.2 + 1.35) / 4;
+  assert.ok(Math.abs(thinGroups[0].width - expectedAvg) < 1e-6);
+});
+
+test('細い川の蛇行と直線区間の解消: generateTectonicWorld (シード 7, 21, 99, 1024x512) での検証', () => {
+  const seeds = [7, 21, 99];
+  const threeDegRad = (3 * Math.PI) / 180;
+
+  for (const seed of seeds) {
+    const config: GeneratorConfig = {
+      seed,
+      gridResolution: '1024x512',
+      worldWidthKm: 40000,
+      plateCount: 12,
+      seaRatio: 60,
+      continentCount: 4,
+      continentSize: 5,
+      mountainStrength: 5,
+      islandDensity: 4,
+      coastlineComplexity: 4,
+      boundarySoftness: 5,
+      polarSoftness: 5,
+      minIslandArea: 1,
+    };
+
+    const map = generateTectonicWorld(1024, 512, config);
+    const cols = map.gridCols;
+    const rows = map.gridRows;
+    const seaLevel = map.seaLevel;
+
+    const t0 = performance.now();
+    const { rivers } = generateRiversAndLakes(
+      map.elevationGrid,
+      cols,
+      rows,
+      map.width,
+      map.height,
+      seaLevel,
+      seed,
+      {
+        riverCount: 12,
+        lakeCount: 2,
+        riverDensity: 50,
+        meander: 0.8,
+        headExtension: 0.8,
+      }
+    );
+    const duration = performance.now() - t0;
+
+    // 1. 性能: 1024x512 の川の生成が 2 秒以内
+    assert.ok(
+      duration < 2000,
+      `Seed ${seed}: River generation took ${duration.toFixed(1)}ms, expected < 2000ms`
+    );
+
+    // 2. 決定論的であること
+    const repeat = generateRiversAndLakes(
+      map.elevationGrid,
+      cols,
+      rows,
+      map.width,
+      map.height,
+      seaLevel,
+      seed,
+      {
+        riverCount: 12,
+        lakeCount: 2,
+        riverDensity: 50,
+        meander: 0.8,
+        headExtension: 0.8,
+      }
+    );
+    assert.equal(rivers.length, repeat.rivers.length);
+    for (let i = 0; i < rivers.length; i++) {
+      assert.deepEqual(rivers[i].points, repeat.rivers[i].points);
+    }
+
+    // 3. 川が自己交差しないこと
+    for (const r of rivers) {
+      assert.equal(
+        hasSelfIntersection(r.points),
+        false,
+        `Seed ${seed}, River ${r.id} must not self-intersect`
+      );
+    }
+
+    // 4. 単調性: 上り坂の区間が全体の 1% 以下
+    let totalSegs = 0;
+    let uphillSegs = 0;
+    for (const r of rivers) {
+      for (let i = 0; i < r.points.length - 1; i++) {
+        totalSegs++;
+        const e1 = sampleElev(map.elevationGrid, cols, rows, map.width, map.height, r.points[i][0], r.points[i][1]);
+        const e2 = sampleElev(map.elevationGrid, cols, rows, map.width, map.height, r.points[i + 1][0], r.points[i + 1][1]);
+        if (e2 - e1 > 0.35) {
+          uphillSegs++;
+        }
+      }
+    }
+    const uphillRatio = totalSegs > 0 ? uphillSegs / totalSegs : 0;
+    assert.ok(
+      uphillRatio <= 0.01,
+      `Seed ${seed}: Uphill segments ratio (${(uphillRatio * 100).toFixed(2)}%) must be <= 1%`
+    );
+
+    // 5. 曲率半径が川の幅の 0.7 倍未満の点が 1% 以下であること
+    let checkedRadiusCount = 0;
+    let sharpCurvatureCount = 0;
+    const kmPerUnit = Math.max(0.001, map.worldWidthKm / map.width);
+    const wMin = kmPerUnit >= 3.0 ? 0.75 : 1.2;
+
+    for (const r of rivers) {
+      const ptWidths = computeRiverPointWidthsForExtraction(r.points, r.widthStart, r.widthEnd, wMin);
+      for (let i = 1; i < r.points.length - 1; i++) {
+        const w = ptWidths[i] ?? r.widthStart;
+        const R = computeCircumcircleRadius(r.points[i - 1], r.points[i], r.points[i + 1]);
+        if (Number.isFinite(R)) {
+          checkedRadiusCount++;
+          if (R < 0.7 * w) {
+            sharpCurvatureCount++;
+          }
+        }
+      }
+    }
+    const sharpCurvRatio = checkedRadiusCount > 0 ? sharpCurvatureCount / checkedRadiusCount : 0;
+    assert.ok(
+      sharpCurvRatio <= 0.01,
+      `Seed ${seed}: Points with R < 0.7 * w (${(sharpCurvRatio * 100).toFixed(2)}%) must be <= 1%`
+    );
+
+    // 6. 「連続 8 点以上で、進行方向の変化が 3° 未満の区間」に含まれる点の割合:
+    // 幅が 1.5 未満の川でも、全体でも 12% 以下であること
+    let totalAllPts = 0;
+    let straightAllPts = 0;
+    let totalThinPts = 0;
+    let straightThinPts = 0;
+
+    for (const r of rivers) {
+      const pts = r.points;
+      const n = pts.length;
+      const isThin = (r.widthEnd < 1.5) || ((r.widthStart + r.widthEnd) * 0.5 < 1.5);
+
+      totalAllPts += n;
+      if (isThin) totalThinPts += n;
+
+      let i = 0;
+      while (i < n - 8) {
+        let runEnd = i + 1;
+        const vBaseX = pts[i + 1][0] - pts[i][0];
+        const vBaseY = pts[i + 1][1] - pts[i][1];
+        const lenBase = Math.hypot(vBaseX, vBaseY);
+        if (lenBase < 1e-6) {
+          i++;
+          continue;
+        }
+
+        while (runEnd < n - 1) {
+          const vCurrX = pts[runEnd + 1][0] - pts[runEnd][0];
+          const vCurrY = pts[runEnd + 1][1] - pts[runEnd][1];
+          const lenCurr = Math.hypot(vCurrX, vCurrY);
+          if (lenCurr < 1e-6) {
+            runEnd++;
+            continue;
+          }
+          const dot = (vBaseX * vCurrX + vBaseY * vCurrY) / (lenBase * lenCurr);
+          const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+          if (angle < threeDegRad) {
+            runEnd++;
+          } else {
+            break;
+          }
+        }
+
+        const count = runEnd + 1 - i;
+        if (count >= 8) {
+          straightAllPts += count;
+          if (isThin) straightThinPts += count;
+          i = runEnd;
+        } else {
+          i++;
+        }
+      }
+    }
+
+    const overallStraightRatio = totalAllPts > 0 ? straightAllPts / totalAllPts : 0;
+    assert.ok(
+      overallStraightRatio <= 0.12,
+      `Seed ${seed}: Overall straight-run ratio (${(overallStraightRatio * 100).toFixed(1)}%) must be <= 12%`
+    );
+
+    if (totalThinPts > 50) {
+      const thinStraightRatio = straightThinPts / totalThinPts;
+      assert.ok(
+        thinStraightRatio <= 0.12,
+        `Seed ${seed}: Thin rivers (w < 1.5) straight-run ratio (${(thinStraightRatio * 100).toFixed(1)}%) must be <= 12%`
+      );
+    }
+  }
+});
+
 
