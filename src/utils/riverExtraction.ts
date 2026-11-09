@@ -121,7 +121,7 @@ function relaxRiverValley(
 
       const prevElev = sampleElev(filledGrid, cols, rows, mapW, mapH, next[i - 1][0], next[i - 1][1]);
       const candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
-
+      
       if (candElev <= prevElev + 0.3) {
         next.push([candX, candY]);
       } else {
@@ -292,13 +292,8 @@ function breakStraightRuns(
   const pts = points.map((p) => [p[0], p[1]] as [number, number]);
   const threeDegRad = (3 * Math.PI) / 180;
 
-  const cumDists: number[] = [0];
-  for (let i = 0; i < n - 1; i++) {
-    cumDists.push(cumDists[i] + Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]));
-  }
-
   let i = 0;
-  while (i < n - 7) {
+  while (i < n - 8) {
     let runEnd = i + 1;
     const vBaseX = pts[i + 1][0] - pts[i][0];
     const vBaseY = pts[i + 1][1] - pts[i][1];
@@ -326,97 +321,59 @@ function breakStraightRuns(
       }
     }
 
-    const runPtCount = runEnd + 1 - i;
-    if (runPtCount >= 8) {
+    const count = runEnd + 1 - i;
+    if (count >= 8) {
       const runStart = i;
       const runEndIdx = runEnd;
-      const sStart = cumDists[runStart];
-      const lambdaRun = Math.max(8 * cellSize, (cumDists[runEndIdx] - sStart));
-      const amp = 0.5 * cellSize;
+      let applied = false;
+      const saved: [number, number][] = [];
+      for (let k = runStart; k <= runEndIdx; k++) saved.push([pts[k][0], pts[k][1]]);
 
-      const savedRun: [number, number][] = [];
-      for (let k = runStart; k <= runEndIdx; k++) {
-        savedRun.push([pts[k][0], pts[k][1]]);
-      }
+      const baseDx = pts[runEndIdx][0] - pts[runStart][0];
+      const baseDy = pts[runEndIdx][1] - pts[runStart][1];
+      const baseLen = Math.hypot(baseDx, baseDy) || 1;
+      const normal: [number, number] = [-baseDy / baseLen, baseDx / baseLen];
 
-      for (let k = runStart + 1; k < runEndIdx; k++) {
-        const pPrev = pts[k - 1];
-        const pCurr = pts[k];
-        const pNext = pts[k + 1];
-
-        const tx = pNext[0] - pPrev[0];
-        const ty = pNext[1] - pPrev[1];
-        const tLen = Math.hypot(tx, ty) || 1;
-        const nx = -ty / tLen;
-        const ny = tx / tLen;
-
-        const sK = cumDists[k];
-        const windowFactor = Math.sin(((k - runStart) / (runEndIdx - runStart)) * Math.PI);
-        let disp = amp * Math.sin(((sK - sStart) / lambdaRun) * 2 * Math.PI) * windowFactor;
-
-        let candX = pCurr[0] + nx * disp;
-        let candY = pCurr[1] + ny * disp;
-
-        let accepted = false;
-        const prevElev = sampleElev(filledGrid, cols, rows, mapW, mapH, pts[k - 1][0], pts[k - 1][1]);
-
+      for (const ampScale of [1.0, 0.6, 0.3]) {
         for (const side of [1, -1]) {
-          let testDisp = disp * side;
-          let candX = pCurr[0] + nx * testDisp;
-          let candY = pCurr[1] + ny * testDisp;
-          let candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
-          if (candElev <= prevElev + 0.3) {
-            pts[k] = [candX, candY];
-            accepted = true;
-            break;
+          let valid = true;
+          const candidate: [number, number][] = [];
+          for (let k = runStart; k <= runEndIdx; k++) {
+            const t = (k - runStart) / (runEndIdx - runStart);
+            const win = Math.sin(t * Math.PI) * Math.sin(t * Math.PI);
+            const wave = count >= 16 ? Math.sin(t * 2 * Math.PI) * win : win;
+            const amp = Math.min(0.25 * cellSize, 0.05 * baseLen) * ampScale;
+            const disp = amp * wave * side;
+            const candX = saved[k - runStart][0] + normal[0] * disp;
+            const candY = saved[k - runStart][1] + normal[1] * disp;
+            candidate.push([candX, candY]);
           }
-          for (let h = 1; h <= 4; h++) {
-            testDisp *= 0.5;
-            candX = pCurr[0] + nx * testDisp;
-            candY = pCurr[1] + ny * testDisp;
-            candElev = sampleElev(filledGrid, cols, rows, mapW, mapH, candX, candY);
-            if (candElev <= prevElev + 0.3) {
-              pts[k] = [candX, candY];
-              accepted = true;
+
+          for (let k = 1; k < candidate.length; k++) {
+            const ePrev = sampleElev(filledGrid, cols, rows, mapW, mapH, candidate[k - 1][0], candidate[k - 1][1]);
+            const eCurr = sampleElev(filledGrid, cols, rows, mapW, mapH, candidate[k][0], candidate[k][1]);
+            if (eCurr > ePrev + 0.3) {
+              valid = false;
               break;
             }
           }
-          if (accepted) break;
-        }
-      }
+          if (!valid) continue;
 
-      let runIntersects = false;
-      const checkStart = Math.max(0, runStart - 1);
-      const checkEnd = Math.min(n - 2, runEndIdx);
-      for (let s = checkStart; s <= checkEnd; s++) {
-        const p1 = pts[s];
-        const p2 = pts[s + 1];
-        const sMinX = p1[0] < p2[0] ? p1[0] : p2[0];
-        const sMaxX = p1[0] > p2[0] ? p1[0] : p2[0];
-        const sMinY = p1[1] < p2[1] ? p1[1] : p2[1];
-        const sMaxY = p1[1] > p2[1] ? p1[1] : p2[1];
-
-        for (let j = 0; j < n - 1; j++) {
-          if (Math.abs(s - j) <= 1) continue;
-          const pA = pts[j];
-          const pB = pts[j + 1];
-          if (sMaxX < (pA[0] < pB[0] ? pA[0] : pB[0]) || sMinX > (pA[0] > pB[0] ? pA[0] : pB[0])) continue;
-          if (sMaxY < (pA[1] < pB[1] ? pA[1] : pB[1]) || sMinY > (pA[1] > pB[1] ? pA[1] : pB[1])) continue;
-
-          if (segsIntersect(p1, p2, pA, pB)) {
-            runIntersects = true;
-            break;
+          for (let k = runStart; k <= runEndIdx; k++) pts[k] = candidate[k - runStart];
+          if (hasSelfIntersection(pts)) {
+            for (let k = runStart; k <= runEndIdx; k++) pts[k] = saved[k - runStart];
+            continue;
           }
+
+          applied = true;
+          break;
         }
-        if (runIntersects) break;
+        if (applied) break;
       }
 
-      if (runIntersects) {
-        for (let k = runStart; k <= runEndIdx; k++) {
-          pts[k] = savedRun[k - runStart];
-        }
+      if (!applied) {
+        for (let k = runStart; k <= runEndIdx; k++) pts[k] = saved[k - runStart];
       }
-
       i = runEndIdx;
     } else {
       i++;
@@ -1181,6 +1138,18 @@ export function alignTributaryConfluences(
       working = clampSharpCorners(working);
     }
 
+    if (working.length >= 4) {
+      for (let k = working.length - 2; k >= Math.max(1, working.length - 6); k--) {
+        const R = computeCircumcircleRadius(working[k - 1], working[k], working[k + 1]);
+        if (R < 0.75 * trib.widthEnd) {
+          const midX = (working[k - 1][0] + working[k + 1][0]) * 0.5;
+          const midY = (working[k - 1][1] + working[k + 1][1]) * 0.5;
+          working[k] = [working[k][0] * 0.3 + midX * 0.7, working[k][1] * 0.3 + midY * 0.7];
+        }
+      }
+      working = clampSharpCorners(working);
+    }
+
     // Ensure the last point is strictly snapped onto main river polyline
     const finalSnap = projectPointToPolyline(working[working.length - 1], mainRiver.points);
     working[working.length - 1] = finalSnap.point;
@@ -1314,7 +1283,7 @@ function applyNaturalMeander(
       const taper = smoothstep(0, T0, s) * smoothstep(0, T1, L - s);
       const wob = 1 + 0.3 * Math.sin(phases[i] * 0.41 + 1.3);
 
-      const aThick = meanderFactor * K * widths[i] * plains[i] * taper * wob;
+            const aThick = meanderFactor * K * widths[i] * plains[i] * taper * wob;
       const aThin = meanderFactor * (K / 1.2) * 0.5 * cellSize * taper * plains[i];
       const A = Math.max(aThick, aThin);
       let off = A * Math.sin(phases[i]);
@@ -1373,11 +1342,12 @@ function applyNaturalMeander(
       }
 
       if (!accepted) {
-        candX = points[i][0];
+                candX = points[i][0];
         candY = points[i][1];
-      }
+      } else {
+              }
 
-      candPts.push([candX, candY]);
+            candPts.push([candX, candY]);
     }
 
     if (!hasSelfIntersection(candPts)) {
@@ -1775,7 +1745,7 @@ export function extractRivers(
     }
 
     // 5. Natural Meandering
-    const meandered = applyNaturalMeander(
+                const meandered = applyNaturalMeander(
       resampled,
       filledF32,
       cols,
@@ -1792,7 +1762,7 @@ export function extractRivers(
     );
 
     // 6. Break straight runs
-    const straightBroken = breakStraightRuns(
+        const straightBroken = breakStraightRuns(
       meandered,
       filledF32,
       cols,
@@ -1805,7 +1775,7 @@ export function extractRivers(
 
     // 7. Headwaters Hook check: if any angle in first 12 points has direction change > 100 deg, revert headwater
     let processedPoints = straightBroken;
-    if (hasHeadwaterHook(processedPoints, 12, 100) && cleanHead.length >= 2) {
+        if (hasHeadwaterHook(processedPoints, 12, 100) && cleanHead.length >= 2) {
       const pLast = cleanHead[cleanHead.length - 1];
       let bestIdx = 0;
       let bestDist = Infinity;
@@ -1854,7 +1824,7 @@ export function extractRivers(
 
     // 12. If meandering ever caused self-intersection, revert to resampled path
     if (hasSelfIntersection(processedPoints)) {
-      processedPoints = resampled;
+            processedPoints = resampled;
       if (raw.terminatesAt === 'ocean') {
         processedPoints = adjustRiverMouthToCoastline(
           processedPoints,
@@ -1890,7 +1860,7 @@ export function extractRivers(
       widthEnd,
       wMin
     );
-    // Pass 1: Curvature limiting
+        // Pass 1: Curvature limiting
     processedPoints = limitRiverCurvature(
       processedPoints,
       pointWidths,
@@ -1899,9 +1869,9 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      16
+      36
     );
-    // Pass 2: Fine Gaussian smoothing
+        // Pass 2: Fine Gaussian smoothing
     processedPoints = smoothRiverGaussian(
       processedPoints,
       pointWidths,
@@ -1912,7 +1882,7 @@ export function extractRivers(
       mapWidth,
       mapHeight
     );
-    // Pass 3: Re-run curvature limiting
+        // Pass 3: Re-run curvature limiting
     processedPoints = limitRiverCurvature(
       processedPoints,
       pointWidths,
@@ -1921,10 +1891,31 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      16
+      36
     );
+    let hasSharpCurv = false;
+    for (let k = 1; k < processedPoints.length - 1; k++) {
+      const wK = pointWidths[k] ?? widthStart;
+      const RK = computeCircumcircleRadius(processedPoints[k - 1], processedPoints[k], processedPoints[k + 1]);
+      if (Number.isFinite(RK) && RK < 0.72 * wK) {
+        hasSharpCurv = true;
+        break;
+      }
+    }
+    if (hasSharpCurv) {
+      processedPoints = limitRiverCurvature(
+        processedPoints,
+        pointWidths,
+        filledF32,
+        cols,
+        rows,
+        mapWidth,
+        mapHeight,
+        36
+      );
+    }
     processedPoints = clampSharpCorners(processedPoints);
-
+    
     const isMain = raw.terminatesAt !== 'river';
     const name = isMain ? FANTASY_RIVER_NAMES[mainNameIndex++ % FANTASY_RIVER_NAMES.length] : undefined;
 
