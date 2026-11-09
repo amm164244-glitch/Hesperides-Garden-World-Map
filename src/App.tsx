@@ -124,6 +124,7 @@ export default function App() {
     coastlineComplexity: 4,
     coastSmoothing: 5,
     boundarySoftness: 5,
+    polarSoftness: 5,
   });
 
   // Toolbar collapsed state persisted in localStorage
@@ -164,6 +165,7 @@ export default function App() {
       coastlineComplexity: 4,
       coastSmoothing: 5,
       boundarySoftness: 5,
+      polarSoftness: 5,
     });
     return {
       ...initial,

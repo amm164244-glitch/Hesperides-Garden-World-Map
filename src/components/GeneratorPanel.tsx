@@ -343,6 +343,33 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
           </div>
         </div>
 
+        {/* Polar Softness */}
+        <div className="flex flex-col gap-1 border-t border-stone-800 pt-2">
+          <div className="flex justify-between text-stone-300">
+            <span>極の海岸のなめらかさ</span>
+            <span className="font-mono text-amber-400">
+              {(config.polarSoftness ?? 5) === 0 ? '無効 (0)' : `Lv ${config.polarSoftness ?? 5}`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            step={1}
+            value={config.polarSoftness ?? 5}
+            onChange={(e) => onUpdateConfig({ polarSoftness: Number(e.target.value) })}
+            className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+          />
+          <div className="flex justify-between text-[10px] text-stone-500">
+            <span>0 (直線カット)</span>
+            <span className="text-amber-400/90 font-medium">5 (標準・自然な海岸)</span>
+            <span>10 (広範囲に沈下)</span>
+          </div>
+          <div className="text-[10px] text-stone-400 leading-tight">
+            ※ 大きいほど、極の付近の海岸が、直線でなく自然に海へ沈みます
+          </div>
+        </div>
+
         {/* Geomorphic Erosion (Thermal + Water Erosion) */}
         <div className="flex flex-col gap-1 border-t border-stone-800 pt-2">
           <div className="flex justify-between text-stone-300">

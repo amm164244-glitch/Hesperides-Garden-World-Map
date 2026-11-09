@@ -4,6 +4,7 @@ import { applyErosion } from './erosion';
 import { smoothCoastBand } from './coastSmoothing';
 
 export const STANDARD_SEA_LEVEL = 35.0;
+const FOOTHILL_EDGE = Math.exp(-Math.pow(1.0 / 0.65, 1.8));
 
 /**
  * Tectonic Plate Planetary World Generator
@@ -75,6 +76,8 @@ export function generateTectonicWorld(
   const mountainMult = (config.mountainStrength / 5.0); // 0.2 ~ 2.0
   const islandDensityFactor = Math.max(1, Math.min(10, config.islandDensity || 5)) / 5.0; // 0.2 ~ 2.0
   const boundarySoftness = config.boundarySoftness !== undefined ? Math.max(0, Math.min(10, config.boundarySoftness)) : 5;
+  const polarSoftness = config.polarSoftness !== undefined ? Math.max(0, Math.min(10, config.polarSoftness)) : 5;
+  const polarNoise = detailNoise;
   const blendWidth = width * (0.006 * boundarySoftness);
   const continentReach = width * 0.24 * (config.continentSize / 5.0);
   const boundaryScale = width * 0.14;
@@ -118,7 +121,8 @@ export function generateTectonicWorld(
     // Mountain ranges at tectonic boundaries with wide foothills and branched spurs
     const nearBoundary = 1.0 - boundaryFactor;
     if (nearBoundary > 0.0) {
-      const foothillBelt = Math.exp(-Math.pow(boundaryFactor / 0.65, 1.8)); // broad foothill envelope
+      const foothillRaw = Math.exp(-Math.pow(boundaryFactor / 0.65, 1.8)); // broad foothill envelope
+      const foothillBelt = Math.max(0.0, (foothillRaw - FOOTHILL_EDGE) / (1.0 - FOOTHILL_EDGE));
       const spineBelt = Math.exp(-Math.pow(boundaryFactor / 0.30, 2.0)); // central sharp ridge
 
       // Branching cross-spurs perpendicular to boundary (支脈)
@@ -144,7 +148,9 @@ export function generateTectonicWorld(
           const arcNoise = macroNoise.sample(wx * 0.008, wy * 0.008);
           const arcThresh = 0.35 - (islandDensityFactor - 1.0) * 0.15;
           if (arcNoise > arcThresh) {
-            el += ((arcNoise - arcThresh) * 36.0 + 8.0) * foothillBelt * islandDensityFactor;
+            const arcRamp = Math.min(1.0, Math.max(0.0, (arcNoise - arcThresh) / 0.08));
+            const arcRamp2 = arcRamp * arcRamp * (3.0 - 2.0 * arcRamp);
+            el += ((arcNoise - arcThresh) * 36.0 + 8.0 * arcRamp2) * foothillBelt * islandDensityFactor;
           }
         }
       } else if (relMotion < -0.05) {
@@ -160,11 +166,13 @@ export function generateTectonicWorld(
     }
 
     // Oceanic hotspots / archipelagos outside boundaries (scales with islandDensity)
-    if (!pa.isContinental && nearBoundary < 0.35) {
+    const hotT = Math.min(1.0, Math.max(0.0, (nearBoundary - 0.2) / 0.3));
+    const hotW = 1.0 - hotT * hotT * (3.0 - 2.0 * hotT);
+    if (!pa.isContinental && hotW > 0) {
       const hotspotVal = macroNoise.sample(wx * 0.012, wy * 0.012);
       const hotspotThresh = 0.55 - (islandDensityFactor - 1.0) * 0.15;
       if (hotspotVal > hotspotThresh) {
-        el += (hotspotVal - hotspotThresh) * 35.0 * islandDensityFactor;
+        el += (hotspotVal - hotspotThresh) * 35.0 * islandDensityFactor * hotW;
       }
     }
 
@@ -185,12 +193,14 @@ export function generateTectonicWorld(
       const warpedX = wx + (lowWarpX - 0.5) * (width * 0.26) + warp.qx * (width * 0.08);
       const warpedY = wy + (lowWarpY - 0.5) * (height * 0.26) + warp.qy * (height * 0.08);
 
-      // Find closest and 2nd closest tectonic plates with distance perturbation
+      // Find closest, 2nd closest, and 3rd closest tectonic plates with distance perturbation
       const cellJitter = macroNoise.sample(warpedX * 0.0022, warpedY * 0.0022) * (width * 0.045);
       let p1 = plates[0];
       let p2 = plates[1];
+      let p3 = plates[2];
       let d1Sq = Infinity;
       let d2Sq = Infinity;
+      let d3Sq = Infinity;
 
       for (let p = 0; p < plates.length; p++) {
         const plate = plates[p];
@@ -203,17 +213,25 @@ export function generateTectonicWorld(
         const distSq = dx * dx + dy * dy + pJitter * (dx + dy + 10.0);
 
         if (distSq < d1Sq) {
+          d3Sq = d2Sq;
+          p3 = p2;
           d2Sq = d1Sq;
           p2 = p1;
           d1Sq = distSq;
           p1 = plate;
         } else if (distSq < d2Sq) {
+          d3Sq = d2Sq;
+          p3 = p2;
           d2Sq = distSq;
           p2 = plate;
+        } else if (distSq < d3Sq) {
+          d3Sq = distSq;
+          p3 = plate;
         }
       }
       const d1 = Math.sqrt(Math.max(0, d1Sq));
       const d2 = Math.sqrt(Math.max(0, d2Sq));
+      const d3 = Math.sqrt(Math.max(0, d3Sq));
       const gap = d2 - d1;
 
       // 2.2 Shared plate-independent noise computed once per cell
@@ -223,18 +241,30 @@ export function generateTectonicWorld(
       // Precalculate mainSpine once per cell only when near boundary
       const boundaryFactor = Math.min(1.0, Math.max(0.0, gap / boundaryScale));
       const nearBoundary = 1.0 - boundaryFactor;
-      const mainSpine = nearBoundary > 0.0 ? mountainNoise.ridged(wx * 0.0032, wy * 0.0032, 4, 0.58, 2.2) : 0.0;
+      const needMainSpine = nearBoundary > 0.0 || (boundarySoftness > 0 && (d3 - d2) < blendWidth && (d3 - d1) < boundaryScale);
+      const mainSpine = needMainSpine ? mountainNoise.ridged(wx * 0.0032, wy * 0.0032, 4, 0.58, 2.2) : 0.0;
+
+      const e12 = evalElev(p1, p2, d1, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
+      let e1: number;
+      if (boundarySoftness > 0 && (d3 - d2) < blendWidth) {
+        const t3 = Math.min(1.0, Math.max(0.0, (d3 - d2) / blendWidth));
+        const s3 = t3 * t3 * (3.0 - 2.0 * t3);
+        const w3 = 0.5 * (1.0 - s3);
+        const e13 = evalElev(p1, p3, d1, d3 - d1, wx, wy, macroSwell, interiorRidges, mainSpine);
+        e1 = e12 * (1.0 - w3) + e13 * w3;
+      } else {
+        e1 = e12;
+      }
 
       let elev: number;
       if (gap < blendWidth && boundarySoftness > 0) {
         const t = Math.min(1.0, Math.max(0.0, gap / blendWidth));
         const s = t * t * (3.0 - 2.0 * t);
         const wSec = 0.5 * (1.0 - s);
-        const e1 = evalElev(p1, p2, d1, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
         const e2 = evalElev(p2, p1, d2, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
         elev = e1 * (1.0 - wSec) + e2 * wSec;
       } else {
-        elev = evalElev(p1, p2, d1, gap, wx, wy, macroSwell, interiorRidges, mainSpine);
+        elev = e1;
       }
 
       // Multi-scale fine fractal details (applied post-blend, independent of plates)
@@ -242,8 +272,24 @@ export function generateTectonicWorld(
       elev += detail;
 
       // Edge falloff at northern and southern map poles
-      const polarFalloff = Math.min(1.0, wy / (height * 0.04)) * Math.min(1.0, (height - wy) / (height * 0.04));
-      elev *= Math.pow(polarFalloff, 0.5);
+      if (polarSoftness === 0) {
+        const polarFalloff = Math.min(1.0, wy / (height * 0.04)) * Math.min(1.0, (height - wy) / (height * 0.04));
+        elev *= Math.pow(polarFalloff, 0.5);
+      } else {
+        const band = height * (0.02 + 0.01 * polarSoftness);
+        const amp = height * 0.01 * polarSoftness * 0.5;
+        const maxPoleDist = band + amp;
+        if (wy < maxPoleDist || wy > height - maxPoleDist) {
+          const noiseVal = polarNoise.fbm(wx * 0.004, 0, 3, 0.5, 2.0);
+          const offset = (noiseVal - 0.5) * (height * 0.01 * polarSoftness);
+          const poleDist = Math.min(wy, height - wy);
+          const dist = poleDist + offset;
+          const t = Math.min(1.0, Math.max(0.0, dist / band));
+          const f = t * t * (3.0 - 2.0 * t);
+          const poleFloor = 18.0;
+          elev = poleFloor + (elev - poleFloor) * f;
+        }
+      }
 
       elevationGrid[r * gridCols + c] = elev;
     }
