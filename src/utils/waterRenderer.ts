@@ -405,7 +405,7 @@ export function drawWaterBodies(
   lakes: LakeData[] = [],
   options: DrawWaterOptions
 ): void {
-  const zoomPx = options.zoom || 1;
+  const zoomPx = (options.zoom || 1) * (options.dpr || 1);
   const selectedId = options.selectedId;
   const hoveredId = options.hoveredId;
   const viewBounds = options.viewBounds;

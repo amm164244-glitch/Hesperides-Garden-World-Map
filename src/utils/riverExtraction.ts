@@ -342,7 +342,7 @@ function breakStraightRuns(
             const t = (k - runStart) / (runEndIdx - runStart);
             const win = Math.sin(t * Math.PI) * Math.sin(t * Math.PI);
             const wave = count >= 16 ? Math.sin(t * 2 * Math.PI) * win : win;
-            const amp = Math.min(0.25 * cellSize, 0.05 * baseLen) * ampScale;
+            const amp = Math.min(0.5 * cellSize, 0.15 * baseLen) * ampScale;
             const disp = amp * wave * side;
             const candX = saved[k - runStart][0] + normal[0] * disp;
             const candY = saved[k - runStart][1] + normal[1] * disp;
@@ -1057,7 +1057,12 @@ export function alignTributaryConfluences(
 
     let working = trib.points.slice(0, keepIndex + 1);
     const projResult = projectPointToPolyline(working[working.length - 1], mainRiver.points);
-    working.push(projResult.point);
+    const dLast = Math.hypot(projResult.point[0] - working[working.length - 1][0], projResult.point[1] - working[working.length - 1][1]);
+    if (dLast < 0.4 * localMainW && working.length > 2) {
+      working[working.length - 1] = projResult.point;
+    } else {
+      working.push(projResult.point);
+    }
 
     // 3. Helper to check if tributary intersects main river prior to confluence
     const checkIntersectsMain = (pts: [number, number][]): boolean => {
@@ -1139,12 +1144,14 @@ export function alignTributaryConfluences(
     }
 
     if (working.length >= 4) {
-      for (let k = working.length - 2; k >= Math.max(1, working.length - 6); k--) {
-        const R = computeCircumcircleRadius(working[k - 1], working[k], working[k + 1]);
-        if (R < 0.75 * trib.widthEnd) {
-          const midX = (working[k - 1][0] + working[k + 1][0]) * 0.5;
-          const midY = (working[k - 1][1] + working[k + 1][1]) * 0.5;
-          working[k] = [working[k][0] * 0.3 + midX * 0.7, working[k][1] * 0.3 + midY * 0.7];
+      for (let iter = 0; iter < 3; iter++) {
+        for (let k = working.length - 2; k >= Math.max(1, working.length - 5); k--) {
+          const R = computeCircumcircleRadius(working[k - 1], working[k], working[k + 1]);
+          if (R < 0.75 * localMainW) {
+            const midX = (working[k - 1][0] + working[k + 1][0]) * 0.5;
+            const midY = (working[k - 1][1] + working[k + 1][1]) * 0.5;
+            working[k] = [working[k][0] * 0.3 + midX * 0.7, working[k][1] * 0.3 + midY * 0.7];
+          }
         }
       }
       working = clampSharpCorners(working);
@@ -1256,10 +1263,13 @@ function applyNaturalMeander(
   const seedRnd = Math.abs(Math.sin(seed * 71.3 + rIdx * 137.9) * 10000);
   phases[0] = (seedRnd % 1) * (2 * Math.PI);
 
+  const avgW = (widthStart + widthEnd) * 0.5;
   for (let i = 1; i < n; i++) {
     const ds = cumDists[i] - cumDists[i - 1];
     const w = widths[i];
-    const lambda = Math.max(16 * w, 20 * cellSize);
+    const isThin = avgW < 1.5 || w < 1.5;
+    const minLambda = isThin ? 20 * cellSize : 24 * cellSize;
+    const lambda = Math.max(16 * w, minLambda);
     phases[i] = phases[i - 1] + (ds / lambda) * (2 * Math.PI);
   }
 
@@ -1824,7 +1834,7 @@ export function extractRivers(
 
     // 12. If meandering ever caused self-intersection, revert to resampled path
     if (hasSelfIntersection(processedPoints)) {
-            processedPoints = resampled;
+      processedPoints = resampled;
       if (raw.terminatesAt === 'ocean') {
         processedPoints = adjustRiverMouthToCoastline(
           processedPoints,
@@ -1860,7 +1870,7 @@ export function extractRivers(
       widthEnd,
       wMin
     );
-        // Pass 1: Curvature limiting
+    // Pass 1: Curvature limiting
     processedPoints = limitRiverCurvature(
       processedPoints,
       pointWidths,
@@ -1869,9 +1879,9 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      36
+      16
     );
-        // Pass 2: Fine Gaussian smoothing
+    // Pass 2: Fine Gaussian smoothing
     processedPoints = smoothRiverGaussian(
       processedPoints,
       pointWidths,
@@ -1882,7 +1892,7 @@ export function extractRivers(
       mapWidth,
       mapHeight
     );
-        // Pass 3: Re-run curvature limiting
+    // Pass 3: Re-run curvature limiting
     processedPoints = limitRiverCurvature(
       processedPoints,
       pointWidths,
@@ -1891,7 +1901,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      36
+      16
     );
     let hasSharpCurv = false;
     for (let k = 1; k < processedPoints.length - 1; k++) {
@@ -1911,10 +1921,24 @@ export function extractRivers(
         rows,
         mapWidth,
         mapHeight,
-        36
+        16
       );
     }
     processedPoints = clampSharpCorners(processedPoints);
+    if (processedPoints.length > 3) {
+      const deduplicated: [number, number][] = [processedPoints[0]];
+      for (let i = 1; i < processedPoints.length - 1; i++) {
+        const last = deduplicated[deduplicated.length - 1];
+        const w = pointWidths[i] ?? widthStart;
+        const minSpacing = Math.max(0.25 * cellSize, 0.18 * w);
+        const d = Math.hypot(processedPoints[i][0] - last[0], processedPoints[i][1] - last[1]);
+        if (d >= minSpacing) {
+          deduplicated.push(processedPoints[i]);
+        }
+      }
+      deduplicated.push(processedPoints[processedPoints.length - 1]);
+      processedPoints = deduplicated;
+    }
     
     const isMain = raw.terminatesAt !== 'river';
     const name = isMain ? FANTASY_RIVER_NAMES[mainNameIndex++ % FANTASY_RIVER_NAMES.length] : undefined;
@@ -1951,6 +1975,29 @@ export function extractRivers(
       if (srcLake) {
         clampRiverToLakePerimeter(riverObj, srcLake, cellSize);
       }
+    }
+  }
+
+  // Final cleanup: collapse vertices that ended up crowded closer than minSpacing
+  for (const riverObj of resultRivers) {
+    if (riverObj.points.length > 3) {
+      const ptWidths = computeRiverPointWidthsForExtraction(
+        riverObj.points,
+        riverObj.widthStart,
+        riverObj.widthEnd,
+        wMin
+      );
+      const dedup: [number, number][] = [riverObj.points[0]];
+      for (let i = 1; i < riverObj.points.length - 1; i++) {
+        const w = ptWidths[i] ?? riverObj.widthStart;
+        const minSpacing = Math.max(0.25 * cellSize, 0.18 * w);
+        const d = Math.hypot(riverObj.points[i][0] - dedup[dedup.length - 1][0], riverObj.points[i][1] - dedup[dedup.length - 1][1]);
+        if (d >= minSpacing) {
+          dedup.push(riverObj.points[i]);
+        }
+      }
+      dedup.push(riverObj.points[riverObj.points.length - 1]);
+      riverObj.points = dedup;
     }
   }
 
