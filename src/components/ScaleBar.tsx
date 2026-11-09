@@ -7,7 +7,7 @@ interface ScaleBarProps {
   viewport: Viewport;
 }
 
-export const ScaleBar: React.FC<ScaleBarProps> = ({ worldWidthKm, mapWidth, viewport }) => {
+const ScaleBarComponent: React.FC<ScaleBarProps> = ({ worldWidthKm, mapWidth, viewport }) => {
   // Screen pixels per kilometer
   const screenPixelsPerKm = (mapWidth * viewport.zoom) / worldWidthKm;
 
@@ -58,3 +58,12 @@ export const ScaleBar: React.FC<ScaleBarProps> = ({ worldWidthKm, mapWidth, view
     </div>
   );
 };
+
+export const ScaleBar = React.memo(ScaleBarComponent, (prev, next) => {
+  return (
+    prev.mapWidth === next.mapWidth &&
+    prev.worldWidthKm === next.worldWidthKm &&
+    prev.viewport.zoom === next.viewport.zoom
+  );
+});
+

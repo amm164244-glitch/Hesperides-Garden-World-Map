@@ -49,7 +49,7 @@ interface SymbolPaletteProps {
   onImportSymbols?: (assets: CustomMapAsset[], categories: CustomSymbolCategory[]) => void;
 }
 
-export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
+const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
   brushMode,
   onChangeBrushMode,
   toolSettings,
@@ -779,3 +779,5 @@ export const SymbolPalette: React.FC<SymbolPaletteProps> = ({
     </div>
   );
 };
+
+export const SymbolPalette = React.memo(SymbolPaletteComponent);

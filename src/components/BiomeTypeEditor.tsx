@@ -36,7 +36,7 @@ interface BiomeTypeEditorProps {
   seaLevel?: number;
 }
 
-export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
+const BiomeTypeEditorComponent: React.FC<BiomeTypeEditorProps> = ({
   isOpen,
   onClose,
   biomeTypes,
@@ -930,3 +930,5 @@ export const BiomeTypeEditor: React.FC<BiomeTypeEditorProps> = ({
     </div>
   );
 };
+
+export const BiomeTypeEditor = React.memo(BiomeTypeEditorComponent);

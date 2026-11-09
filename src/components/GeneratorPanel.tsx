@@ -16,7 +16,7 @@ interface GeneratorPanelProps {
   onClose: () => void;
 }
 
-export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
+const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
   config,
   onUpdateConfig,
   onRegenerate,
@@ -542,3 +542,5 @@ export const GeneratorPanel: React.FC<GeneratorPanelProps> = ({
     </div>
   );
 };
+
+export const GeneratorPanel = React.memo(GeneratorPanelComponent);

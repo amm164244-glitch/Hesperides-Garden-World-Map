@@ -44,7 +44,7 @@ export interface BiomePlacePanelProps {
   activeRegionId: string | null;
 }
 
-export const BiomePlacePanel: React.FC<BiomePlacePanelProps> = ({
+const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
   selectedBiomeId,
   biomeTypes,
   customAssets = [],
@@ -920,3 +920,5 @@ export const BiomePlacePanel: React.FC<BiomePlacePanelProps> = ({
     </div>
   );
 };
+
+export const BiomePlacePanel = React.memo(BiomePlacePanelComponent);

@@ -55,7 +55,7 @@ interface WaterPanelProps {
   }) => Promise<AutoGenResult | void> | void;
 }
 
-export const WaterPanel: React.FC<WaterPanelProps> = ({
+const WaterPanelComponent: React.FC<WaterPanelProps> = ({
   mode,
   onChangeMode,
   waterSettings,
@@ -672,3 +672,5 @@ export const WaterPanel: React.FC<WaterPanelProps> = ({
     </div>
   );
 };
+
+export const WaterPanel = React.memo(WaterPanelComponent);

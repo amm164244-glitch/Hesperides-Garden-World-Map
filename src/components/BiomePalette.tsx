@@ -52,7 +52,7 @@ export interface BiomePaletteProps {
   activeRegionId?: string | null;
 }
 
-export const BiomePalette: React.FC<BiomePaletteProps> = ({
+const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
   brushMode,
   onChangeBrushMode,
   selectedBiomeId,
@@ -365,3 +365,5 @@ export const BiomePalette: React.FC<BiomePaletteProps> = ({
     </div>
   );
 };
+
+export const BiomePalette = React.memo(BiomePaletteComponent);
