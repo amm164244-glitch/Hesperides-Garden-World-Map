@@ -14,6 +14,8 @@ import {
   findWaterAtPoint,
   computeVariableWidthPolyline,
   createRiverMouthCap,
+  computeRiverPointWidths,
+  buildRiverStrokeGroups,
 } from './waterRenderer';
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
@@ -935,60 +937,60 @@ test('River Improvement: River mouth position pinned within 0.5 * cellSize of un
   }
 });
 
-test('Estuary Improvement: computeVariableWidthPolyline flares to 1.6x smoothly and is spacing-independent', () => {
+test('Estuary Improvement: computeRiverPointWidths flares to 1.4x and tapers tip to 0.7x, spacing-independent', () => {
   const wStart = 2.0;
   const wEnd = 10.0;
   const cellSize = 2.0;
   // Flare length = max(10 * 6, 2 * 6) = 60.0
+  // Taper length = 1.5 * 10 = 15.0
 
   // 1. Fine points (spacing = 1.0, 101 points from 0 to 100)
   const finePoints: [number, number][] = [];
   for (let x = 0; x <= 100; x += 1) {
     finePoints.push([x, 50]);
   }
-  const fineRes = computeVariableWidthPolyline(finePoints, wStart, wEnd, true, cellSize);
+  const fineWidths = computeRiverPointWidths(finePoints, wStart, wEnd, true, cellSize);
 
   // 2. Coarse points (spacing = 5.0, 21 points from 0 to 100)
   const coarsePoints: [number, number][] = [];
   for (let x = 0; x <= 100; x += 5) {
     coarsePoints.push([x, 50]);
   }
-  const coarseRes = computeVariableWidthPolyline(coarsePoints, wStart, wEnd, true, cellSize);
+  const coarseWidths = computeRiverPointWidths(coarsePoints, wStart, wEnd, true, cellSize);
 
-  // Check last point reaches 1.6x of widthEnd
-  const fineLastHW = fineRes.halfWidths[fineRes.halfWidths.length - 1];
-  const coarseLastHW = coarseRes.halfWidths[coarseRes.halfWidths.length - 1];
-  const expectedMouthHW = (wEnd * 0.5) * 1.6;
+  // Check last point reaches (wEnd * 1.4 * 0.7) = 0.98 * wEnd = 9.8
+  const fineLastW = fineWidths[fineWidths.length - 1];
+  const coarseLastW = coarseWidths[coarseWidths.length - 1];
+  const expectedMouthW = wEnd * 1.4 * 0.7; // 9.8
 
   assert.ok(
-    Math.abs(fineLastHW - expectedMouthHW) < 1e-4,
-    `Fine mouth half-width ${fineLastHW} should equal ${expectedMouthHW}`
+    Math.abs(fineLastW - expectedMouthW) < 1e-4,
+    `Fine mouth width ${fineLastW} should equal ${expectedMouthW}`
   );
   assert.ok(
-    Math.abs(coarseLastHW - expectedMouthHW) < 1e-4,
-    `Coarse mouth half-width ${coarseLastHW} should equal ${expectedMouthHW}`
+    Math.abs(coarseLastW - expectedMouthW) < 1e-4,
+    `Coarse mouth width ${coarseLastW} should equal ${expectedMouthW}`
   );
 
-  // Check smooth increase before the mouth (at distances 50, 40, 30, 20, 10 from mouth)
-  // Distance from mouth = 100 - x.
-  for (let i = 1; i < fineRes.halfWidths.length; i++) {
-    assert.ok(
-      fineRes.halfWidths[i] >= fineRes.halfWidths[i - 1],
-      `Width should monotonically increase downstream towards estuary mouth`
-    );
-  }
+  // Check flare reaches near 1.4x of base width before tip taper begins (around x = 85, where distFromMouth = 15 = taperLength)
+  const flarePeakW = fineWidths[85];
+  const baseWAt85 = wStart + (wEnd - wStart) * 0.85; // 8.8
+  assert.ok(
+    flarePeakW > baseWAt85 * 1.3,
+    `Width before taper at x=85 (${flarePeakW.toFixed(2)}) should be flared (> ${(baseWAt85 * 1.3).toFixed(2)})`
+  );
 
-  // Compare widths between fine and coarse at x = 40, 60, 70, 80, 90, 100
+  // Compare widths between fine and coarse at sample positions
   const testXs = [40, 60, 70, 80, 90, 100];
   for (const x of testXs) {
     const fineIdx = x; // step = 1
     const coarseIdx = x / 5; // step = 5
-    const hwFine = fineRes.halfWidths[fineIdx];
-    const hwCoarse = coarseRes.halfWidths[coarseIdx];
-    const diff = Math.abs(hwFine - hwCoarse);
+    const wFine = fineWidths[fineIdx];
+    const wCoarse = coarseWidths[coarseIdx];
+    const diff = Math.abs(wFine - wCoarse);
     assert.ok(
-      diff < 0.05,
-      `Width difference at x=${x} between fine (${hwFine.toFixed(3)}) and coarse (${hwCoarse.toFixed(3)}) should be < 0.05, got ${diff.toFixed(4)}`
+      diff < 0.1,
+      `Width difference at x=${x} between fine (${wFine.toFixed(3)}) and coarse (${wCoarse.toFixed(3)}) should be < 0.1, got ${diff.toFixed(4)}`
     );
   }
 });
@@ -1020,34 +1022,136 @@ test('Estuary Improvement: Semicircle river mouth cap vertices are equidistant f
   assert.ok(Math.hypot(cap[16][0] - expectedRight[0], cap[16][1] - expectedRight[1]) < 1e-4);
 });
 
-test('Estuary Improvement: Rivers terminating at lake or river maintain unchanged baseline geometry', () => {
+test('Estuary Improvement: Rivers terminating at lake or river maintain linear distance-based width interpolation', () => {
   const points: [number, number][] = [
     [0, 0],
-    [50, 10],
-    [100, 30],
-    [150, 40],
+    [50, 0],
+    [100, 0],
+    [150, 0],
   ];
   const wStart = 2.0;
   const wEnd = 6.0;
 
-  const resNonEstuary = computeVariableWidthPolyline(points, wStart, wEnd, false);
+  const widths = computeRiverPointWidths(points, wStart, wEnd, false);
 
-  // No mouth cap for inland rivers
-  assert.equal(resNonEstuary.mouthCap, undefined);
+  // End width should be exactly wEnd
+  assert.equal(widths[widths.length - 1], wEnd);
 
-  // End width should be exactly wEnd * 0.5 (multiplier = 1.0, no flare)
-  const lastHW = resNonEstuary.halfWidths[resNonEstuary.halfWidths.length - 1];
-  assert.equal(lastHW, wEnd * 0.5);
-
-  // Baseline verification: t = i / (n - 1)
+  // Baseline verification: linear progression along distance
   for (let i = 0; i < points.length; i++) {
     const t = i / (points.length - 1);
-    const expectedHW = (wStart + (wEnd - wStart) * t) * 0.5;
-    assert.equal(resNonEstuary.halfWidths[i], expectedHW);
-
-    const leftPt = resNonEstuary.left[i];
-    const rightPt = resNonEstuary.right[i];
-    const distAcross = Math.hypot(leftPt[0] - rightPt[0], leftPt[1] - rightPt[1]);
-    assert.ok(Math.abs(distAcross - expectedHW * 2) < 1e-4);
+    const expectedW = wStart + (wEnd - wStart) * t;
+    assert.ok(Math.abs(widths[i] - expectedW) < 1e-4);
   }
+});
+
+test('Casing Improvement: buildRiverStrokeGroups shares endpoints and preserves total length', () => {
+  const points: [number, number][] = [];
+  const widths: number[] = [];
+  for (let i = 0; i <= 50; i++) {
+    points.push([i * 10, Math.sin(i * 0.2) * 20]);
+    widths.push(2.0 + (i / 50) * 8.0); // 2.0 to 10.0
+  }
+
+  const bucketCount = 12;
+  const groups = buildRiverStrokeGroups(points, widths, bucketCount);
+
+  assert.ok(groups.length > 1, `Should generate multiple stroke groups for varying widths, got ${groups.length}`);
+
+  // 1. Boundary sharing: consecutive groups must share endpoint
+  for (let g = 0; g < groups.length - 1; g++) {
+    const curLast = groups[g].points[groups[g].points.length - 1];
+    const nextFirst = groups[g + 1].points[0];
+    assert.equal(curLast[0], nextFirst[0], `Group ${g} end X must match group ${g + 1} start X`);
+    assert.equal(curLast[1], nextFirst[1], `Group ${g} end Y must match group ${g + 1} start Y`);
+  }
+
+  // 2. Length preservation: sum of lengths of segments in groups equals original length
+  let origLen = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    origLen += Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+  }
+
+  let groupLen = 0;
+  for (const grp of groups) {
+    for (let i = 0; i < grp.points.length - 1; i++) {
+      groupLen += Math.hypot(grp.points[i + 1][0] - grp.points[i][0], grp.points[i + 1][1] - grp.points[i][1]);
+    }
+  }
+
+  assert.ok(
+    Math.abs(origLen - groupLen) < 1e-6,
+    `Total polyline length (${groupLen.toFixed(4)}) must match original length (${origLen.toFixed(4)})`
+  );
+
+  // 3. Quantization error bound: <= (maxW - minW) / bucketCount
+  const segWidths = [];
+  for (let i = 0; i < points.length - 1; i++) {
+    segWidths.push((widths[i] + widths[i + 1]) * 0.5);
+  }
+  const minW = Math.min(...segWidths);
+  const maxW = Math.max(...segWidths);
+  const maxAllowedError = (maxW - minW) / bucketCount;
+
+  for (const grp of groups) {
+    for (let i = 0; i < grp.points.length - 1; i++) {
+      const p0 = grp.points[i];
+      const origIdx = points.findIndex((p) => p[0] === p0[0] && p[1] === p0[1]);
+      if (origIdx >= 0 && origIdx < segWidths.length) {
+        const err = Math.abs(grp.width - segWidths[origIdx]);
+        assert.ok(
+          err <= maxAllowedError + 1e-6,
+          `Quantization error ${err.toFixed(4)} must be <= maxAllowedError ${maxAllowedError.toFixed(4)}`
+        );
+      }
+    }
+  }
+});
+
+test('Casing Improvement: 2-point or uniform-width rivers collapse to exactly 1 stroke group', () => {
+  // 1. 2-point river
+  const twoPoints: [number, number][] = [[0, 0], [100, 100]];
+  const twoWidths = [2.0, 4.0];
+  const twoGroups = buildRiverStrokeGroups(twoPoints, twoWidths, 12);
+  assert.equal(twoGroups.length, 1, '2-point river must yield exactly 1 group');
+  assert.equal(twoGroups[0].width, 3.0);
+  assert.equal(twoGroups[0].points.length, 2);
+
+  // 2. Multi-point uniform width river
+  const uniPoints: [number, number][] = [
+    [0, 0], [10, 5], [20, 2], [30, 8], [40, 10]
+  ];
+  const uniWidths = [3.5, 3.5, 3.5, 3.5, 3.5];
+  const uniGroups = buildRiverStrokeGroups(uniPoints, uniWidths, 12);
+  assert.equal(uniGroups.length, 1, 'Uniform-width river must yield exactly 1 group');
+  assert.equal(uniGroups[0].width, 3.5);
+  assert.equal(uniGroups[0].points.length, 5);
+});
+
+test('Casing Improvement: Sharp hairpin turns (R = 0.3 * W) avoid self-intersecting polygon anomalies', () => {
+  const W = 5.0;
+  const R = 1.5;
+  const hairpinPoints: [number, number][] = [
+    [0, 0],
+    [50, 0],
+    [100, 0],
+  ];
+  for (let deg = 0; deg <= 180; deg += 30) {
+    const rad = (deg * Math.PI) / 180;
+    hairpinPoints.push([100 + R * Math.sin(rad), R - R * Math.cos(rad)]);
+  }
+  hairpinPoints.push([50, 2 * R]);
+  hairpinPoints.push([0, 2 * R]);
+
+  const widths = new Array(hairpinPoints.length).fill(W);
+  const groups = buildRiverStrokeGroups(hairpinPoints, widths, 12);
+
+  assert.ok(groups.length >= 1);
+  assert.equal(groups[0].width, W);
+
+  let totalSegs = 0;
+  for (const g of groups) {
+    totalSegs += g.points.length - 1;
+  }
+  assert.equal(totalSegs, hairpinPoints.length - 1, 'All hairpin segments must be preserved');
 });

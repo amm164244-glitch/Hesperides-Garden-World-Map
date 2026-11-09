@@ -1573,6 +1573,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     const activeRivers = effectiveRivers;
     const activeLakes = effectiveLakes;
     if (activeRivers.length > 0 || activeLakes.length > 0) {
+      const containerW = glCanvasRef.current ? glCanvasRef.current.width / dpr : currentWidth;
+      const containerH = glCanvasRef.current ? glCanvasRef.current.height / dpr : currentHeight;
+      const waterViewBounds = {
+        minX: -viewport.x / viewport.zoom,
+        minY: -viewport.y / viewport.zoom,
+        maxX: (containerW - viewport.x) / viewport.zoom,
+        maxY: (containerH - viewport.y) / viewport.zoom,
+      };
       drawWaterBodies(ctx, activeRivers, activeLakes, {
         zoom: viewport.zoom * dpr,
         dpr,
@@ -1580,6 +1588,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         selectedId: selectedWaterId,
         selectedVertexIndex: activeWaterVertexIndex,
         showLabels: true,
+        viewBounds: waterViewBounds,
       });
     }
     townPerf.end('water');

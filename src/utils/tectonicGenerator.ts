@@ -277,17 +277,19 @@ export function generateTectonicWorld(
         elev *= Math.pow(polarFalloff, 0.5);
       } else {
         const band = height * (0.02 + 0.01 * polarSoftness);
-        const amp = height * 0.01 * polarSoftness * 0.5;
-        const maxPoleDist = band + amp;
+        const amp = height * 0.05 * (polarSoftness / 5.0);
+        const maxPoleDist = band + amp * 1.5;
         if (wy < maxPoleDist || wy > height - maxPoleDist) {
-          const noiseVal = polarNoise.fbm(wx * 0.004, 0, 3, 0.5, 2.0);
-          const offset = (noiseVal - 0.5) * (height * 0.01 * polarSoftness);
-          const poleDist = Math.min(wy, height - wy);
-          const dist = poleDist + offset;
-          const t = Math.min(1.0, Math.max(0.0, dist / band));
+          // Multi-frequency noise ensures realistic natural coastal dispersion without flat horizontal terraces
+          const n1 = polarNoise.fbm(wx * 0.008, wy < height * 0.5 ? 12.7 : 89.3, 4, 0.55, 2.0);
+          const n2 = polarNoise.sample(wx * 0.016, wy < height * 0.5 ? 44.1 : 68.9);
+          const noiseVal = n1 * 1.6 + n2 * 0.4;
+          const offset = noiseVal * amp * 1.5;
+          const yw = wy + offset;
+          const effDist = Math.min(yw, height - yw);
+          const t = Math.min(1.0, Math.max(0.0, effDist / band));
           const f = t * t * (3.0 - 2.0 * t);
-          const poleFloor = 18.0;
-          elev = poleFloor + (elev - poleFloor) * f;
+          elev *= Math.pow(f, 0.5);
         }
       }
 
@@ -467,13 +469,13 @@ export function generateTectonicWorld(
         const sy = wy + dispY;
 
         // 2. Smooth meso bays and sweeping peninsulas (穏やかな湾と岬)
-        const bayNoise = (riaNoise.fbm(sx * 0.0035, sy * 0.0035, 3, 0.5, 2.0) - 0.5) * 2.0;
+        const bayNoise = riaNoise.fbm(sx * 0.0035, sy * 0.0035, 3, 0.5, 2.0) * 2.0;
 
         // 3. Gentle coastal undulation without harsh spiky ridges
-        const coastalRidge = (riaNoise.sample(sx * 0.009, sy * 0.009) - 0.5) * 3.8;
+        const coastalRidge = riaNoise.sample(sx * 0.009, sy * 0.009) * 1.9;
 
         // 4. Subtle, smooth organic variation (clean, non-pixelated)
-        const s1 = (riaDetailNoise.sample(sx * 0.018, sy * 0.018) - 0.5) * 2.4;
+        const s1 = riaDetailNoise.sample(sx * 0.018, sy * 0.018) * 1.2;
 
         const riaDelta =
           (bayNoise * 5.0 + coastalRidge + s1) *
