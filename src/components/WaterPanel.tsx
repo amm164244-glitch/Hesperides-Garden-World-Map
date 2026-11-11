@@ -39,6 +39,7 @@ interface WaterPanelProps {
   onUpdateLake: (lake: LakeData) => void;
   onDeleteWater: (id: string, type: 'river' | 'lake') => void;
   onClearAllWater: () => void;
+  onCarveWaterIntoTerrain?: () => void;
   onClose: () => void;
   inProgressCount?: number;
   onCommitRiverDrawing?: () => void;
@@ -69,6 +70,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
   onUpdateLake,
   onDeleteWater,
   onClearAllWater,
+  onCarveWaterIntoTerrain,
   onClose,
   inProgressCount = 0,
   onCommitRiverDrawing,
@@ -84,6 +86,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [genProgress, setGenProgress] = useState<{ percent: number; message: string } | null>(null);
   const [lastResult, setLastResult] = useState<AutoGenResult | null>(null);
+  const [carvedStatusMessage, setCarvedStatusMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const riverDensity = waterSettings.riverDensity ?? 40;
@@ -167,6 +170,23 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {/* Carve Into Terrain Button */}
+          {onCarveWaterIntoTerrain && (rivers.length > 0 || lakes.length > 0) && (
+            <button
+              type="button"
+              onClick={() => {
+                onCarveWaterIntoTerrain();
+                setCarvedStatusMessage(`水系 (川 ${rivers.length}本 / 湖 ${lakes.length}個) を地形に彫り込みました`);
+                setTimeout(() => setCarvedStatusMessage(null), 3500);
+              }}
+              className="px-2 py-1 rounded bg-gradient-to-r from-teal-800 to-cyan-800 hover:from-teal-700 hover:to-cyan-700 text-teal-100 border border-teal-500/60 font-semibold text-[11px] flex items-center gap-1 transition shadow cursor-pointer"
+              title="川や湖をオブジェクトではなく、実際の標高地形として海と同じ水深・海岸線で彫り込みます"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+              <span>水系を地形に彫り込む (完全に地形化)</span>
+            </button>
+          )}
+
           {/* Show / Hide toggle */}
           <button
             type="button"
@@ -192,6 +212,14 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Carved Status Notification Banner */}
+      {carvedStatusMessage && (
+        <div className="bg-teal-950/90 border border-teal-500/70 rounded-lg px-3 py-1.5 flex items-center gap-2 text-teal-200 text-[11px] animate-in fade-in shadow-lg">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="font-medium">{carvedStatusMessage}</span>
+        </div>
+      )}
 
       {/* Auto-Generation Hydrology Section */}
       <div className="bg-stone-950/70 border border-cyan-900/60 rounded-lg p-2.5 flex flex-col gap-2">
@@ -301,6 +329,29 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                 title="大きいほど、川が上流(山の奥)まで延びます"
               />
               <span className="text-[10px] text-stone-400">大きいほど、川が上流(山の奥)まで延びます</span>
+            </div>
+
+            {/* 6. Carve Into Terrain Toggle */}
+            <div className="flex items-center justify-between col-span-2 pt-1 border-t border-stone-800/60">
+              <div className="flex flex-col">
+                <span className="text-stone-200 font-semibold text-[11px]" title="川や湖を2Dベクターではなく標高地形として彫り込み、海と同じ深さ・浅瀬・砂浜で描画します">
+                  完全に地形化 (地形彫り込み):
+                </span>
+                <span className="text-[10px] text-stone-400">
+                  川や湖をオブジェクトではなく、実際の標高地形として海と同じ水深・海岸線で彫り込みます
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onChangeWaterSettings({ carveIntoTerrain: waterSettings.carveIntoTerrain === false ? true : false })}
+                className={`px-2.5 py-1 rounded text-[11px] font-bold border transition cursor-pointer ${
+                  waterSettings.carveIntoTerrain !== false
+                    ? 'bg-teal-900/90 text-teal-200 border-teal-500 shadow'
+                    : 'bg-stone-800 text-stone-400 border-stone-700'
+                }`}
+              >
+                {waterSettings.carveIntoTerrain !== false ? 'ON (完全に地形化)' : 'OFF (ベクター)'}
+              </button>
             </div>
           </div>
         )}

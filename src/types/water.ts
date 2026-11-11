@@ -39,7 +39,10 @@ export interface WaterToolSettings {
   meander?: number;
   riverCount?: number;
   lakeCount?: number;
-  headExtension?: number; // 0 ~ 100, default 80
+  headExtension?: number;     // 0 ~ 100, default 80
+  carveIntoTerrain?: boolean; // 地形に直接彫り込み完全に地形化 (既定: true)
+  carveDepthFactor?: number;  // 彫り込み水深係数 (0.5 ~ 2.0, 既定: 1.0)
+  carveWidthFactor?: number;  // 彫り込み川幅係数 (0.5 ~ 2.5, 既定: 1.2)
 }
 
 export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
@@ -53,5 +56,8 @@ export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
   riverCount: 14,
   lakeCount: 6,
   headExtension: 80,
+  carveIntoTerrain: true,
+  carveDepthFactor: 1.0,
+  carveWidthFactor: 1.2,
 };
 

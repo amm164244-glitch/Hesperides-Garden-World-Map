@@ -22,6 +22,7 @@ export interface DrawWaterOptions {
   seaLevel?: number;
   mapWidth?: number;
   mapHeight?: number;
+  carvedIntoTerrain?: boolean;
 }
 
 export const WATER_STYLE = {
@@ -606,14 +607,17 @@ export function drawWaterBodies(
   const hoveredId = options.hoveredId;
   const viewBounds = options.viewBounds;
 
+  const isCarved = options.carvedIntoTerrain ?? true;
+
   ctx.save();
 
   // ==========================================
-  // Pass 0: Lake Fills
+  // Pass 0: Lake Fills (Skipped when carved directly into WebGL terrain)
   // ==========================================
-  for (const lake of lakes) {
-    const poly = lake.polygon;
-    if (!poly || poly.length < 3) continue;
+  if (!isCarved) {
+    for (const lake of lakes) {
+      const poly = lake.polygon;
+      if (!poly || poly.length < 3) continue;
 
     if (viewBounds) {
       let lMinX = Infinity;
@@ -646,6 +650,7 @@ export function drawWaterBodies(
     ctx.closePath();
     ctx.fillStyle = lake.color || WATER_STYLE.waterFill;
     ctx.fill();
+    }
   }
 
   // ==========================================
@@ -747,15 +752,17 @@ export function drawWaterBodies(
     });
   }
 
-  // Common stroke settings for casing and fill
-  // Common stroke settings for casing and fill
-  const minWidthWorld = 1.0 / zoomPx;
-  const borderWidth = 1.1 / zoomPx;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-
   // ==========================================
-  // Pass 1A: River Bank Sand Wash & Sepia Halo (河岸の砂岸・明色ハロー)
+  // Pass 1 & 2: 2D Vector River Casings and Fills (Skipped when carved into WebGL terrain)
+  // ==========================================
+  if (!isCarved) {
+    // Common stroke settings for casing and fill
+    const minWidthWorld = 1.0 / zoomPx;
+    const borderWidth = 1.1 / zoomPx;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Pass 1A: River Bank Sand Wash & Sepia Halo (河岸の砂岸・明色ハロー)
   // Two-tier warm sandy border where water meets land along the riverbanks,
   // matching the WebGL coastline's beach sand ribbon (#d9c9a6) and sepia halo (#b38f5c).
   // Uses lineCap = 'butt' at ocean mouth so nothing protrudes past the coastline.
@@ -1156,9 +1163,10 @@ export function drawWaterBodies(
       ctx.restore();
     }
   }
+}
 
   // ==========================================
-  // Pass 3: Lake Shorelines (with open gateways at river junctions & shallow water aura)
+  // Pass 3: Lake Shorelines (Skipped when carved into WebGL terrain)
   // ==========================================
   for (const lake of lakes) {
     const poly = lake.polygon;
@@ -1168,8 +1176,9 @@ export function drawWaterBodies(
     const isHovered = hoveredId === lake.id;
     const junctions = getLakeJunctions(lake, rivers);
 
-    // 1. Soft bank sand halo along lake perimeter (land side)
-    ctx.strokeStyle = WATER_STYLE.bankSand;
+    if (!isCarved) {
+      // 1. Soft bank sand halo along lake perimeter (land side)
+      ctx.strokeStyle = WATER_STYLE.bankSand;
     ctx.lineWidth = 3.2 / zoomPx;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1240,6 +1249,7 @@ export function drawWaterBodies(
       }
       ctx.stroke();
     }
+  }
 
     // Selection highlight for lake
     if (isSelected || isHovered) {

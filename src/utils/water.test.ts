@@ -7,6 +7,7 @@ import {
   smoothRiverPath,
   sampleElev,
 } from './waterGenerator';
+import { carveWaterIntoElevationGrid } from './terrainCarver';
 import {
   distanceToRiver,
   findNearestRiverVertex,
@@ -1666,6 +1667,86 @@ test('河川の岸辺浅瀬・水深グラデーションと色彩補間の検�
   // 5. interpolateRgb が色間を滑らかに線形補間
   const interpolated = interpolateRgb('rgb(100, 100, 100)', 'rgb(200, 200, 200)', 0.5);
   assert.equal(interpolated, 'rgb(150, 150, 150)');
+});
+
+test('水系の地形彫り込み (carveWaterIntoElevationGrid) の検証', () => {
+  const cols = 100;
+  const rows = 100;
+  const mapWidth = 200;
+  const mapHeight = 200;
+  const seaLevel = 35.0;
+
+  // 1. 陸地 (標高 60.0) のグリッドを用意
+  const grid = new Float32Array(cols * rows);
+  grid.fill(60.0);
+
+  // 川を定義: (20, 50) から (80, 50) への直線流路 (幅 2.0 -> 8.0)
+  const testRiver: RiverData = {
+    id: 'test_river_1',
+    name: '翡翠川',
+    points: [
+      [20, 50],
+      [40, 50],
+      [60, 50],
+      [80, 50],
+    ],
+    widthStart: 2.0,
+    widthEnd: 8.0,
+    terminatesAt: 'ocean',
+  };
+
+  // 湖を定義: 中心 (150, 150) の正方形
+  const testLake: LakeData = {
+    id: 'test_lake_1',
+    name: 'エメラルド湖',
+    polygon: [
+      [140, 140],
+      [160, 140],
+      [160, 160],
+      [140, 160],
+    ],
+  };
+
+  const { changes, affectedBounds } = carveWaterIntoElevationGrid(
+    grid,
+    cols,
+    rows,
+    mapWidth,
+    mapHeight,
+    seaLevel,
+    [testRiver],
+    [testLake]
+  );
+
+  // 変更が記録されていること
+  assert.ok(changes.length > 0, '標高の変更が記録されていること');
+  assert.ok(affectedBounds.minC <= affectedBounds.maxC);
+  assert.ok(affectedBounds.minR <= affectedBounds.maxR);
+
+  // 川の中心線上のマスの標高が海面 (seaLevel = 35.0) より深くなっていること (水域化)
+  const cellW = mapWidth / (cols - 1);
+  const cellH = mapHeight / (rows - 1);
+
+  // (50, 50) のマス
+  const cMid = Math.round(50 / cellW);
+  const rMid = Math.round(50 / cellH);
+  const midElev = grid[rMid * cols + cMid];
+
+  assert.ok(midElev < seaLevel, `川の中心標高 (${midElev}) は seaLevel (${seaLevel}) より低いこと`);
+  assert.ok(midElev <= seaLevel - 10.0, `川の中心部は十分な深さ (<= 25.0) に彫り込まれていること`);
+
+  // 川から少し離れた谷斜面のマスの標高が元の標高 (60.0) より低く、かつ seaLevel より高いこと
+  const rValley = rMid + 3; // 少し横
+  const valleyElev = grid[rValley * cols + cMid];
+  assert.ok(valleyElev >= seaLevel, `河岸の谷斜面標高 (${valleyElev}) は陸地 (>= seaLevel) であること`);
+  assert.ok(valleyElev < 60.0, `河岸の谷斜面標高 (${valleyElev}) は元の平坦陸地 (60.0) から川に向かって滑らかに下っていること`);
+
+  // 湖の内部 (150, 150) のマス
+  const cLake = Math.round(150 / cellW);
+  const rLake = Math.round(150 / cellH);
+  const lakeElev = grid[rLake * cols + cLake];
+  assert.ok(lakeElev < seaLevel, `湖の内部標高 (${lakeElev}) は seaLevel (${seaLevel}) より低いこと`);
+  assert.ok(lakeElev <= seaLevel - 10.0, `湖の中心部は十分な深さに彫り込まれていること`);
 });
 
 
