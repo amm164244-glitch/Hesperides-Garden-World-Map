@@ -2043,6 +2043,29 @@ export function extractRivers(
         );
       }
     }
+
+    // Attach elevation metadata
+    const pts = riverObj.points;
+    const n = pts.length;
+    if (n >= 2) {
+      const e0 = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, pts[0][0], pts[0][1]);
+      const eEnd = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, pts[n - 1][0], pts[n - 1][1]);
+      riverObj.elevationStart = Number(e0.toFixed(2));
+      riverObj.elevationEnd = Number(eEnd.toFixed(2));
+
+      let uphill = 0;
+      let maxUp = 0;
+      for (let i = 0; i < n - 1; i++) {
+        const diff = sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, pts[i + 1][0], pts[i + 1][1]) -
+                     sampleElev(elevationGrid, cols, rows, mapWidth, mapHeight, pts[i][0], pts[i][1]);
+        if (diff > 0.35) {
+          uphill++;
+          if (diff > maxUp) maxUp = diff;
+        }
+      }
+      riverObj.isMonotonic = uphill === 0;
+      riverObj.maxUphill = Number(maxUp.toFixed(2));
+    }
   }
 
   return resultRivers;

@@ -176,14 +176,14 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
               type="button"
               onClick={() => {
                 onCarveWaterIntoTerrain();
-                setCarvedStatusMessage(`水系 (川 ${rivers.length}本 / 湖 ${lakes.length}個) を地形に彫り込みました`);
+                setCarvedStatusMessage(`水系 (川 ${rivers.length}本 / 湖 ${lakes.length}個) を地形(河谷・湖盆)に反映しました`);
                 setTimeout(() => setCarvedStatusMessage(null), 3500);
               }}
               className="px-2 py-1 rounded bg-gradient-to-r from-teal-800 to-cyan-800 hover:from-teal-700 hover:to-cyan-700 text-teal-100 border border-teal-500/60 font-semibold text-[11px] flex items-center gap-1 transition shadow cursor-pointer"
-              title="川や湖をオブジェクトではなく、実際の標高地形として海と同じ水深・海岸線で彫り込みます"
+              title="川や湖の標高に合わせて、自然な河谷や湖盆（浅い谷・盆地）を標高グリッドに刻みます。高標高の山地でも海面下に落ち込まず、自然な渓谷・高地湖の地形になります。"
             >
               <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
-              <span>水系を地形に彫り込む (完全に地形化)</span>
+              <span>水系を地形に反映 (河谷・湖盆)</span>
             </button>
           )}
 
@@ -334,23 +334,23 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
             {/* 6. Carve Into Terrain Toggle */}
             <div className="flex items-center justify-between col-span-2 pt-1 border-t border-stone-800/60">
               <div className="flex flex-col">
-                <span className="text-stone-200 font-semibold text-[11px]" title="川や湖を2Dベクターではなく標高地形として彫り込み、海と同じ深さ・浅瀬・砂浜で描画します">
-                  完全に地形化 (地形彫り込み):
+                <span className="text-stone-200 font-semibold text-[11px]" title="川や湖の標高に合わせて、自然な河谷や湖盆（浅い谷・盆地）を標高グリッドに刻みます。高標高の山地でも海面下に落ち込まず、自然な渓谷・高地湖の地形になります。">
+                  水系を地形に反映 (河谷・湖盆の形成):
                 </span>
                 <span className="text-[10px] text-stone-400">
-                  川や湖をオブジェクトではなく、実際の標高地形として海と同じ水深・海岸線で彫り込みます
+                  水面下に落とし込まず、各標高（高山・高原）に合わせた自然な河谷・湖盆を地形に刻みます
                 </span>
               </div>
               <button
                 type="button"
-                onClick={() => onChangeWaterSettings({ carveIntoTerrain: waterSettings.carveIntoTerrain === false ? true : false })}
+                onClick={() => onChangeWaterSettings({ carveIntoTerrain: waterSettings.carveIntoTerrain === true ? false : true })}
                 className={`px-2.5 py-1 rounded text-[11px] font-bold border transition cursor-pointer ${
-                  waterSettings.carveIntoTerrain !== false
+                  waterSettings.carveIntoTerrain === true
                     ? 'bg-teal-900/90 text-teal-200 border-teal-500 shadow'
                     : 'bg-stone-800 text-stone-400 border-stone-700'
                 }`}
               >
-                {waterSettings.carveIntoTerrain !== false ? 'ON (完全に地形化)' : 'OFF (ベクター)'}
+                {waterSettings.carveIntoTerrain === true ? 'ON (河谷・湖盆を形成)' : 'OFF (水面レイヤーのみ)'}
               </button>
             </div>
           </div>
@@ -511,6 +511,23 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                 className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
               />
             </div>
+            {/* Auto Snap to Valleys toggle */}
+            <div className="flex items-center justify-between col-span-2 pt-1 border-t border-stone-800/60">
+              <span className="text-stone-300 text-[11px]" title="描画した川を近傍の谷筋（最低標高）に自動スナップさせ、下り勾配を維持します">
+                谷筋スナップ (下り勾配に自動誘導):
+              </span>
+              <button
+                type="button"
+                onClick={() => onChangeWaterSettings({ autoSnapToValleys: waterSettings.autoSnapToValleys === false ? true : false })}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold border transition cursor-pointer ${
+                  waterSettings.autoSnapToValleys !== false
+                    ? 'bg-cyan-900/90 text-cyan-200 border-cyan-600'
+                    : 'bg-stone-800 text-stone-400 border-stone-700'
+                }`}
+              >
+                {waterSettings.autoSnapToValleys !== false ? 'ON' : 'OFF'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -629,6 +646,56 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Elevation & Flow Status */}
+              <div className="bg-stone-900/90 border border-stone-800 rounded px-2.5 py-1.5 flex flex-col gap-1 text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-stone-400">標高プロファイル:</span>
+                  <div className="flex items-center gap-1.5 font-mono">
+                    <span className="text-emerald-400 font-bold" title="水源標高">
+                      ▲ {selectedRiver.elevationStart !== undefined ? `${selectedRiver.elevationStart.toFixed(1)}m` : '-'}
+                    </span>
+                    <span className="text-stone-500">→</span>
+                    <span className="text-cyan-400 font-bold" title="河口・合流点標高">
+                      ▼ {selectedRiver.elevationEnd !== undefined ? `${selectedRiver.elevationEnd.toFixed(1)}m` : '-'}
+                    </span>
+                    {selectedRiver.elevationStart !== undefined && selectedRiver.elevationEnd !== undefined && (
+                      <span className="text-amber-300 font-bold ml-1 text-[10px]">
+                        (落差 {(selectedRiver.elevationStart - selectedRiver.elevationEnd).toFixed(1)}m)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-stone-400">勾配判定:</span>
+                  <div className="flex items-center gap-1">
+                    {selectedRiver.isMonotonic !== false ? (
+                      <span className="text-emerald-400 font-semibold bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/60">
+                        ✔ 正常な下り勾配 (山から谷・海へ)
+                      </span>
+                    ) : (
+                      <span className="text-amber-300 font-semibold bg-amber-950/80 px-1.5 py-0.5 rounded border border-amber-800/60" title={`最大上り坂: +${selectedRiver.maxUphill}m`}>
+                        ⚠ 局所的な上り坂あり (+{selectedRiver.maxUphill}m)
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-[10px] text-stone-400 border-t border-stone-800/60 pt-1">
+                  <span>接続先:</span>
+                  <span className="text-stone-200 font-medium">
+                    {selectedRiver.terminatesAt === 'ocean'
+                      ? '🌊 海へ流入 (河口)'
+                      : selectedRiver.terminatesAt === 'lake'
+                      ? `💧 湖へ流入 (${lakes.find((l) => l.id === selectedRiver.targetLakeId)?.name || '湖'})`
+                      : selectedRiver.terminatesAt === 'river'
+                      ? `🌿 本流へ合流 (${rivers.find((r) => r.id === selectedRiver.connectedRiverId)?.name || '河川'})`
+                      : '内陸'}
+                  </span>
+                </div>
+              </div>
+
               <div className="text-[10px] text-stone-500">
                 頂点数: {selectedRiver.points.length}点 (頂点をドラッグして流路を変更できます)
               </div>
@@ -659,13 +726,32 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                 />
               </div>
 
+              {/* Lake Elevation & Basin Status */}
+              <div className="bg-stone-900/90 border border-stone-800 rounded px-2.5 py-1.5 flex flex-col gap-1 text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-stone-400">湖水面標高:</span>
+                  <span className="font-mono text-cyan-300 font-bold">
+                    {selectedLake.elevation !== undefined ? `${selectedLake.elevation.toFixed(1)} m` : '-'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-stone-400">推定水深 / 流出標高:</span>
+                  <div className="flex items-center gap-2 font-mono text-stone-300">
+                    <span>水深: <strong className="text-emerald-400">{selectedLake.depth !== undefined ? `${selectedLake.depth.toFixed(1)}m` : '-'}</strong></span>
+                    {selectedLake.minRimElevation !== undefined && (
+                      <span className="text-stone-400">| 最低湖岸: {selectedLake.minRimElevation.toFixed(1)}m</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="text-[10px] text-stone-500">
                 外周頂点数: {selectedLake.polygon.length}点 (頂点をドラッグして岸辺を変形できます)
               </div>
             </div>
           ) : (
             <div className="text-stone-400 text-[11px] py-1 text-center">
-              川または湖をクリックすると選択され、頂点ドラッグ変形や名前・太さの変更ができます。
+              川または湖をクリックすると選択され、頂点ドラッグ変形や名前・太さ・標高の確認ができます。
             </div>
           )}
         </div>

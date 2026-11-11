@@ -100,7 +100,14 @@ import {
   findNearestRiverVertex,
   findNearestLakeVertex,
 } from '../utils/waterRenderer';
-import { createOrganicLake, smoothRiverPath, generateRiversAndLakes } from '../utils/waterGenerator';
+import { createOrganicLake, smoothRiverPath, generateRiversAndLakes, sampleElev } from '../utils/waterGenerator';
+import {
+  analyzeRiverElevation,
+  autoOrientRiverDownhill,
+  snapRiverToValleys,
+  evaluateLakeElevation,
+  analyzeRiverConnections,
+} from '../utils/waterElevation';
 import { carveWaterIntoElevationGrid } from '../utils/terrainCarver';
 import { WaterPanel } from './WaterPanel';
 import {
@@ -1596,7 +1603,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         seaLevel: currentSeaLevel ?? 35.0,
         mapWidth: currentWidth,
         mapHeight: currentHeight,
-        carvedIntoTerrain: waterSettings.carveIntoTerrain !== false,
+        carvedIntoTerrain: waterSettings.carveIntoTerrain === true,
       });
     }
     townPerf.end('water');
@@ -1745,19 +1752,83 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         renderOverlay();
         return;
       }
-      const smoothed = smoothRiverPath(points);
+      let pts = smoothRiverPath(points);
+
+      // 1. Auto-orient flow downhill (from high altitude source to low altitude mouth)
+      const orientResult = autoOrientRiverDownhill(
+        pts,
+        currentElevation,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight
+      );
+      pts = orientResult.points;
+      if (orientResult.wasReversed) {
+        showToast('川の流向を標高順（高所から低所へ）に自動設定しました');
+      }
+
+      // 2. Snap to local valley bottoms if enabled
+      if (waterSettings?.autoSnapToValleys !== false) {
+        const cellSize = currentWidth / Math.max(1, currentCols - 1);
+        pts = snapRiverToValleys(
+          pts,
+          currentElevation,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          cellSize * 2.5
+        );
+      }
+
+      // 3. Detailed elevation analysis
+      const elevProfile = analyzeRiverElevation(
+        pts,
+        currentElevation,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        currentSeaLevel ?? 35.0
+      );
+
+      // 4. Connection analysis (lakes, confluences, ocean)
+      const conn = analyzeRiverConnections(
+        pts,
+        effectiveRivers,
+        effectiveLakes,
+        currentElevation,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        currentSeaLevel ?? 35.0,
+        25 / viewport.zoom
+      );
+
       const id = `river_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const newRiver: RiverData = {
         id,
         name: `河川 ${effectiveRivers.length + 1}`,
-        points: smoothed,
+        points: pts,
         widthStart: waterSettings?.riverWidthStart ?? 1.5,
         widthEnd: waterSettings?.riverWidthEnd ?? 4.5,
+        elevationStart: elevProfile.startElev,
+        elevationEnd: elevProfile.endElev,
+        elevations: elevProfile.elevations,
+        isMonotonic: elevProfile.isMonotonic,
+        maxUphill: elevProfile.maxUphill,
+        sourceType: conn.sourceType,
+        sourceLakeId: conn.sourceLakeId,
+        terminatesAt: conn.terminatesAt,
+        targetLakeId: conn.targetLakeId,
+        connectedRiverId: conn.connectedRiverId,
       };
       const nextRivers = [...effectiveRivers, newRiver];
 
       let changes: any[] = [];
-      if (waterSettings?.carveIntoTerrain !== false) {
+      if (waterSettings?.carveIntoTerrain === true) {
         const res = carveWaterIntoElevationGrid(
           currentElevation,
           currentCols,
@@ -1780,7 +1851,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
 
       onCommitHistory({
-        description: '河川を追加 (地形化)',
+        description: `河川を追加 (標高 ${elevProfile.startElev.toFixed(1)}m → ${elevProfile.endElev.toFixed(1)}m)`,
         timestamp: Date.now(),
         changes: changes.length > 0 ? changes : undefined,
         waterChanges: {
@@ -1795,6 +1866,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     },
     [
       effectiveRivers,
+      effectiveLakes,
       waterSettings,
       currentElevation,
       currentCols,
@@ -1802,7 +1874,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       currentWidth,
       currentHeight,
       currentSeaLevel,
+      viewport.zoom,
       renderWebGL,
+      showToast,
       onCommitHistory,
       onUpdateRivers,
       onSelectWater,
@@ -1818,16 +1892,31 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         renderOverlay();
         return;
       }
+
+      const lakeEval = evaluateLakeElevation(
+        points,
+        currentElevation,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        currentSeaLevel ?? 35.0
+      );
+
       const id = `lake_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const newLake: LakeData = {
         id,
         name: `湖 ${effectiveLakes.length + 1}`,
         polygon: points,
+        elevation: lakeEval.surfaceElevation,
+        depth: lakeEval.depth,
+        minRimElevation: lakeEval.minRimElevation,
+        maxRimElevation: lakeEval.maxRimElevation,
       };
       const nextLakes = [...effectiveLakes, newLake];
 
       let changes: any[] = [];
-      if (waterSettings?.carveIntoTerrain !== false) {
+      if (waterSettings?.carveIntoTerrain === true) {
         const res = carveWaterIntoElevationGrid(
           currentElevation,
           currentCols,
@@ -1849,8 +1938,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         renderWebGL();
       }
 
+      showToast(`湖を追加 (水面標高: ${lakeEval.surfaceElevation}m / 水深: ${lakeEval.depth}m)`);
+
       onCommitHistory({
-        description: '湖を追加 (地形化)',
+        description: `湖を追加 (水面標高 ${lakeEval.surfaceElevation}m)`,
         timestamp: Date.now(),
         changes: changes.length > 0 ? changes : undefined,
         waterChanges: {
@@ -1873,12 +1964,14 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       currentHeight,
       currentSeaLevel,
       renderWebGL,
+      showToast,
       onCommitHistory,
       onUpdateLakes,
       onSelectWater,
       renderOverlay,
     ]
   );
+
 
   // Auto Generate Water using Topographic Hydrology
   const handleAutoGenerateWater = useCallback(
@@ -2430,14 +2523,41 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       ctx.lineJoin = 'round';
       ctx.stroke();
 
-      pts.forEach((p) => {
+      pts.forEach((p, idx) => {
         ctx.beginPath();
         ctx.arc(p[0], p[1], 4 / zoomPx, 0, Math.PI * 2);
-        ctx.fillStyle = '#38bdf8';
+        ctx.fillStyle = idx === 0 ? '#34d399' : idx === pts.length - 1 ? '#38bdf8' : '#fbbf24';
         ctx.fill();
         ctx.strokeStyle = '#0369a1';
         ctx.lineWidth = 1.5 / zoomPx;
         ctx.stroke();
+
+        // Render elevation badge for source and current cursor / end point
+        if (idx === 0 || idx === pts.length - 1) {
+          const elev = sampleElev(currentElevation, currentCols, currentRows, currentWidth, currentHeight, p[0], p[1]);
+          let badgeText = idx === 0 ? `▲ 源流 ${elev.toFixed(1)}m` : `▼ ${elev.toFixed(1)}m`;
+          if (idx === pts.length - 1 && pts.length > 1) {
+            const prevP = pts[idx - 1];
+            const prevE = sampleElev(currentElevation, currentCols, currentRows, currentWidth, currentHeight, prevP[0], prevP[1]);
+            const delta = elev - prevE;
+            if (delta < -0.3) {
+              badgeText = `↓ ${( -delta ).toFixed(1)}m 下り (${elev.toFixed(1)}m)`;
+            } else if (delta > 0.3) {
+              badgeText = `⚠ ↑ +${delta.toFixed(1)}m 上り (${elev.toFixed(1)}m)`;
+            } else {
+              badgeText = `→ 平坦 (${elev.toFixed(1)}m)`;
+            }
+          }
+          ctx.save();
+          ctx.font = `bold ${Math.max(9, 10 / viewport.zoom)}px sans-serif`;
+          ctx.fillStyle = idx === pts.length - 1 && pts.length > 1 && sampleElev(currentElevation, currentCols, currentRows, currentWidth, currentHeight, p[0], p[1]) > sampleElev(currentElevation, currentCols, currentRows, currentWidth, currentHeight, pts[idx - 1][0], pts[idx - 1][1]) + 0.3
+            ? '#fef08a'
+            : '#e0f2fe';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+          ctx.shadowBlur = 3 / viewport.zoom;
+          ctx.fillText(badgeText, p[0] + 7 / viewport.zoom, p[1] - 5 / viewport.zoom);
+          ctx.restore();
+        }
       });
       ctx.restore();
     }
@@ -5657,15 +5777,28 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       const radius = dragDist >= 6 ? dragDist : (waterSettings.lakeRadius || 18);
       const lakeSeed = Date.now();
       const polygon = createOrganicLake(start[0], start[1], radius, lakeSeed);
+      const lakeEval = evaluateLakeElevation(
+        polygon,
+        currentElevation,
+        currentCols,
+        currentRows,
+        currentWidth,
+        currentHeight,
+        currentSeaLevel ?? 35.0
+      );
       const newLake: LakeData = {
         id: `lake_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         name: `湖 ${effectiveLakes.length + 1}`,
         polygon,
+        elevation: lakeEval.surfaceElevation,
+        depth: lakeEval.depth,
+        minRimElevation: lakeEval.minRimElevation,
+        maxRimElevation: lakeEval.maxRimElevation,
       };
       const nextLakes = [...effectiveLakes, newLake];
 
       let changes: any[] = [];
-      if (waterSettings?.carveIntoTerrain !== false) {
+      if (waterSettings?.carveIntoTerrain === true) {
         const res = carveWaterIntoElevationGrid(
           currentElevation,
           currentCols,
@@ -5687,8 +5820,10 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         renderWebGL();
       }
 
+      showToast(`湖を配置 (水面標高: ${lakeEval.surfaceElevation}m / 水深: ${lakeEval.depth}m)`);
+
       onCommitHistory({
-        description: '湖を配置 (地形化)',
+        description: `湖を配置 (水面標高 ${lakeEval.surfaceElevation}m)`,
         timestamp: Date.now(),
         changes: changes.length > 0 ? changes : undefined,
         waterChanges: {
@@ -5975,9 +6110,27 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           selectedWaterType={selectedWaterType}
           onSelectWater={onSelectWater || (() => {})}
           onUpdateRiver={(updatedRiver) => {
-            const next = effectiveRivers.map((r) => (r.id === updatedRiver.id ? updatedRiver : r));
+            const elevProfile = analyzeRiverElevation(
+              updatedRiver.points,
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel ?? 35.0
+            );
+            const enrichedRiver: RiverData = {
+              ...updatedRiver,
+              elevationStart: elevProfile.startElev,
+              elevationEnd: elevProfile.endElev,
+              elevations: elevProfile.elevations,
+              isMonotonic: elevProfile.isMonotonic,
+              maxUphill: elevProfile.maxUphill,
+            };
+
+            const next = effectiveRivers.map((r) => (r.id === updatedRiver.id ? enrichedRiver : r));
             let changes: any[] = [];
-            if (waterSettings?.carveIntoTerrain !== false) {
+            if (waterSettings?.carveIntoTerrain === true) {
               const res = carveWaterIntoElevationGrid(
                 currentElevation,
                 currentCols,
@@ -5985,7 +6138,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 currentWidth,
                 currentHeight,
                 currentSeaLevel ?? 35.0,
-                [updatedRiver],
+                [enrichedRiver],
                 [],
                 {
                   depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
@@ -5999,7 +6152,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               renderWebGL();
             }
             onCommitHistory({
-              description: '河川の更新 (地形化)',
+              description: '河川の更新',
               timestamp: Date.now(),
               changes: changes.length > 0 ? changes : undefined,
               waterChanges: { prevRivers: effectiveRivers, newRivers: next },
@@ -6008,9 +6161,26 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
             renderOverlay();
           }}
           onUpdateLake={(updatedLake) => {
-            const next = effectiveLakes.map((l) => (l.id === updatedLake.id ? updatedLake : l));
+            const lakeEval = evaluateLakeElevation(
+              updatedLake.polygon,
+              currentElevation,
+              currentCols,
+              currentRows,
+              currentWidth,
+              currentHeight,
+              currentSeaLevel ?? 35.0
+            );
+            const enrichedLake: LakeData = {
+              ...updatedLake,
+              elevation: lakeEval.surfaceElevation,
+              depth: lakeEval.depth,
+              minRimElevation: lakeEval.minRimElevation,
+              maxRimElevation: lakeEval.maxRimElevation,
+            };
+
+            const next = effectiveLakes.map((l) => (l.id === updatedLake.id ? enrichedLake : l));
             let changes: any[] = [];
-            if (waterSettings?.carveIntoTerrain !== false) {
+            if (waterSettings?.carveIntoTerrain === true) {
               const res = carveWaterIntoElevationGrid(
                 currentElevation,
                 currentCols,
@@ -6019,7 +6189,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 currentHeight,
                 currentSeaLevel ?? 35.0,
                 [],
-                [updatedLake],
+                [enrichedLake],
                 {
                   depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
                   widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
@@ -6032,7 +6202,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
               renderWebGL();
             }
             onCommitHistory({
-              description: '湖の更新 (地形化)',
+              description: `湖の更新 (水面標高 ${lakeEval.surfaceElevation}m)`,
               timestamp: Date.now(),
               changes: changes.length > 0 ? changes : undefined,
               waterChanges: { prevLakes: effectiveLakes, newLakes: next },

@@ -17,6 +17,11 @@ export interface RiverData {
   terminatesAt?: 'ocean' | 'lake' | 'river' | 'inland'; // Where the river ends
   targetLakeId?: string;          // If empties into a lower lake
   connectedRiverId?: string;      // If tributary of another river
+  elevationStart?: number;        // Elevation at river source (m)
+  elevationEnd?: number;          // Elevation at river mouth / confluence (m)
+  elevations?: number[];          // Elevation sampled along each point
+  isMonotonic?: boolean;          // True if strictly flowing downhill
+  maxUphill?: number;             // Maximum uphill bump in meters if any
 }
 
 export interface LakeData {
@@ -24,9 +29,11 @@ export interface LakeData {
   name?: string;
   polygon: [number, number][]; // Closed polygon of lake shoreline in map coordinates
   color?: string;              // Optional custom water fill color
-  borderColor?: string;       // Optional custom ink border color
-  depth?: number;             // Approximate depth in meters or units
-  elevation?: number;         // Average surface elevation
+  borderColor?: string;        // Optional custom ink border color
+  depth?: number;              // Approximate depth in meters or units
+  elevation?: number;          // Average surface elevation (m)
+  minRimElevation?: number;    // Lowest point on basin rim (spillway elevation)
+  maxRimElevation?: number;    // Highest point on basin rim
 }
 
 export interface WaterToolSettings {
@@ -40,9 +47,10 @@ export interface WaterToolSettings {
   riverCount?: number;
   lakeCount?: number;
   headExtension?: number;     // 0 ~ 100, default 80
-  carveIntoTerrain?: boolean; // 地形に直接彫り込み完全に地形化 (既定: true)
+  carveIntoTerrain?: boolean; // 地形に直接彫り込み完全に地形化 (既定: false - 標高破壊防止)
   carveDepthFactor?: number;  // 彫り込み水深係数 (0.5 ~ 2.0, 既定: 1.0)
   carveWidthFactor?: number;  // 彫り込み川幅係数 (0.5 ~ 2.5, 既定: 1.2)
+  autoSnapToValleys?: boolean;// 谷筋スナップ・下り坂誘導 (既定: true)
 }
 
 export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
@@ -56,8 +64,9 @@ export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
   riverCount: 14,
   lakeCount: 6,
   headExtension: 80,
-  carveIntoTerrain: true,
+  carveIntoTerrain: false,
   carveDepthFactor: 1.0,
   carveWidthFactor: 1.2,
+  autoSnapToValleys: true,
 };
 

@@ -36,6 +36,13 @@ import {
   computeRiverPointWidthsForExtraction,
   projectPointToPolyline,
 } from './riverExtraction';
+import {
+  analyzeRiverElevation,
+  autoOrientRiverDownhill,
+  snapRiverToValleys,
+  evaluateLakeElevation,
+  analyzeRiverConnections,
+} from './waterElevation';
 
 /**
  * Asserts that river elevations monotonically decrease downstream (towards mouth).
@@ -1723,7 +1730,7 @@ test('水系の地形彫り込み (carveWaterIntoElevationGrid) の検証', () =
   assert.ok(affectedBounds.minC <= affectedBounds.maxC);
   assert.ok(affectedBounds.minR <= affectedBounds.maxR);
 
-  // 川の中心線上のマスの標高が海面 (seaLevel = 35.0) より深くなっていること (水域化)
+  // 川の中心線上のマスの標高が元の標高 (60.0) から河床へと適度に彫り込まれ、海面 (35.0) 下へ破壊的に落ち込んでいないこと
   const cellW = mapWidth / (cols - 1);
   const cellH = mapHeight / (rows - 1);
 
@@ -1732,22 +1739,254 @@ test('水系の地形彫り込み (carveWaterIntoElevationGrid) の検証', () =
   const rMid = Math.round(50 / cellH);
   const midElev = grid[rMid * cols + cMid];
 
-  assert.ok(midElev < seaLevel, `川の中心標高 (${midElev}) は seaLevel (${seaLevel}) より低いこと`);
-  assert.ok(midElev <= seaLevel - 10.0, `川の中心部は十分な深さ (<= 25.0) に彫り込まれていること`);
+  assert.ok(midElev < 60.0, `川の中心標高 (${midElev}) は元の標高 (60.0) より彫り込まれていること`);
+  assert.ok(midElev >= 55.0, `川の中心標高 (${midElev}) は海面下 (35.0) に落ち込まず、高標高の河谷 (>= 55.0) を維持していること`);
 
-  // 川から少し離れた谷斜面のマスの標高が元の標高 (60.0) より低く、かつ seaLevel より高いこと
+  // 川から少し離れた谷斜面のマスの標高が元の標高 (60.0) より低く、かつ河床より高いこと (滑らかな河谷)
   const rValley = rMid + 3; // 少し横
   const valleyElev = grid[rValley * cols + cMid];
-  assert.ok(valleyElev >= seaLevel, `河岸の谷斜面標高 (${valleyElev}) は陸地 (>= seaLevel) であること`);
-  assert.ok(valleyElev < 60.0, `河岸の谷斜面標高 (${valleyElev}) は元の平坦陸地 (60.0) から川に向かって滑らかに下っていること`);
+  assert.ok(valleyElev <= 60.0, `河岸の谷斜面標高 (${valleyElev}) は元の平坦陸地以下であること`);
+  assert.ok(valleyElev > midElev, `河岸の谷斜面標高 (${valleyElev}) は河床 (${midElev}) から山側へ向かって滑らかに上がっていること`);
 
-  // 湖の内部 (150, 150) のマス
+  // 湖の内部 (150, 150) のマス: 高地湖の盆地として彫り込まれ、海面下へ落ち込まないこと
   const cLake = Math.round(150 / cellW);
   const rLake = Math.round(150 / cellH);
   const lakeElev = grid[rLake * cols + cLake];
-  assert.ok(lakeElev < seaLevel, `湖の内部標高 (${lakeElev}) は seaLevel (${seaLevel}) より低いこと`);
-  assert.ok(lakeElev <= seaLevel - 10.0, `湖の中心部は十分な深さに彫り込まれていること`);
+  assert.ok(lakeElev < 60.0, `湖の内部標高 (${lakeElev}) は元の標高 (60.0) より湖盆として彫り込まれていること`);
+  assert.ok(lakeElev >= 50.0, `湖の内部標高 (${lakeElev}) は海面下 (35.0) に落ち込まず、高標高の湖盆 (>= 50.0) を維持していること`);
 });
 
+test('標高判定: analyzeRiverElevation による水源・河口標高、落差、単調減少(下り勾配)の判定', () => {
+  const cols = 50;
+  const rows = 50;
+  const mapW = 500;
+  const mapH = 500;
+  const grid = new Float32Array(cols * rows);
+
+  // Sloping mountain terrain from x=0 (elev=80) down to x=500 (elev=40)
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      grid[r * cols + c] = 80.0 - (c / (cols - 1)) * 40.0;
+    }
+  }
+
+  // 1. Natural downhill river (x = 20 -> 480)
+  const downhillPoints: [number, number][] = [
+    [20, 100],
+    [100, 110],
+    [250, 105],
+    [380, 120],
+    [480, 115],
+  ];
+
+  const profile = analyzeRiverElevation(downhillPoints, grid, cols, rows, mapW, mapH, 35.0);
+  assert.ok(profile.startElev > 75.0, `水源標高 (${profile.startElev}) は 75m 以上`);
+  assert.ok(profile.endElev < 45.0, `河口標高 (${profile.endElev}) は 45m 以下`);
+  assert.ok(profile.totalDrop > 30.0, `落差 (${profile.totalDrop}) は 30m 以上`);
+  assert.equal(profile.isMonotonic, true, '自然な下り坂は単調減少');
+  assert.equal(profile.isReversed, false);
+  assert.equal(profile.uphillSegments, 0);
+
+  // 2. Reversed river (drawn from mouth to source)
+  const reversedPoints = [...downhillPoints].reverse();
+  const revProfile = analyzeRiverElevation(reversedPoints, grid, cols, rows, mapW, mapH, 35.0);
+  assert.equal(revProfile.isReversed, true, '下流から上流へ描いた場合は逆流判定');
+  assert.equal(revProfile.isMonotonic, false);
+  assert.ok(revProfile.uphillSegments > 0);
+});
+
+test('標高判定: autoOrientRiverDownhill による高所から低所への流向自動補正', () => {
+  const cols = 50;
+  const rows = 50;
+  const mapW = 500;
+  const mapH = 500;
+  const grid = new Float32Array(cols * rows);
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      grid[r * cols + c] = 75.0 - (c / (cols - 1)) * 35.0; // 75 -> 40
+    }
+  }
+
+  // Drawn from low elevation (x=450, elev ~42) to high elevation (x=50, elev ~71)
+  const backwards: [number, number][] = [
+    [450, 200],
+    [300, 200],
+    [150, 200],
+    [50, 200],
+  ];
+
+  const res = autoOrientRiverDownhill(backwards, grid, cols, rows, mapW, mapH);
+  assert.equal(res.wasReversed, true, '逆向描画を検知して反転');
+  assert.deepEqual(res.points[0], [50, 200], '水源が高標高地点 (x=50) に再配置されること');
+  assert.deepEqual(res.points[res.points.length - 1], [450, 200], '河口が低標高地点 (x=450) に再配置されること');
+});
+
+test('標高判定: snapRiverToValleys による谷筋(局所最低標高)への自動誘導', () => {
+  const cols = 50;
+  const rows = 50;
+  const mapW = 500;
+  const mapH = 500;
+  const grid = new Float32Array(cols * rows);
+
+  // V-shaped valley running along y=250:
+  // elevation = 70 - (c/50)*20 + |r - 25| * 1.5
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const slope = 70.0 - (c / (cols - 1)) * 20.0;
+      const valley = Math.abs(r - 25) * 1.8;
+      grid[r * cols + c] = slope + valley;
+    }
+  }
+
+  // River drawn along y=220 (off-center on the hillside instead of the valley floor at y=250)
+  const hillsideRiver: [number, number][] = [
+    [50, 220],
+    [150, 220],
+    [250, 220],
+    [350, 220],
+    [450, 220],
+  ];
+
+  const snapped = snapRiverToValleys(hillsideRiver, grid, cols, rows, mapW, mapH, 40.0, 3);
+
+  // The intermediate points should be pulled towards the valley bottom at y=250
+  for (let i = 1; i < snapped.length - 1; i++) {
+    const yVal = snapped[i][1];
+    assert.ok(
+      yVal > 225,
+      `Point ${i} y-coordinate (${yVal.toFixed(1)}) should move closer to valley floor y=250 than original y=220`
+    );
+    const originalElev = sampleElev(grid, cols, rows, mapW, mapH, hillsideRiver[i][0], hillsideRiver[i][1]);
+    const snappedElev = sampleElev(grid, cols, rows, mapW, mapH, snapped[i][0], snapped[i][1]);
+    assert.ok(
+      snappedElev < originalElev,
+      `Snapped elevation (${snappedElev.toFixed(1)}) must be lower than hillside (${originalElev.toFixed(1)})`
+    );
+  }
+});
+
+test('標高判定: evaluateLakeElevation による高地カルデラ湖の水面標高と水深算出', () => {
+  const cols = 60;
+  const rows = 60;
+  const mapW = 600;
+  const mapH = 600;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // High mountain plateau around elevation 72
+  grid.fill(72.0);
+
+  // Depression / crater centered at (300, 300) with rim at 70 and center at 58
+  const cx = 30;
+  const cy = 30;
+  for (let r = cy - 8; r <= cy + 8; r++) {
+    for (let c = cx - 8; c <= cx + 8; c++) {
+      const d = Math.hypot(c - cx, r - cy);
+      if (d <= 7) {
+        // Hollow out to depth ~12
+        grid[r * cols + c] = 70.0 - (7 - d) * 1.8;
+      }
+    }
+  }
+
+  // Lake polygon around the crater
+  const lakePoly: [number, number][] = [];
+  const rad = 60; // 6 cells
+  for (let a = 0; a < 16; a++) {
+    const angle = (a / 16) * Math.PI * 2;
+    lakePoly.push([300 + Math.cos(angle) * rad, 300 + Math.sin(angle) * rad]);
+  }
+
+  const lakeEval = evaluateLakeElevation(lakePoly, grid, cols, rows, mapW, mapH, seaLevel);
+
+  // Lake surface elevation must be high-altitude (~70m), well above seaLevel (35.0)
+  assert.ok(
+    lakeEval.surfaceElevation >= 65.0 && lakeEval.surfaceElevation <= 72.0,
+    `高地湖の水面標高 (${lakeEval.surfaceElevation}m) は山岳高地 (65~72m) を維持し、海面 (${seaLevel}m) に落ちないこと`
+  );
+  assert.ok(lakeEval.depth > 5.0, `水深 (${lakeEval.depth}m) が正しく計算されていること`);
+  assert.ok(lakeEval.minBedElevation < lakeEval.surfaceElevation, `湖底標高 < 水面標高`);
+});
+
+test('標高判定: analyzeRiverConnections による湖・河川合流点・海面の標高接続判定', () => {
+  const cols = 50;
+  const rows = 50;
+  const mapW = 500;
+  const mapH = 500;
+  const seaLevel = 35.0;
+  const grid = new Float32Array(cols * rows);
+
+  // Sloping terrain
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      grid[r * cols + c] = 75.0 - (c / (cols - 1)) * 50.0; // 75 -> 25 (sea level at c ~ 40)
+    }
+  }
+
+  const highLake: LakeData = {
+    id: 'lake_high',
+    name: '霧降湖',
+    polygon: [
+      [80, 80],
+      [120, 80],
+      [120, 120],
+      [80, 120],
+    ],
+    elevation: 66.0,
+    depth: 8.0,
+  };
+
+  const mainRiver: RiverData = {
+    id: 'river_main',
+    name: '大河',
+    points: [
+      [110, 100], // starts at lake
+      [250, 150],
+      [420, 200], // reaches sea
+    ],
+    widthStart: 3,
+    widthEnd: 8,
+  };
+
+  // 1. River starting from lake and ending at ocean
+  const conn1 = analyzeRiverConnections(
+    mainRiver.points,
+    [],
+    [highLake],
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel
+  );
+  assert.equal(conn1.sourceType, 'lake');
+  assert.equal(conn1.sourceLakeId, 'lake_high');
+  assert.equal(conn1.elevationStart, 66.0, '湖流出河川の始端標高は湖水面標高と一致');
+  assert.equal(conn1.terminatesAt, 'ocean');
+  assert.equal(conn1.elevationEnd, seaLevel, '海洋河口の終端標高は海面標高と一致');
+
+  // 2. Tributary joining main river
+  const tribPoints: [number, number][] = [
+    [200, 50],
+    [220, 100],
+    [250, 150], // joins main river at (250, 150)
+  ];
+  const conn2 = analyzeRiverConnections(
+    tribPoints,
+    [mainRiver],
+    [highLake],
+    grid,
+    cols,
+    rows,
+    mapW,
+    mapH,
+    seaLevel
+  );
+  assert.equal(conn2.sourceType, 'spring');
+  assert.equal(conn2.terminatesAt, 'river');
+  assert.equal(conn2.connectedRiverId, 'river_main');
+});
 
 

@@ -607,17 +607,14 @@ export function drawWaterBodies(
   const hoveredId = options.hoveredId;
   const viewBounds = options.viewBounds;
 
-  const isCarved = options.carvedIntoTerrain ?? true;
-
   ctx.save();
 
   // ==========================================
-  // Pass 0: Lake Fills (Skipped when carved directly into WebGL terrain)
+  // Pass 0: Lake Fills (Rendered as water surface)
   // ==========================================
-  if (!isCarved) {
-    for (const lake of lakes) {
-      const poly = lake.polygon;
-      if (!poly || poly.length < 3) continue;
+  for (const lake of lakes) {
+    const poly = lake.polygon;
+    if (!poly || poly.length < 3) continue;
 
     if (viewBounds) {
       let lMinX = Infinity;
@@ -650,7 +647,6 @@ export function drawWaterBodies(
     ctx.closePath();
     ctx.fillStyle = lake.color || WATER_STYLE.waterFill;
     ctx.fill();
-    }
   }
 
   // ==========================================
@@ -753,10 +749,9 @@ export function drawWaterBodies(
   }
 
   // ==========================================
-  // Pass 1 & 2: 2D Vector River Casings and Fills (Skipped when carved into WebGL terrain)
+  // Pass 1 & 2: 2D Vector River Casings and Fills (Always rendered as water surface)
   // ==========================================
-  if (!isCarved) {
-    // Common stroke settings for casing and fill
+  // Common stroke settings for casing and fill
     const minWidthWorld = 1.0 / zoomPx;
     const borderWidth = 1.1 / zoomPx;
     ctx.lineCap = 'round';
@@ -1163,7 +1158,6 @@ export function drawWaterBodies(
       ctx.restore();
     }
   }
-}
 
   // ==========================================
   // Pass 3: Lake Shorelines (Skipped when carved into WebGL terrain)
@@ -1176,8 +1170,7 @@ export function drawWaterBodies(
     const isHovered = hoveredId === lake.id;
     const junctions = getLakeJunctions(lake, rivers);
 
-    if (!isCarved) {
-      // 1. Soft bank sand halo along lake perimeter (land side)
+    // 1. Soft bank sand halo along lake perimeter (land side)
       ctx.strokeStyle = WATER_STYLE.bankSand;
     ctx.lineWidth = 3.2 / zoomPx;
     ctx.lineCap = 'round';
@@ -1249,7 +1242,6 @@ export function drawWaterBodies(
       }
       ctx.stroke();
     }
-  }
 
     // Selection highlight for lake
     if (isSelected || isHovered) {

@@ -1,25 +1,26 @@
 /**
  * Topographic Water Carver
- * Carves hydrological features (rivers, lakes, and channels) directly into the
- * high-resolution Float32 elevation grid below sea level, converting vector water
- * bodies into authentic physical terrain.
+ * Carves hydrological features (rivers, lakes, and channels) into the
+ * high-resolution Float32 elevation grid as authentic physical terrain (river valleys and lake basins).
  *
- * WebGL Map Shader seamlessly renders carved water channels with:
- * - Rich deep ocean teal in channel centers
- * - Luminous turquoise shallows (#7bc5c5) along water edges
- * - Crisp ink coastline borders (#1e1a14) at water level
- * - Warm antique sandy beach ribbon (#d9c9a6) on land banks
- * - Smooth valley slopes preventing unnatural cliffs
+ * Rather than destructively plunging high mountain / plateau terrain down below sea level (seaLevel - depth),
+ * this carver operates at the authentic local water surface elevation of each feature:
+ * - High-altitude rivers carve a natural U-shaped fluvial valley and downhill sloping bed at their local elevation.
+ * - High-altitude lakes carve an authentic bathymetric lake basin at their rim/spillway surface elevation.
+ * - Coastal rivers and estuaries naturally connect below sea level where they reach the ocean.
+ * - Smooth Hermite valley margins blend banks into adjacent mountain slopes and highlands without sheer cliffs.
  */
 
 import { RiverData, LakeData } from '../types/water';
+import { analyzeRiverElevation, evaluateLakeElevation } from './waterElevation';
 
 export interface CarveWaterOptions {
   depthFactor?: number;       // Depth scale multiplier (default 1.0)
   widthFactor?: number;       // Width scale multiplier (default 1.2)
   valleyMarginCells?: number; // Smooth valley slope width in grid cells (default 3.0)
-  minDepth?: number;          // Minimum center depth below seaLevel (default 10.0)
-  maxDepth?: number;          // Maximum center depth below seaLevel (default 22.0)
+  minDepth?: number;          // Minimum channel/basin depth in meters (default 0.8)
+  maxDepth?: number;          // Maximum channel/basin depth in meters (default 2.4)
+  preserveHighlandElevation?: boolean; // When true (default), carves at local elevation rather than plunging to sea level
 }
 
 export interface ElevationChange {
@@ -105,7 +106,8 @@ export function distanceToPolygonPerimeter(px: number, py: number, poly: [number
 }
 
 /**
- * Carves rivers and lakes into the elevation grid below sea level with smooth cosine cross-sections
+ * Carves rivers and lakes into the elevation grid at their authentic local elevations
+ * as natural fluvial valleys and lacustrine basins, with smooth cosine cross-sections
  * and gentle valley slopes on adjacent land.
  */
 export function carveWaterIntoElevationGrid(
@@ -137,7 +139,7 @@ export function carveWaterIntoElevationGrid(
   let globalMaxR = 0;
 
   // -------------------------------------------------------------
-  // 1. Carve Rivers
+  // 1. Carve Rivers (河谷・河床の地形彫り込み)
   // -------------------------------------------------------------
   for (const river of rivers) {
     const pts = river.points;
@@ -150,6 +152,18 @@ export function carveWaterIntoElevationGrid(
       cumDists[i + 1] = cumDists[i] + Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
     }
     const totalLen = cumDists[n - 1] || 1;
+
+    // Evaluate river elevation profile (monotonic downhill water surface)
+    const profile = analyzeRiverElevation(
+      river.points,
+      elevationGrid,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight,
+      seaLevel
+    );
+    const surfElevs = profile.waterSurfaceProfile;
 
     const wStart = river.widthStart ?? 1.5;
     const wEnd = river.widthEnd ?? 4.5;
@@ -166,8 +180,8 @@ export function carveWaterIntoElevationGrid(
       const rawWB = wStart + (wEnd - wStart) * fracB;
 
       // Effective radius ensuring clear visibility on heightmap
-      const rA = Math.max(rawWA * 0.5 * widthFactor, cellSize * 1.15);
-      const rB = Math.max(rawWB * 0.5 * widthFactor, cellSize * 1.15);
+      const rA = Math.max(rawWA * 0.5 * widthFactor, cellSize * 1.0);
+      const rB = Math.max(rawWB * 0.5 * widthFactor, cellSize * 1.0);
       const maxR = Math.max(rA, rB);
 
       const searchRadius = maxR + valleyMargin;
@@ -190,6 +204,9 @@ export function carveWaterIntoElevationGrid(
         if (maxR_box > globalMaxR) globalMaxR = maxR_box;
       }
 
+      const elevA = surfElevs[sIdx];
+      const elevB = surfElevs[sIdx + 1];
+
       for (let r = minR; r <= maxR_box; r++) {
         const gy = r * cellH;
         for (let c = minC; c <= maxC; c++) {
@@ -204,26 +221,29 @@ export function carveWaterIntoElevationGrid(
           const idx = r * cols + c;
           const currentElev = elevationGrid[idx];
 
-          // Center channel depth: between 11.0 and 22.0 units below seaLevel
-          const baseDepth = (options.minDepth ?? 11.0) +
-            ((options.maxDepth ?? 21.0) - (options.minDepth ?? 11.0)) *
-            Math.min(1.0, localR / (cellSize * 3.5));
-          const depth = baseDepth * depthFactor;
+          // Interpolate local water surface elevation along segment
+          const localSurfaceElev = elevA + (elevB - elevA) * t;
+
+          // Realistic fluvial channel depth (0.8m ~ 2.4m, scaling with width)
+          const baseDepth = (options.minDepth ?? 0.8) +
+            ((options.maxDepth ?? 2.4) - (options.minDepth ?? 0.8)) *
+            Math.min(1.0, localR / (cellSize * 3.0));
+          const channelDepth = baseDepth * depthFactor;
 
           let targetElev: number;
 
           if (distance <= localR) {
-            // Inside River Channel: Smooth cosine channel cross-section
-            // At center (distance = 0): elev = seaLevel - depth
-            // At banks (distance = localR): elev = seaLevel - 0.45 (just under seaLevel)
+            // Inside River Channel: Smooth cosine fluvial channel cross-section
+            // At center (distance = 0): elev = localSurfaceElev - channelDepth
+            // At banks (distance = localR): elev = localSurfaceElev - 0.15 (water edge lip)
             const u = distance / Math.max(0.001, localR);
-            const channelBed = seaLevel - 0.45 - (depth - 0.45) * 0.5 * (1 + Math.cos(Math.PI * u));
+            const channelBed = localSurfaceElev - 0.15 - (channelDepth - 0.15) * 0.5 * (1 + Math.cos(Math.PI * u));
             targetElev = channelBed;
           } else {
             // In Valley Margin on Land: Smooth Hermite transition connecting bank to surrounding terrain
             const v = (distance - localR) / Math.max(0.001, valleyMargin);
             const w = v * v * (3 - 2 * v); // smoothstep
-            const bankElev = seaLevel + 0.35; // Bank lip slightly above water
+            const bankElev = localSurfaceElev + 0.15; // Bank shoulder slightly above water
             if (currentElev > bankElev) {
               targetElev = bankElev + (currentElev - bankElev) * w;
             } else {
@@ -241,7 +261,7 @@ export function carveWaterIntoElevationGrid(
   }
 
   // -------------------------------------------------------------
-  // 2. Carve Lakes
+  // 2. Carve Lakes (湖盆・湖底の地形彫り込み)
   // -------------------------------------------------------------
   for (const lake of lakes) {
     const poly = lake.polygon;
@@ -276,9 +296,21 @@ export function carveWaterIntoElevationGrid(
       if (maxR_box > globalMaxR) globalMaxR = maxR_box;
     }
 
-    const lakeDepth = ((options.minDepth ?? 12.0) +
-      Math.min(9.0, lakeRadius * 0.35)) * depthFactor;
-    const innerBankMargin = Math.max(cellSize * 1.5, Math.min(14.0, lakeRadius * 0.45));
+    // Evaluate lake surface elevation and natural depth
+    const lakeEval = evaluateLakeElevation(
+      lake.polygon,
+      elevationGrid,
+      cols,
+      rows,
+      mapWidth,
+      mapHeight,
+      seaLevel
+    );
+    const surfaceElev = lake.elevation ?? lakeEval.surfaceElevation;
+    const baseLakeDepth = lake.depth ?? Math.min(8.0, Math.max(1.8, (options.minDepth ?? 2.0) + Math.min(6.0, lakeRadius * 0.3)));
+    const lakeDepth = baseLakeDepth * depthFactor;
+
+    const innerBankMargin = Math.max(cellSize * 1.5, Math.min(14.0, lakeRadius * 0.35));
 
     for (let r = minR; r <= maxR_box; r++) {
       const gy = r * cellH;
@@ -295,17 +327,17 @@ export function carveWaterIntoElevationGrid(
         if (inside) {
           // Inside lake: depth increases towards center
           if (distToEdge >= innerBankMargin) {
-            targetElev = seaLevel - lakeDepth;
+            targetElev = surfaceElev - lakeDepth;
           } else {
             const u = distToEdge / innerBankMargin;
-            targetElev = seaLevel - 0.45 - (lakeDepth - 0.45) * 0.5 * (1 - Math.cos(Math.PI * u));
+            targetElev = surfaceElev - 0.15 - (lakeDepth - 0.15) * 0.5 * (1 - Math.cos(Math.PI * u));
           }
         } else {
           // Outside lake: valley transition to surrounding land
           if (distToEdge <= lakeValleyMargin) {
             const v = distToEdge / lakeValleyMargin;
             const w = v * v * (3 - 2 * v);
-            const bankElev = seaLevel + 0.35;
+            const bankElev = surfaceElev + 0.15;
             if (currentElev > bankElev) {
               targetElev = bankElev + (currentElev - bankElev) * w;
             } else {
@@ -331,7 +363,7 @@ export function carveWaterIntoElevationGrid(
 
   for (const [idx, target] of targetElevMap.entries()) {
     const prevElevation = elevationGrid[idx];
-    // Only lower land down towards target; never push down if already deeper water
+    // Only lower terrain down towards target fluvial/lacustrine bed; never push down if already deeper water/depression
     if (target < prevElevation - 0.005) {
       elevationGrid[idx] = target;
       changes.push({
