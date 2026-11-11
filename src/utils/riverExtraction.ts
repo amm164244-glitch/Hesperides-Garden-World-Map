@@ -1879,7 +1879,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      16
+      8
     );
     // Pass 2: Fine Gaussian smoothing
     processedPoints = smoothRiverGaussian(
@@ -1901,7 +1901,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      16
+      8
     );
     let hasSharpCurv = false;
     for (let k = 1; k < processedPoints.length - 1; k++) {
@@ -1921,7 +1921,7 @@ export function extractRivers(
         rows,
         mapWidth,
         mapHeight,
-        16
+        6
       );
     }
     processedPoints = clampSharpCorners(processedPoints);
@@ -1998,6 +1998,28 @@ export function extractRivers(
       }
       dedup.push(riverObj.points[riverObj.points.length - 1]);
       riverObj.points = dedup;
+
+      let hasSharp = false;
+      for (let k = 1; k < riverObj.points.length - 1; k++) {
+        const wK = ptWidths[k] ?? riverObj.widthStart;
+        const RK = computeCircumcircleRadius(riverObj.points[k - 1], riverObj.points[k], riverObj.points[k + 1]);
+        if (Number.isFinite(RK) && RK < 0.7 * wK) {
+          hasSharp = true;
+          break;
+        }
+      }
+      if (hasSharp) {
+        riverObj.points = limitRiverCurvature(
+          riverObj.points,
+          ptWidths,
+          elevationGrid,
+          cols,
+          rows,
+          mapWidth,
+          mapHeight,
+          8
+        );
+      }
     }
   }
 
