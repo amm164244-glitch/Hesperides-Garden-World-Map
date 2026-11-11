@@ -18,6 +18,7 @@ import {
   buildRiverStrokeGroups,
   quantizeWidth,
   partitionRiverStrokeBuckets,
+  getRiverColorAtFrac,
 } from './waterRenderer';
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
@@ -1610,5 +1611,37 @@ test('細い川の蛇行と直線区間の解消: generateTectonicWorld (シー�
     }
   }
 });
+
+test('河川のカラーグラデーションと接続部の開口: getRiverColorAtFrac と stroke group インデックスの検証', () => {
+  // 1. 河口 (t = 1.0) の色は海の基本色 rgb(77, 122, 130) と一致すること
+  const mouthCol = getRiverColorAtFrac(1.0);
+  assert.equal(mouthCol, 'rgb(77, 122, 130)');
+
+  // 2. 源流 (t = 0.0) は山岳渓流の明るく澄んだティール色 rgb(90, 142, 150) であること
+  const sourceCol = getRiverColorAtFrac(0.0);
+  assert.equal(sourceCol, 'rgb(90, 142, 150)');
+
+  // 3. 中流 (t = 0.5) は滑らかに中間色へと推移すること
+  const midCol = getRiverColorAtFrac(0.5);
+  assert.equal(midCol, 'rgb(84, 132, 140)');
+
+  // 4. カスタム色が指定された場合はそれを尊重すること
+  const custom = getRiverColorAtFrac(0.5, '#ff0000');
+  assert.equal(custom, '#ff0000');
+
+  // 5. partitionRiverStrokeBuckets が startIndex と endIndex を正しく記録すること
+  const pts: [number, number][] = [
+    [0, 0], [10, 0], [20, 0], [30, 0], [40, 0], [50, 0]
+  ];
+  const widths = [1.5, 2.0, 3.5, 5.0, 6.5, 8.0];
+  const groups = partitionRiverStrokeBuckets(pts, widths, { zoomPx: 1.0 });
+  assert.ok(groups.length >= 1);
+  assert.equal(groups[0].startIndex, 0);
+  assert.equal(groups[groups.length - 1].endIndex, pts.length - 1);
+  for (let g = 0; g < groups.length - 1; g++) {
+    assert.equal(groups[g].endIndex, groups[g + 1].startIndex);
+  }
+});
+
 
 

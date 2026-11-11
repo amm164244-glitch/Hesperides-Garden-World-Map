@@ -1589,6 +1589,12 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         selectedVertexIndex: activeWaterVertexIndex,
         showLabels: true,
         viewBounds: waterViewBounds,
+        elevationGrid: mapData.elevationGrid,
+        gridCols: mapData.gridCols,
+        gridRows: mapData.gridRows,
+        seaLevel: mapData.seaLevel,
+        mapWidth: mapData.width,
+        mapHeight: mapData.height,
       });
     }
     townPerf.end('water');

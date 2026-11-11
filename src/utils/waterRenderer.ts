@@ -5,7 +5,7 @@
  */
 
 import { RiverData, LakeData } from '../types/water';
-import { pointInLake } from './waterGenerator';
+import { pointInLake, sampleElev } from './waterGenerator';
 
 export interface DrawWaterOptions {
   zoom: number;
@@ -16,12 +16,18 @@ export interface DrawWaterOptions {
   selectedVertexIndex?: number | null;
   showLabels?: boolean;
   viewBounds?: { minX: number; minY: number; maxX: number; maxY: number };
+  elevationGrid?: Float32Array;
+  gridCols?: number;
+  gridRows?: number;
+  seaLevel?: number;
+  mapWidth?: number;
+  mapHeight?: number;
 }
 
 export const WATER_STYLE = {
-  // Rich antique fantasy teal matching planetary shallows
-  waterFill: '#2a5b67',
-  waterShallow: '#6db8b8',
+  // Rich antique fantasy teal matching planetary sea / ocean
+  waterFill: '#4d7a82',
+  waterShallow: '#7bc4c4',
   // Dark drawing ink border
   ink: '#192422',
   selectedGlow: '#f59e0b',
@@ -50,7 +56,7 @@ export function colorWithAlpha(color: string, alpha: number): string {
       return `rgba(${match[0]}, ${match[1]}, ${match[2]}, ${alpha})`;
     }
   }
-  return `rgba(42, 91, 103, ${alpha})`;
+  return `rgba(77, 122, 130, ${alpha})`;
 }
 
 /**
@@ -139,6 +145,32 @@ export function computeRiverPointWidths(
 export interface RiverStrokeGroup {
   points: [number, number][];
   width: number;
+  startIndex?: number;
+  endIndex?: number;
+}
+
+/**
+ * Computes the river water fill color at fractional position t along the river (0 = source, 1 = mouth).
+ * Creates a subtle, natural cartographic gradient:
+ * - Source (t = 0): Clear, fresh highland mountain stream tint (rgb(90, 142, 150))
+ * - Mouth (t = 1): Matches coastal ocean / sea color (rgb(77, 122, 130))
+ */
+export function getRiverColorAtFrac(t: number, customColor?: string): string {
+  const clampT = Math.max(0, Math.min(1, t));
+  if (customColor && customColor !== WATER_STYLE.waterFill) {
+    return customColor;
+  }
+
+  // Source: clear, fresh mountain stream
+  const sR = 90, sG = 142, sB = 150;
+  // Mouth: coastal ocean / sea
+  const mR = 77, mG = 122, mB = 130;
+
+  const r = Math.round(sR + (mR - sR) * clampT);
+  const g = Math.round(sG + (mG - sG) * clampT);
+  const b = Math.round(sB + (mB - sB) * clampT);
+
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 export interface StrokeBucketOptions {
@@ -190,12 +222,12 @@ export function partitionRiverStrokeBuckets(
   const avgW = sumW / (n - 1);
 
   if (n === 2) {
-    return [{ points: [points[0], points[1]], width: segWidths[0] }];
+    return [{ points: [points[0], points[1]], width: segWidths[0], startIndex: 0, endIndex: 1 }];
   }
 
   // If width is uniform across all segments, return 1 group
   if (maxW - minW < 1e-6) {
-    return [{ points: points.slice(), width: (minW + maxW) * 0.5 }];
+    return [{ points: points.slice(), width: (minW + maxW) * 0.5, startIndex: 0, endIndex: n - 1 }];
   }
 
   let zoomPx: number | undefined;
@@ -216,7 +248,7 @@ export function partitionRiverStrokeBuckets(
   if (zoomPx !== undefined && zoomPx > 0) {
     const maxScreenW = maxW * zoomPx;
     if (maxScreenW < 2.0) {
-      return [{ points: points.slice(), width: avgW }];
+      return [{ points: points.slice(), width: avgW, startIndex: 0, endIndex: n - 1 }];
     }
   }
 
@@ -243,12 +275,13 @@ export function partitionRiverStrokeBuckets(
   }
 
   if (step <= 0) {
-    return [{ points: points.slice(), width: avgW }];
+    return [{ points: points.slice(), width: avgW, startIndex: 0, endIndex: n - 1 }];
   }
 
   const groups: RiverStrokeGroup[] = [];
   let currentQuantizedW = quantizeWidth(segWidths[0], step);
   let currentPoints: [number, number][] = [points[0], points[1]];
+  let currentStartIdx = 0;
 
   for (let j = 1; j < n - 1; j++) {
     const qw = quantizeWidth(segWidths[j], step);
@@ -258,16 +291,21 @@ export function partitionRiverStrokeBuckets(
       groups.push({
         points: currentPoints,
         width: currentQuantizedW,
+        startIndex: currentStartIdx,
+        endIndex: j,
       });
       // Share endpoint points[j] with next group to prevent gaps
       currentPoints = [points[j], points[j + 1]];
       currentQuantizedW = qw;
+      currentStartIdx = j;
     }
   }
 
   groups.push({
     points: currentPoints,
     width: currentQuantizedW,
+    startIndex: currentStartIdx,
+    endIndex: n - 1,
   });
 
   return groups;
@@ -530,12 +568,21 @@ export function drawWaterBodies(
   }
 
   // ==========================================
-  // Pass 2: River Fills (Water Core)
-  // Drawn on top of all casings, creating continuous river surfaces and junction blending
+  // Pass 2: River Fills (Water Core & Open Seamless Junctions)
+  // Drawn on top of all casings, creating continuous river surfaces, natural gradients,
+  // and completely eliminating black dividing lines at river-sea, lake, and confluence junctions.
   // ==========================================
   for (const prep of preparedRivers) {
-    const fillColor = prep.river.color || WATER_STYLE.waterFill;
-    ctx.strokeStyle = fillColor;
+    const pts = prep.river.points;
+    const n = pts.length;
+    if (n < 2) continue;
+
+    // Precompute cumulative lengths along polyline to determine tFrac for each segment/group
+    const cumDists: number[] = [0];
+    for (let i = 0; i < n - 1; i++) {
+      cumDists.push(cumDists[i] + Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]));
+    }
+    const totalLen = cumDists[n - 1] || 1;
 
     for (const group of prep.strokeGroups) {
       const gPts = group.points;
@@ -544,12 +591,124 @@ export function drawWaterBodies(
       const effW = Math.max(group.width, minWidthWorld);
       ctx.lineWidth = effW;
 
+      const startIdx = group.startIndex ?? 0;
+      const endIdx = group.endIndex ?? (n - 1);
+      const tStart = (cumDists[Math.min(startIdx, n - 1)] ?? 0) / totalLen;
+      const tEnd = (cumDists[Math.min(endIdx, n - 1)] ?? totalLen) / totalLen;
+
+      const colStart = getRiverColorAtFrac(tStart, prep.river.color);
+      const colEnd = getRiverColorAtFrac(tEnd, prep.river.color);
+
+      if (colStart === colEnd || gPts.length < 2) {
+        ctx.strokeStyle = colStart;
+      } else {
+        const pA = gPts[0];
+        const pB = gPts[gPts.length - 1];
+        if (Math.hypot(pB[0] - pA[0], pB[1] - pA[1]) < 0.1) {
+          ctx.strokeStyle = colStart;
+        } else {
+          const grad = ctx.createLinearGradient(pA[0], pA[1], pB[0], pB[1]);
+          grad.addColorStop(0, colStart);
+          grad.addColorStop(1, colEnd);
+          ctx.strokeStyle = grad;
+        }
+      }
+
       ctx.beginPath();
       ctx.moveTo(gPts[0][0], gPts[0][1]);
       for (let i = 1; i < gPts.length; i++) {
         ctx.lineTo(gPts[i][0], gPts[i][1]);
       }
       ctx.stroke();
+    }
+
+    // ----------------------------------------------------
+    // Open Junction: Eliminate black divider line at connections
+    // If river connects to ocean, lake, or another river:
+    // fill the forward mouth cap with the mouth water color
+    // so it cleanly opens into the receiving water body without a black line.
+    // ----------------------------------------------------
+    const isOceanConn = prep.river.terminatesAt === 'ocean';
+    const isLakeConn = prep.river.terminatesAt === 'lake';
+    const isRiverConn = prep.river.terminatesAt === 'river';
+
+    let isAtSea = isOceanConn;
+    if (!isAtSea && options.elevationGrid && options.seaLevel !== undefined) {
+      const lastP = pts[n - 1];
+      const eMouth = sampleElev(
+        options.elevationGrid,
+        options.gridCols || 1024,
+        options.gridRows || 512,
+        options.mapWidth || 1024,
+        options.mapHeight || 512,
+        lastP[0],
+        lastP[1]
+      );
+      if (eMouth <= options.seaLevel + 1.2) {
+        isAtSea = true;
+      }
+    }
+
+    if (isAtSea || isLakeConn || isRiverConn) {
+      const pPrev = pts[n - 2];
+      const pMouth = pts[n - 1];
+      const dx = pMouth[0] - pPrev[0];
+      const dy = pMouth[1] - pPrev[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const tx = dx / len;
+      const ty = dy / len;
+      const mouthTheta = Math.atan2(ty, tx);
+
+      const mouthW = Math.max(prep.river.widthEnd ?? 4.0, minWidthWorld);
+      const effHW = mouthW * 0.5;
+      const mouthCol = getRiverColorAtFrac(1.0, prep.river.color);
+
+      ctx.save();
+      ctx.fillStyle = mouthCol;
+      ctx.beginPath();
+      // Draw forward cap into receiving water:
+      // Covers the casing arc (radius effHW + borderWidth)
+      // by extending with radius effHW + borderWidth * 2.2 facing downstream
+      ctx.arc(
+        pMouth[0],
+        pMouth[1],
+        effHW + borderWidth * 2.2,
+        mouthTheta - Math.PI * 0.52,
+        mouthTheta + Math.PI * 0.52
+      );
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Lake Outflow open junction:
+    if (prep.river.sourceType === 'lake' || prep.river.sourceLakeId !== undefined) {
+      const pSource = pts[0];
+      const pNext = pts[1];
+      const dx = pSource[0] - pNext[0];
+      const dy = pSource[1] - pNext[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const tx = dx / len;
+      const ty = dy / len;
+      const sourceTheta = Math.atan2(ty, tx);
+
+      const sourceW = Math.max(prep.river.widthStart ?? 1.5, minWidthWorld);
+      const effHW = sourceW * 0.5;
+      const sourceCol = getRiverColorAtFrac(0.0, prep.river.color);
+
+      ctx.save();
+      ctx.fillStyle = sourceCol;
+      ctx.beginPath();
+      ctx.arc(
+        pSource[0],
+        pSource[1],
+        effHW + borderWidth * 2.2,
+        sourceTheta - Math.PI * 0.52,
+        sourceTheta + Math.PI * 0.52
+      );
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
     }
   }
 
