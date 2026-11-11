@@ -103,11 +103,49 @@ export function analyzeRiverElevation(
   // A river is considered reversed if drawn from mouth upwards into high ground
   const isReversed = endElev > startElev + 1.5;
 
-  // Compute physically valid water surface level (monotonically non-increasing downstream)
+  // Compute physically valid downhill water surface level (monotonically decreasing downstream)
+  // Ensures river never flatlines at a local depression and flows continuously downhill from start to end
   const waterSurfaceProfile: number[] = new Array(n);
-  waterSurfaceProfile[0] = startElev;
-  for (let i = 1; i < n; i++) {
-    waterSurfaceProfile[i] = Math.min(waterSurfaceProfile[i - 1], elevations[i]);
+  const cumDists = new Float32Array(n);
+  cumDists[0] = 0;
+  for (let i = 0; i < n - 1; i++) {
+    cumDists[i + 1] = cumDists[i] + Math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1]);
+  }
+  const totalL = cumDists[n - 1] || 1;
+
+  if (startElev >= endElev) {
+    // Normal flow direction (high to low)
+    waterSurfaceProfile[0] = startElev;
+    for (let i = 1; i < n; i++) {
+      const frac = cumDists[i] / totalL;
+      const gradBaseline = startElev - (startElev - endElev) * frac;
+      const stepDelta = Math.max(0.005, (startElev - endElev) * ((cumDists[i] - cumDists[i - 1]) / totalL) * 0.3);
+      const maxAllowed = waterSurfaceProfile[i - 1] - stepDelta;
+      const naturalElev = Math.min(elevations[i], gradBaseline);
+      waterSurfaceProfile[i] = Math.max(endElev, Math.min(maxAllowed, naturalElev));
+    }
+    waterSurfaceProfile[n - 1] = endElev;
+
+    // Backward pass to guarantee smooth downhill slope and no plateaus
+    for (let i = n - 2; i >= 0; i--) {
+      const stepDelta = Math.max(0.005, (startElev - endElev) * ((cumDists[i + 1] - cumDists[i]) / totalL) * 0.3);
+      if (waterSurfaceProfile[i] < waterSurfaceProfile[i + 1] + stepDelta) {
+        waterSurfaceProfile[i] = Math.min(startElev, waterSurfaceProfile[i + 1] + stepDelta);
+      }
+    }
+    waterSurfaceProfile[0] = startElev;
+  } else {
+    // River drawn backwards (low to high): establish downhill progression from end (source) to start (mouth)
+    waterSurfaceProfile[n - 1] = endElev;
+    for (let i = n - 2; i >= 0; i--) {
+      const frac = (totalL - cumDists[i]) / totalL;
+      const gradBaseline = endElev - (endElev - startElev) * frac;
+      const stepDelta = Math.max(0.005, (endElev - startElev) * ((cumDists[i + 1] - cumDists[i]) / totalL) * 0.3);
+      const maxAllowed = waterSurfaceProfile[i + 1] - stepDelta;
+      const naturalElev = Math.min(elevations[i], gradBaseline);
+      waterSurfaceProfile[i] = Math.max(startElev, Math.min(maxAllowed, naturalElev));
+    }
+    waterSurfaceProfile[0] = startElev;
   }
 
   return {

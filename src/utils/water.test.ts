@@ -2002,4 +2002,99 @@ test('標高判定: analyzeRiverConnections による湖・河川合流点・海
   assert.equal(conn2.connectedRiverId, 'river_main');
 });
 
+test('川の地形彫り込み: 標高50mから20mへ流れる川の1m彫り込みで最大標高49m・最小標高19mとなることの検証', () => {
+  const cols = 101;
+  const rows = 101;
+  const mapWidth = 200;
+  const mapHeight = 200;
+  const seaLevel = 10.0; // 海面は10m (陸地は50m〜20m)
+
+  // 標高傾斜面を作成: x=20 (50m) から x=80 (20m) へ傾斜
+  const grid = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = (c / (cols - 1)) * mapWidth;
+      // x=20で50m, x=80で20m
+      const t = Math.max(0, Math.min(1, (x - 20) / 60));
+      grid[r * cols + c] = 50.0 - 30.0 * t;
+    }
+  }
+
+  // 標高50mの(20, 50)から標高20mの(80, 50)へ流れる川を定義
+  const testRiver: RiverData = {
+    id: 'river_slope_test',
+    name: '翡翠川',
+    points: [
+      [20, 50],
+      [40, 50],
+      [60, 50],
+      [80, 50],
+    ],
+    widthStart: 4.0,
+    widthEnd: 6.0,
+    elevationStart: 50.0,
+    elevationEnd: 20.0,
+  };
+
+  // 掘り込み深さ 1.0m (depthFactor: 1.0, minDepth: 1.0) で地形彫り込みを実行
+  const { changes } = carveWaterIntoElevationGrid(
+    grid,
+    cols,
+    rows,
+    mapWidth,
+    mapHeight,
+    seaLevel,
+    [testRiver],
+    [],
+    {
+      depthFactor: 1.0,
+      minDepth: 1.0,
+      preserveHighlandElevation: true,
+    }
+  );
+
+  assert.ok(changes.length > 0, '地形変更が記録されていること');
+
+  const cellW = mapWidth / (cols - 1);
+  const cellH = mapHeight / (rows - 1);
+  const rY = Math.round(50 / cellH);
+
+  // 1. 水源付近 (x=20): 標高50mから1m彫り込まれ、川床は49.0m (±0.1m)
+  const cStart = Math.round(20 / cellW);
+  const startBed = grid[rY * cols + cStart];
+  assert.ok(
+    Math.abs(startBed - 49.0) < 0.25,
+    `水源付近の川床標高 (${startBed.toFixed(2)}m) は 49.0m であること (50m - 1m)`
+  );
+
+  // 2. 河口付近 (x=80): 標高20mから1m彫り込まれ、川床は19.0m (±0.1m)
+  const cEnd = Math.round(80 / cellW);
+  const endBed = grid[rY * cols + cEnd];
+  assert.ok(
+    Math.abs(endBed - 19.0) < 0.25,
+    `河口付近の川床標高 (${endBed.toFixed(2)}m) は 19.0m であること (20m - 1m)`
+  );
+
+  // 3. 中間地点 (x=40, 60): 川床標高が上流から下流へ厳密に単調減少していること
+  const cMid1 = Math.round(40 / cellW);
+  const cMid2 = Math.round(60 / cellW);
+  const mid1Bed = grid[rY * cols + cMid1];
+  const mid2Bed = grid[rY * cols + cMid2];
+
+  assert.ok(startBed > mid1Bed, `水源 (${startBed}) > 中間1 (${mid1Bed})`);
+  assert.ok(mid1Bed > mid2Bed, `中間1 (${mid1Bed}) > 中間2 (${mid2Bed})`);
+  assert.ok(mid2Bed > endBed, `中間2 (${mid2Bed}) > 河口 (${endBed})`);
+
+  // 最大標高は約49m、最小標高は約19m
+  let maxRiverBed = -Infinity;
+  let minRiverBed = Infinity;
+  for (let c = cStart; c <= cEnd; c++) {
+    const b = grid[rY * cols + c];
+    if (b > maxRiverBed) maxRiverBed = b;
+    if (b < minRiverBed) minRiverBed = b;
+  }
+  assert.ok(Math.abs(maxRiverBed - 49.0) < 0.35, `川床の最大標高は49m付近: ${maxRiverBed.toFixed(2)}m`);
+  assert.ok(Math.abs(minRiverBed - 19.0) < 0.35, `川床の最小標高は19m付近: ${minRiverBed.toFixed(2)}m`);
+});
+
 

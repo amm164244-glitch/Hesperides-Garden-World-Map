@@ -23,6 +23,7 @@ export interface DrawWaterOptions {
   mapWidth?: number;
   mapHeight?: number;
   carvedIntoTerrain?: boolean;
+  isDragging?: boolean;
 }
 
 export const WATER_STYLE = {
@@ -609,10 +610,15 @@ export function drawWaterBodies(
 
   ctx.save();
 
+  // When water is carved into the physical terrain, WebGL renders the water directly at any elevation.
+  // 2D vector fill and casing passes are omitted to eliminate stickers, seams, rounded estuary caps, and dragging lag.
+  const skipHeavyVectorPasses = !!options.carvedIntoTerrain;
+
   // ==========================================
   // Pass 0: Lake Fills (Rendered as water surface)
   // ==========================================
-  for (const lake of lakes) {
+  if (!skipHeavyVectorPasses) {
+    for (const lake of lakes) {
     const poly = lake.polygon;
     if (!poly || poly.length < 3) continue;
 
@@ -645,8 +651,9 @@ export function drawWaterBodies(
       ctx.lineTo(poly[i][0], poly[i][1]);
     }
     ctx.closePath();
-    ctx.fillStyle = lake.color || WATER_STYLE.waterFill;
-    ctx.fill();
+      ctx.fillStyle = lake.color || WATER_STYLE.waterFill;
+      ctx.fill();
+    }
   }
 
   // ==========================================
@@ -829,7 +836,8 @@ export function drawWaterBodies(
   // For rivers terminating at ocean, the terminal stroke uses lineCap = 'butt' so
   // no rounded black cap protrudes into the sea.
   // ==========================================
-  for (const prep of preparedRivers) {
+  if (!skipHeavyVectorPasses) {
+    for (const prep of preparedRivers) {
     const borderColor = prep.river.borderColor || WATER_STYLE.ink;
     ctx.strokeStyle = borderColor;
     ctx.fillStyle = borderColor;
@@ -861,6 +869,7 @@ export function drawWaterBodies(
       }
     }
   }
+  }
 
   // ==========================================
   // Pass 2: River Fills with Delicate, Seamless Shallow-to-Deep Water
@@ -870,10 +879,11 @@ export function drawWaterBodies(
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  for (const prep of preparedRivers) {
-    const pts = prep.points;
-    const n = pts.length;
-    if (n < 2) continue;
+  if (!skipHeavyVectorPasses) {
+    for (const prep of preparedRivers) {
+      const pts = prep.points;
+      const n = pts.length;
+      if (n < 2) continue;
 
     const cumDists: number[] = [0];
     for (let i = 0; i < n - 1; i++) {
@@ -1132,6 +1142,7 @@ export function drawWaterBodies(
       ctx.restore();
     }
   }
+  }
 
   // ==========================================
   // Pass 3: Lake Shorelines (Skipped when carved into WebGL terrain)
@@ -1144,7 +1155,8 @@ export function drawWaterBodies(
     const isHovered = hoveredId === lake.id;
     const junctions = getLakeJunctions(lake, rivers);
 
-    // 1. Soft bank sand halo along lake perimeter (land side)
+    if (!skipHeavyVectorPasses) {
+      // 1. Soft bank sand halo along lake perimeter (land side)
       ctx.strokeStyle = WATER_STYLE.bankSand;
     ctx.lineWidth = 3.2 / zoomPx;
     ctx.lineCap = 'round';
@@ -1215,6 +1227,7 @@ export function drawWaterBodies(
         }
       }
       ctx.stroke();
+    }
     }
 
     // Selection highlight for lake

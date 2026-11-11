@@ -121,9 +121,9 @@ export function carveWaterIntoElevationGrid(
   lakes: LakeData[] = [],
   options: CarveWaterOptions = {}
 ): CarveResult {
-  const depthFactor = options.depthFactor ?? 0.6;
+  const depthFactor = options.depthFactor ?? 1.0;
   const widthFactor = options.widthFactor ?? 1.1;
-  const valleyMarginCells = options.valleyMarginCells ?? 4.5;
+  const valleyMarginCells = options.valleyMarginCells ?? 3.5;
 
   const cellW = mapWidth / Math.max(1, cols - 1);
   const cellH = mapHeight / Math.max(1, rows - 1);
@@ -224,20 +224,21 @@ export function carveWaterIntoElevationGrid(
           // Interpolate local water surface elevation along segment
           const localSurfaceElev = elevA + (elevB - elevA) * t;
 
-          // 浅く自然な河床深度 (0.25m〜0.6m)
-          const baseDepth = (options.minDepth ?? 0.25) +
-            ((options.maxDepth ?? 0.6) - (options.minDepth ?? 0.25)) *
-            Math.min(1.0, localR / (cellSize * 3.0));
-          const channelDepth = baseDepth * depthFactor;
+          // 自然な河床深度: 1.0m の掘り込み基準 (options.minDepth ?? 1.0m)
+          // 例: 標高50mから20mへ流れる川で掘り込みが1mの場合、最大標高49m、最小標高19mの河床となる
+          const nominalDepth = options.minDepth ?? 1.0;
+          const channelDepth = nominalDepth * (river.carveDepthFactor ?? 1.0) * depthFactor;
 
           let targetElev: number;
 
           if (options.preserveHighlandElevation !== false) {
-            // 自然な局所標高モード (既定):
-            // 川の周辺標高(70mなど)を維持し、20m〜35mもの断崖沈み込みや標高帯の色変化(50m色や砂浜色)を防止
+            // 自然な局所標高・下り勾配モード (既定):
+            // 水源標高から河口標高へ向かって自然に下る水面標高 localSurfaceElev から、
+            // 掘り込み深さ channelDepth 分だけ河床を彫り込む (例: 50m - 1m = 49m -> 20m - 1m = 19m)
             if (distance <= localR) {
               const u = distance / Math.max(0.001, localR);
-              // 川床中央: localSurfaceElev - channelDepth (わずか0.3m〜0.5mの自然な浅い窪み)、川縁: localSurfaceElev
+              // 川床中央 (u = 0): localSurfaceElev - channelDepth
+              // 川縁 (u = 1): localSurfaceElev
               const channelBed = (localSurfaceElev - channelDepth) + channelDepth * (u * u);
               targetElev = channelBed;
             } else {

@@ -22,6 +22,7 @@ export interface RiverData {
   elevations?: number[];          // Elevation sampled along each point
   isMonotonic?: boolean;          // True if strictly flowing downhill
   maxUphill?: number;             // Maximum uphill bump in meters if any
+  carveDepthFactor?: number;      // Optional local depth multiplier (default 1.0)
 }
 
 export interface LakeData {

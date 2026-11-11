@@ -23,6 +23,7 @@ in vec2 v_uv;
 out vec4 fragColor;
 
 uniform sampler2D u_elevation_tex;
+uniform sampler2D u_water_tex;
 uniform vec2 u_resolution;
 uniform vec2 u_world_size;
 uniform vec2 u_grid_size;
@@ -126,11 +127,18 @@ float sampleSmoothElev(vec2 uv) {
 // Antique Parchment & Portolan Palette
 // Matches authentic fantasy cartography (reference antique map style):
 // Teal sea-green ocean, clean shallow coastal aura, crisp dark ink coastline, warm ochre halo, parchment planes
-vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDistToCoast, float slope, float rippleFade) {
-  // Ocean colors
-  if (elev < seaLevel) {
-    float depth = (seaLevel - elev);
-
+vec3 getParchmentColor(
+  float elev,
+  float seaLevel,
+  float inlandWater,
+  vec2 worldPos,
+  float effectiveDistToBank,
+  bool isWater,
+  float slope,
+  float rippleFade
+) {
+  // Water colors (ocean or inland rivers/lakes)
+  if (isWater) {
     // Antique Fantasy Teal / Sea-Green Ocean Palette
     vec3 deepSea      = vec3(0.10, 0.23, 0.27); // #1a3b45 deep sea-green
     vec3 midSea       = vec3(0.17, 0.36, 0.40); // #2b5c66 rich ocean teal
@@ -138,35 +146,41 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
     vec3 paleShallow  = vec3(0.48, 0.77, 0.77); // #7bc5c5 luminous turquoise shallows
     vec3 crestWhite   = vec3(0.85, 0.95, 0.95); // pale froth ripple crest
 
-    float seaT = clamp(elev / seaLevel, 0.0, 1.0);
     vec3 waterCol;
-    if (seaT < 0.5) {
-      waterCol = mix(deepSea, midSea, seaT / 0.5);
+    if (elev < seaLevel) {
+      float seaT = clamp(elev / seaLevel, 0.0, 1.0);
+      if (seaT < 0.5) {
+        waterCol = mix(deepSea, midSea, seaT / 0.5);
+      } else {
+        waterCol = mix(midSea, coastalSea, (seaT - 0.5) / 0.5);
+      }
     } else {
-      waterCol = mix(midSea, coastalSea, (seaT - 0.5) / 0.5);
+      // Inland water (highland rivers and lakes above sea level)
+      float depthT = clamp((inlandWater - 0.35) / 0.65, 0.0, 1.0);
+      waterCol = mix(coastalSea, midSea, depthT * 0.75);
     }
 
-    // Gentle turquoise coastal shallows aura (海側の淡い水色の浅瀬の帯 - 自然な単一グラデーション)
-    float shallowsFactor = smoothstep(12.0, 1.0, pixelDistToCoast);
+    // Gentle turquoise coastal / riverbank shallows aura
+    float shallowsFactor = smoothstep(12.0, 1.0, effectiveDistToBank);
     waterCol = mix(waterCol, paleShallow, shallowsFactor * 0.55);
 
-    // Single subtle, clean coastal wave echo (穏やかで控えめな単一波紋)
+    // Single subtle, clean coastal / riverbank wave echo
     if (u_show_ripples > 0.5) {
-      float r1 = smoothstep(1.3, 0.0, abs(pixelDistToCoast - 5.0)) * 0.32 * rippleFade;
+      float r1 = smoothstep(1.3, 0.0, abs(effectiveDistToBank - 5.0)) * 0.32 * rippleFade;
       waterCol = mix(waterCol, crestWhite, r1);
     }
 
-    // Crisp ink coastline edge on ocean side (海岸線エッジにクッキリとした暗色インクのアウトライン)
-    if (pixelDistToCoast < 1.8) {
+    // Crisp ink coastline / riverbank edge on water side
+    if (effectiveDistToBank < 1.8) {
       vec3 inkDark = vec3(0.12, 0.10, 0.08); // dark drawing ink
-      float inkAlpha = smoothstep(1.8, 0.1, pixelDistToCoast) * 0.95;
+      float inkAlpha = smoothstep(1.8, 0.1, effectiveDistToBank) * 0.95;
       waterCol = mix(waterCol, inkDark, inkAlpha);
     }
 
     return waterCol;
   }
 
-  // Land (seaLevel to 100)
+  // Land (when !isWater)
   float landH = elev - seaLevel;
 
   // Parchment color planes:
@@ -219,17 +233,17 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
     landCol = mix(landCol, cliffCol, rockExposure * 0.70);
   }
 
-  // Antique warm ochre/sepia vignette halo bordering the coast inside the land (reference style)
-  if (pixelDistToCoast < 8.0) {
+  // Antique warm ochre/sepia vignette halo bordering the coast / riverbank inside the land
+  if (effectiveDistToBank < 8.0) {
     vec3 coastalSepia = vec3(0.70, 0.56, 0.36); // #b38f5c warm antique ochre/sepia border
-    float haloAlpha = smoothstep(8.0, 1.2, pixelDistToCoast) * 0.50 * rippleFade;
+    float haloAlpha = smoothstep(8.0, 1.2, effectiveDistToBank) * 0.50 * rippleFade;
     landCol = mix(landCol, coastalSepia, haloAlpha);
   }
 
-  // Crisp ink coastline edge on land side
-  if (pixelDistToCoast < 1.8) {
+  // Crisp ink coastline / riverbank edge on land side
+  if (effectiveDistToBank < 1.8) {
     vec3 inkDark = vec3(0.12, 0.10, 0.08);
-    float inkAlpha = smoothstep(1.8, 0.1, pixelDistToCoast) * 0.95;
+    float inkAlpha = smoothstep(1.8, 0.1, effectiveDistToBank) * 0.95;
     landCol = mix(landCol, inkDark, inkAlpha);
   }
 
@@ -251,11 +265,31 @@ void main() {
   float elev = clamp(sampleSmoothElev(uv), 0.0, 100.0);
   float seaLevel = u_viewport.w;
 
-  // Accurate screen-space gradient for distance to isocontour (seaLevel)
+  // Sample inland water mask (rivers and lakes)
+  float inlandWater = texture(u_water_tex, uv).r;
+  bool isWater = (elev < seaLevel) || (inlandWater > 0.35);
+
+  // Accurate screen-space gradient for distance to seaLevel isocontour
   vec2 dF = vec2(dFdx(elev), dFdy(elev));
   float gradLen = length(dF);
   float pixelDistToCoast = abs(elev - seaLevel) / max(0.02, gradLen);
   float rippleFade = smoothstep(0.01, 0.08, gradLen);
+
+  // Screen-space gradient for distance to inland water edge
+  vec2 dFWater = vec2(dFdx(inlandWater), dFdy(inlandWater));
+  float waterGradLen = length(dFWater);
+  float pixelDistToBank = 999.0;
+  if (inlandWater > 0.01 || waterGradLen > 0.002) {
+    pixelDistToBank = abs(inlandWater - 0.35) / max(0.005, waterGradLen);
+  }
+
+  // Combined distance to nearest water boundary (ocean coast or riverbank)
+  float effectiveDistToBank = pixelDistToCoast;
+  if (inlandWater > 0.35) {
+    effectiveDistToBank = (elev < seaLevel) ? min(pixelDistToCoast, pixelDistToBank) : pixelDistToBank;
+  } else {
+    effectiveDistToBank = min(pixelDistToCoast, pixelDistToBank);
+  }
 
   // Instantaneous hardware screen-space derivatives for terrain slope and hillshading
   float slopeX = dF.x * 1.5;
@@ -265,18 +299,18 @@ void main() {
   vec3 col = vec3(0.0);
 
   if (u_view_mode == 0) {
-    col = getParchmentColor(elev, seaLevel, worldPos, pixelDistToCoast, slope, rippleFade);
+    col = getParchmentColor(elev, seaLevel, inlandWater, worldPos, effectiveDistToBank, isWater, slope, rippleFade);
 
     // North-West Shaded Relief (Light from Top-Left, increased contrast)
     if (u_show_shading > 0.5) {
       vec2 lightDir = normalize(vec2(-1.0, -1.0));
       float dotVal = (slopeX * lightDir.x + slopeY * lightDir.y) * 0.052;
 
-      if (elev > seaLevel) {
+      if (!isWater) {
         if (dotVal > 0.0) {
-          col += vec3(min(0.24, dotVal * 0.85)); // Crisp sunlight
+          col += vec3(min(0.24, dotVal * 0.85)); // Crisp sunlight on land and river valley banks
         } else {
-          col -= vec3(min(0.28, abs(dotVal) * 0.95)); // Rich soft shadow
+          col -= vec3(min(0.28, abs(dotVal) * 0.95)); // Rich soft shadow on land and river valley banks
         }
       } else {
         if (dotVal < 0.0) {
@@ -285,11 +319,11 @@ void main() {
       }
     }
   } else if (u_view_mode == 3) {
-    // 3: Land / Sea mask with crisp ink coastline
+    // 3: Land / Sea mask with crisp ink coastline and riverbanks
     vec3 inkDark = vec3(0.12, 0.10, 0.08);
-    vec3 baseCol = elev <= seaLevel ? vec3(0.18, 0.35, 0.45) : vec3(0.72, 0.68, 0.52);
-    if (pixelDistToCoast < 1.8) {
-      float inkAlpha = smoothstep(1.8, 0.1, pixelDistToCoast) * 0.95;
+    vec3 baseCol = isWater ? vec3(0.18, 0.35, 0.45) : vec3(0.72, 0.68, 0.52);
+    if (effectiveDistToBank < 1.8) {
+      float inkAlpha = smoothstep(1.8, 0.1, effectiveDistToBank) * 0.95;
       col = mix(baseCol, inkDark, inkAlpha);
     } else {
       col = baseCol;
@@ -304,6 +338,7 @@ export class WebGLMapRenderer {
   private gl: WebGL2RenderingContext | null = null;
   private program: WebGLProgram | null = null;
   private elevationTexture: WebGLTexture | null = null;
+  private waterTexture: WebGLTexture | null = null;
   private quadVao: WebGLVertexArrayObject | null = null;
 
   private uResolutionLoc: WebGLUniformLocation | null = null;
@@ -315,11 +350,13 @@ export class WebGLMapRenderer {
   private uShowRipplesLoc: WebGLUniformLocation | null = null;
   private uShallowsWidthLoc: WebGLUniformLocation | null = null;
   private uElevationTexLoc: WebGLUniformLocation | null = null;
+  private uWaterTexLoc: WebGLUniformLocation | null = null;
   private uTexelScreenPxLoc: WebGLUniformLocation | null = null;
 
   private currentCols: number = 0;
   private currentRows: number = 0;
   private byteElev: Uint8Array | null = null;
+  private byteWater: Uint8Array | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext('webgl2', {
@@ -379,6 +416,7 @@ export class WebGLMapRenderer {
     this.uShowRipplesLoc = gl.getUniformLocation(program, 'u_show_ripples');
     this.uShallowsWidthLoc = gl.getUniformLocation(program, 'u_shallows_width');
     this.uElevationTexLoc = gl.getUniformLocation(program, 'u_elevation_tex');
+    this.uWaterTexLoc = gl.getUniformLocation(program, 'u_water_tex');
     this.uTexelScreenPxLoc = gl.getUniformLocation(program, 'u_texel_screen_px');
   }
 
@@ -405,19 +443,20 @@ export class WebGLMapRenderer {
   }
 
   /**
-   * Upload elevation grid
+   * Upload elevation grid and inland water grid
    */
   updateGridTextures(
     elevationGrid: Float32Array,
     cols: number,
-    rows: number
+    rows: number,
+    waterGrid?: Uint8Array
   ) {
     const gl = this.gl;
     if (!gl) return;
 
     const totalCells = cols * rows;
 
-    // Elevation texture
+    // 1. Elevation texture (TEXTURE0)
     if (!this.elevationTexture) {
       this.elevationTexture = gl.createTexture();
     }
@@ -431,6 +470,24 @@ export class WebGLMapRenderer {
       this.byteElev[i] = Math.max(0, Math.min(255, Math.round(elevationGrid[i] * 2.55)));
     }
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows, 0, gl.RED, gl.UNSIGNED_BYTE, this.byteElev);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    // 2. Water texture (TEXTURE1)
+    if (!this.waterTexture) {
+      this.waterTexture = gl.createTexture();
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.waterTexture);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+
+    if (waterGrid && waterGrid.length === totalCells) {
+      this.byteWater = waterGrid;
+    } else if (!this.byteWater || this.byteWater.length !== totalCells) {
+      this.byteWater = new Uint8Array(totalCells);
+    }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows, 0, gl.RED, gl.UNSIGNED_BYTE, this.byteWater);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -552,6 +609,10 @@ export class WebGLMapRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.elevationTexture);
     gl.uniform1i(this.uElevationTexLoc, 0);
 
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.waterTexture);
+    gl.uniform1i(this.uWaterTexLoc, 1);
+
     gl.bindVertexArray(this.quadVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
@@ -561,6 +622,7 @@ export class WebGLMapRenderer {
     const gl = this.gl;
     if (!gl) return;
     if (this.elevationTexture) gl.deleteTexture(this.elevationTexture);
+    if (this.waterTexture) gl.deleteTexture(this.waterTexture);
     if (this.quadVao) gl.deleteVertexArray(this.quadVao);
     if (this.program) gl.deleteProgram(this.program);
   }
