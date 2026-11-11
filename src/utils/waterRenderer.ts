@@ -758,68 +758,67 @@ export function drawWaterBodies(
     ctx.lineJoin = 'round';
 
     // Pass 1A: River Bank Sand Wash & Sepia Halo (河岸の砂岸・明色ハロー)
-  // Two-tier warm sandy border where water meets land along the riverbanks,
-  // matching the WebGL coastline's beach sand ribbon (#d9c9a6) and sepia halo (#b38f5c).
-  // Uses lineCap = 'butt' at ocean mouth so nothing protrudes past the coastline.
-  // ==========================================
-  // 1A-1: Outer antique parchment sepia halo
-  ctx.strokeStyle = '#c4b882';
-  ctx.fillStyle = '#c4b882';
-  for (const prep of preparedRivers) {
-    const numGroups = prep.strokeGroups.length;
-    for (let gIdx = 0; gIdx < numGroups; gIdx++) {
-      const group = prep.strokeGroups[gIdx];
-      const gPts = group.points;
-      if (gPts.length < 2) continue;
+  // 地形に直接彫り込まれている場合は地形自体の陰影と標高色があるため、二重の砂岸ハローはスキップして自然な河床に密着
+  if (!options.carvedIntoTerrain) {
+    // 1A-1: Outer antique parchment sepia halo
+    ctx.strokeStyle = '#c4b882';
+    ctx.fillStyle = '#c4b882';
+    for (const prep of preparedRivers) {
+      const numGroups = prep.strokeGroups.length;
+      for (let gIdx = 0; gIdx < numGroups; gIdx++) {
+        const group = prep.strokeGroups[gIdx];
+        const gPts = group.points;
+        if (gPts.length < 2) continue;
 
-      const effW = Math.max(group.width, minWidthWorld);
-      ctx.lineWidth = effW + 2 * borderWidth + (4.6 / zoomPx);
+        const effW = Math.max(group.width, minWidthWorld);
+        ctx.lineWidth = effW + 2 * borderWidth + (4.6 / zoomPx);
 
-      const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
-      ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
+        const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
+        ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
 
-      ctx.beginPath();
-      ctx.moveTo(gPts[0][0], gPts[0][1]);
-      for (let i = 1; i < gPts.length; i++) {
-        ctx.lineTo(gPts[i][0], gPts[i][1]);
-      }
-      ctx.stroke();
-
-      if (numGroups === 1 && prep.isAtSea) {
         ctx.beginPath();
-        ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(gPts[0][0], gPts[0][1]);
+        for (let i = 1; i < gPts.length; i++) {
+          ctx.lineTo(gPts[i][0], gPts[i][1]);
+        }
+        ctx.stroke();
+
+        if (numGroups === 1 && prep.isAtSea) {
+          ctx.beginPath();
+          ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
-  }
 
-  // 1A-2: Inner authentic dune sand ribbon (#d9c9a6)
-  ctx.strokeStyle = WATER_STYLE.bankSand;
-  ctx.fillStyle = WATER_STYLE.bankSand;
-  for (const prep of preparedRivers) {
-    const numGroups = prep.strokeGroups.length;
-    for (let gIdx = 0; gIdx < numGroups; gIdx++) {
-      const group = prep.strokeGroups[gIdx];
-      const gPts = group.points;
-      if (gPts.length < 2) continue;
+    // 1A-2: Inner authentic dune sand ribbon (#d9c9a6)
+    ctx.strokeStyle = WATER_STYLE.bankSand;
+    ctx.fillStyle = WATER_STYLE.bankSand;
+    for (const prep of preparedRivers) {
+      const numGroups = prep.strokeGroups.length;
+      for (let gIdx = 0; gIdx < numGroups; gIdx++) {
+        const group = prep.strokeGroups[gIdx];
+        const gPts = group.points;
+        if (gPts.length < 2) continue;
 
-      const effW = Math.max(group.width, minWidthWorld);
-      ctx.lineWidth = effW + 2 * borderWidth + (2.4 / zoomPx);
+        const effW = Math.max(group.width, minWidthWorld);
+        ctx.lineWidth = effW + 2 * borderWidth + (2.4 / zoomPx);
 
-      const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
-      ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
+        const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
+        ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
 
-      ctx.beginPath();
-      ctx.moveTo(gPts[0][0], gPts[0][1]);
-      for (let i = 1; i < gPts.length; i++) {
-        ctx.lineTo(gPts[i][0], gPts[i][1]);
-      }
-      ctx.stroke();
-
-      if (numGroups === 1 && prep.isAtSea) {
         ctx.beginPath();
-        ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(gPts[0][0], gPts[0][1]);
+        for (let i = 1; i < gPts.length; i++) {
+          ctx.lineTo(gPts[i][0], gPts[i][1]);
+        }
+        ctx.stroke();
+
+        if (numGroups === 1 && prep.isAtSea) {
+          ctx.beginPath();
+          ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
   }
@@ -926,33 +925,8 @@ export function drawWaterBodies(
       colFactor: number;  // 1.0 = pure shallows, 0.0 = pure deep core
     };
 
-    let layers: LayerSpec[];
-    if (maxScreenW <= 3.2) {
-      // Very narrow stream: clear shallow mountain stream tint
-      layers = [{ widthRatio: 1.0, minInsetPx: 0, colFactor: 0.65 }];
-    } else if (maxScreenW <= 8.0) {
-      // Narrow river: bank shallows + core channel
-      layers = [
-        { widthRatio: 1.0, minInsetPx: 0, colFactor: 1.0 },
-        { widthRatio: 0.65, minInsetPx: 0.8, colFactor: 0.0 },
-      ];
-    } else if (maxScreenW <= 18.0) {
-      // Medium river: 3-tier shallows transition
-      layers = [
-        { widthRatio: 1.0, minInsetPx: 0, colFactor: 1.0 },
-        { widthRatio: 0.72, minInsetPx: 1.0, colFactor: 0.55 },
-        { widthRatio: 0.42, minInsetPx: 1.8, colFactor: 0.0 },
-      ];
-    } else {
-      // Wide river / estuary (zoomed in): 5-tier rich continuous shallows
-      layers = [
-        { widthRatio: 1.0, minInsetPx: 0, colFactor: 1.0 },     // Luminous turquoise shallows (#7bc5c5)
-        { widthRatio: 0.80, minInsetPx: 1.0, colFactor: 0.72 },  // Outer shallow gradient
-        { widthRatio: 0.60, minInsetPx: 2.0, colFactor: 0.44 },  // Mid channel transition
-        { widthRatio: 0.42, minInsetPx: 3.2, colFactor: 0.20 },  // Inner core transition
-        { widthRatio: 0.26, minInsetPx: 4.5, colFactor: 0.0 },   // Deep ocean teal core (#408087)
-      ];
-    }
+    // 単一の自然で滑らかな水面ストローク (不自然な同心円状の多段ストライプ・シール感を解消)
+    const layers: LayerSpec[] = [{ widthRatio: 1.0, minInsetPx: 0, colFactor: 0.0 }];
 
     for (const layer of layers) {
       for (let gIdx = 0; gIdx < numGroups; gIdx++) {

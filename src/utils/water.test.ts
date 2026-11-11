@@ -1730,30 +1730,43 @@ test('水系の地形彫り込み (carveWaterIntoElevationGrid) の検証', () =
   assert.ok(affectedBounds.minC <= affectedBounds.maxC);
   assert.ok(affectedBounds.minR <= affectedBounds.maxR);
 
-  // 川の中心線上のマスの標高が元の標高 (60.0) から河床へと適度に彫り込まれ、海面 (35.0) 下へ破壊的に落ち込んでいないこと
   const cellW = mapWidth / (cols - 1);
   const cellH = mapHeight / (rows - 1);
 
-  // (50, 50) のマス
+  // (50, 50) のマス: 川の中心線上のマスの標高が、局所標高(60.0m)から約0.3m〜0.6mの浅い河床として自然に彫り込まれていること (20m以上の極端な断崖沈み込みがないこと)
   const cMid = Math.round(50 / cellW);
   const rMid = Math.round(50 / cellH);
   const midElev = grid[rMid * cols + cMid];
 
-  assert.ok(midElev < 60.0, `川の中心標高 (${midElev}) は元の標高 (60.0) より彫り込まれていること`);
-  assert.ok(midElev >= 55.0, `川の中心標高 (${midElev}) は海面下 (35.0) に落ち込まず、高標高の河谷 (>= 55.0) を維持していること`);
+  assert.ok(midElev < 60.0 && midElev >= 59.0, `川の中心標高 (${midElev}) は局所標高(60.0m)から浅く自然な河床 (< 60.0, >= 59.0) となっていること`);
 
-  // 川から少し離れた谷斜面のマスの標高が元の標高 (60.0) より低く、かつ河床より高いこと (滑らかな河谷)
+  // 川から少し離れた谷斜面のマスの標高が河床 (midElev) から周囲の山側へ向かって滑らかに上がっていること (滑らかな河谷)
   const rValley = rMid + 3; // 少し横
   const valleyElev = grid[rValley * cols + cMid];
-  assert.ok(valleyElev <= 60.0, `河岸の谷斜面標高 (${valleyElev}) は元の平坦陸地以下であること`);
   assert.ok(valleyElev > midElev, `河岸の谷斜面標高 (${valleyElev}) は河床 (${midElev}) から山側へ向かって滑らかに上がっていること`);
 
-  // 湖の内部 (150, 150) のマス: 高地湖の盆地として彫り込まれ、海面下へ落ち込まないこと
+  // 湖の内部 (150, 150) のマス: 局所標高から浅く自然な湖盆 (約1m〜2m) として彫り込まれていること
   const cLake = Math.round(150 / cellW);
   const rLake = Math.round(150 / cellH);
   const lakeElev = grid[rLake * cols + cLake];
-  assert.ok(lakeElev < 60.0, `湖の内部標高 (${lakeElev}) は元の標高 (60.0) より湖盆として彫り込まれていること`);
-  assert.ok(lakeElev >= 50.0, `湖の内部標高 (${lakeElev}) は海面下 (35.0) に落ち込まず、高標高の湖盆 (>= 50.0) を維持していること`);
+  assert.ok(lakeElev < 60.0 && lakeElev >= 57.0, `湖の内部標高 (${lakeElev}) は局所標高(60.0m)から浅い湖盆 (< 60.0, >= 57.0) として彫り込まれていること`);
+
+  // オプション preserveHighlandElevation: false を明示した場合は海面下強制モードとなること
+  const seaModeGrid = new Float32Array(cols * rows);
+  seaModeGrid.fill(60.0);
+  carveWaterIntoElevationGrid(
+    seaModeGrid,
+    cols,
+    rows,
+    mapWidth,
+    mapHeight,
+    seaLevel,
+    [testRiver],
+    [testLake],
+    { preserveHighlandElevation: false }
+  );
+  const seaModeMidElev = seaModeGrid[rMid * cols + cMid];
+  assert.ok(seaModeMidElev < seaLevel, 'preserveHighlandElevation: false では海面下 (< 35.0) に達すること');
 });
 
 test('標高判定: analyzeRiverElevation による水源・河口標高、落差、単調減少(下り勾配)の判定', () => {

@@ -1839,8 +1839,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           [newRiver],
           [],
           {
-            depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-            widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
+            depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+            widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
           }
         );
         changes = res.changes;
@@ -1927,8 +1927,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           [],
           [newLake],
           {
-            depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-            widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
+            depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+            widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
           }
         );
         changes = res.changes;
@@ -2103,43 +2103,42 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
 
       if (result) {
-        let changes: any[] = [];
-        if (waterSettings?.carveIntoTerrain !== false) {
-          const res = carveWaterIntoElevationGrid(
-            currentElevation,
-            currentCols,
-            currentRows,
-            currentWidth,
-            currentHeight,
-            currentSeaLevel ?? 35.0,
-            result.rivers,
-            result.lakes,
-            {
-              depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-              widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
-            }
-          );
-          changes = res.changes;
-          if (rendererRef.current) {
-            rendererRef.current.updateGridTextures(currentElevation, currentCols, currentRows);
+        // 地形から水系を自動生成: 水のテクスチャを貼るのではなく、直接標高グリッドへ彫り込む
+        const res = carveWaterIntoElevationGrid(
+          currentElevation,
+          currentCols,
+          currentRows,
+          currentWidth,
+          currentHeight,
+          currentSeaLevel ?? 35.0,
+          result.rivers,
+          result.lakes,
+          {
+            depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+            widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
           }
-          renderWebGL();
+        );
+        const changes = res.changes;
+        if (rendererRef.current) {
+          rendererRef.current.updateGridTextures(currentElevation, currentCols, currentRows);
         }
+        renderWebGL();
 
         onCommitHistory({
-          description: '水系の自動生成 (地形化)',
+          description: `地形から水系を直接彫り込み (川 ${result.rivers.length}本 / 湖 ${result.lakes.length}個)`,
           timestamp: Date.now(),
           changes: changes.length > 0 ? changes : undefined,
           waterChanges: {
             prevRivers,
-            newRivers: result.rivers,
+            newRivers: [],
             prevLakes,
-            newLakes: result.lakes,
+            newLakes: [],
           },
         });
 
-        onUpdateRivers?.(result.rivers);
-        onUpdateLakes?.(result.lakes);
+        // 水のテクスチャ（2Dベクター）を重ね貼りせず、直接彫り込まれた地形水場として描画
+        onUpdateRivers?.([]);
+        onUpdateLakes?.([]);
         onSelectWater?.(null, null);
         renderOverlay();
 
@@ -5809,8 +5808,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
           [],
           [newLake],
           {
-            depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-            widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
+            depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+            widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
           }
         );
         changes = res.changes;
@@ -5939,8 +5938,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       effectiveRivers,
       effectiveLakes,
       {
-        depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-        widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
+        depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+        widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
       }
     );
     if (res.changes.length > 0) {
@@ -5952,12 +5951,25 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         description: '水系を地形に彫り込み (完全に地形化)',
         timestamp: Date.now(),
         changes: res.changes,
+        waterChanges: {
+          prevRivers: effectiveRivers,
+          newRivers: [],
+          prevLakes: effectiveLakes,
+          newLakes: [],
+        },
       });
+      // 2D水域テクスチャ（ベクター線）を重ね塗りせず、彫り込んだ地形そのものを水場とする
+      onUpdateRivers?.([]);
+      onUpdateLakes?.([]);
+      onSelectWater?.(null, null);
       renderOverlay();
     }
   }, [
     effectiveRivers,
     effectiveLakes,
+    onUpdateRivers,
+    onUpdateLakes,
+    onSelectWater,
     currentElevation,
     currentCols,
     currentRows,
@@ -6141,8 +6153,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 [enrichedRiver],
                 [],
                 {
-                  depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-                  widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
+                  depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+                  widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
                 }
               );
               changes = res.changes;
@@ -6191,8 +6203,8 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
                 [],
                 [enrichedLake],
                 {
-                  depthFactor: waterSettings?.carveDepthFactor ?? 1.0,
-                  widthFactor: waterSettings?.carveWidthFactor ?? 1.2,
+                  depthFactor: waterSettings?.carveDepthFactor ?? 0.6,
+                  widthFactor: waterSettings?.carveWidthFactor ?? 1.1,
                 }
               );
               changes = res.changes;

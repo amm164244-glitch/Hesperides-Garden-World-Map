@@ -121,9 +121,9 @@ export function carveWaterIntoElevationGrid(
   lakes: LakeData[] = [],
   options: CarveWaterOptions = {}
 ): CarveResult {
-  const depthFactor = options.depthFactor ?? 1.0;
-  const widthFactor = options.widthFactor ?? 1.2;
-  const valleyMarginCells = options.valleyMarginCells ?? 3.0;
+  const depthFactor = options.depthFactor ?? 0.6;
+  const widthFactor = options.widthFactor ?? 1.1;
+  const valleyMarginCells = options.valleyMarginCells ?? 4.5;
 
   const cellW = mapWidth / Math.max(1, cols - 1);
   const cellH = mapHeight / Math.max(1, rows - 1);
@@ -224,30 +224,50 @@ export function carveWaterIntoElevationGrid(
           // Interpolate local water surface elevation along segment
           const localSurfaceElev = elevA + (elevB - elevA) * t;
 
-          // Realistic fluvial channel depth (0.8m ~ 2.4m, scaling with width)
-          const baseDepth = (options.minDepth ?? 0.8) +
-            ((options.maxDepth ?? 2.4) - (options.minDepth ?? 0.8)) *
+          // 浅く自然な河床深度 (0.25m〜0.6m)
+          const baseDepth = (options.minDepth ?? 0.25) +
+            ((options.maxDepth ?? 0.6) - (options.minDepth ?? 0.25)) *
             Math.min(1.0, localR / (cellSize * 3.0));
           const channelDepth = baseDepth * depthFactor;
 
           let targetElev: number;
 
-          if (distance <= localR) {
-            // Inside River Channel: Smooth cosine fluvial channel cross-section
-            // At center (distance = 0): elev = localSurfaceElev - channelDepth
-            // At banks (distance = localR): elev = localSurfaceElev - 0.15 (water edge lip)
-            const u = distance / Math.max(0.001, localR);
-            const channelBed = localSurfaceElev - 0.15 - (channelDepth - 0.15) * 0.5 * (1 + Math.cos(Math.PI * u));
-            targetElev = channelBed;
-          } else {
-            // In Valley Margin on Land: Smooth Hermite transition connecting bank to surrounding terrain
-            const v = (distance - localR) / Math.max(0.001, valleyMargin);
-            const w = v * v * (3 - 2 * v); // smoothstep
-            const bankElev = localSurfaceElev + 0.15; // Bank shoulder slightly above water
-            if (currentElev > bankElev) {
-              targetElev = bankElev + (currentElev - bankElev) * w;
+          if (options.preserveHighlandElevation !== false) {
+            // 自然な局所標高モード (既定):
+            // 川の周辺標高(70mなど)を維持し、20m〜35mもの断崖沈み込みや標高帯の色変化(50m色や砂浜色)を防止
+            if (distance <= localR) {
+              const u = distance / Math.max(0.001, localR);
+              // 川床中央: localSurfaceElev - channelDepth (わずか0.3m〜0.5mの自然な浅い窪み)、川縁: localSurfaceElev
+              const channelBed = (localSurfaceElev - channelDepth) + channelDepth * (u * u);
+              targetElev = channelBed;
             } else {
-              targetElev = currentElev;
+              // 岸辺・河谷の斜面: 川縁 (localSurfaceElev) から周囲の地形へ滑らかに立ち上げ
+              const v = (distance - localR) / Math.max(0.001, valleyMargin);
+              const w = v * v * (3 - 2 * v); // smoothstep
+              const bankElev = localSurfaceElev;
+              if (currentElev > bankElev) {
+                targetElev = bankElev + (currentElev - bankElev) * w;
+              } else {
+                targetElev = currentElev;
+              }
+            }
+          } else {
+            // 海面下強制モード (preserveHighlandElevation: false が明示された場合のみ)
+            const riverWaterDepth = (0.16 + Math.min(0.20, (localR / cellSize) * 0.08)) * depthFactor;
+            if (distance <= localR) {
+              const u = distance / Math.max(0.001, localR);
+              const edgeDepth = 0.02 * depthFactor;
+              const channelBed = (seaLevel - riverWaterDepth) + (riverWaterDepth - edgeDepth) * (u * u);
+              targetElev = channelBed;
+            } else {
+              const v = (distance - localR) / Math.max(0.001, valleyMargin);
+              const w = v * v * (3 - 2 * v);
+              const bankElev = seaLevel + 0.04;
+              if (currentElev > bankElev) {
+                targetElev = bankElev + (currentElev - bankElev) * w;
+              } else {
+                targetElev = currentElev;
+              }
             }
           }
 
@@ -324,27 +344,53 @@ export function carveWaterIntoElevationGrid(
 
         let targetElev: number;
 
-        if (inside) {
-          // Inside lake: depth increases towards center
-          if (distToEdge >= innerBankMargin) {
-            targetElev = surfaceElev - lakeDepth;
-          } else {
-            const u = distToEdge / innerBankMargin;
-            targetElev = surfaceElev - 0.15 - (lakeDepth - 0.15) * 0.5 * (1 - Math.cos(Math.PI * u));
-          }
-        } else {
-          // Outside lake: valley transition to surrounding land
-          if (distToEdge <= lakeValleyMargin) {
-            const v = distToEdge / lakeValleyMargin;
-            const w = v * v * (3 - 2 * v);
-            const bankElev = surfaceElev + 0.15;
-            if (currentElev > bankElev) {
-              targetElev = bankElev + (currentElev - bankElev) * w;
+        if (options.preserveHighlandElevation !== false) {
+          // 自然な局所標高モード (推奨・既定):
+          const effectiveLakeDepth = Math.min(2.5, Math.max(0.6, (options.minDepth ?? 0.8) + Math.min(1.5, lakeRadius * 0.08))) * depthFactor;
+          if (inside) {
+            if (distToEdge >= innerBankMargin) {
+              targetElev = surfaceElev - effectiveLakeDepth;
             } else {
-              targetElev = currentElev;
+              const u = distToEdge / innerBankMargin;
+              targetElev = surfaceElev - effectiveLakeDepth * 0.5 * (1 - Math.cos(Math.PI * u));
             }
           } else {
-            continue;
+            if (distToEdge <= lakeValleyMargin) {
+              const v = distToEdge / lakeValleyMargin;
+              const w = v * v * (3 - 2 * v);
+              const bankElev = surfaceElev;
+              if (currentElev > bankElev) {
+                targetElev = bankElev + (currentElev - bankElev) * w;
+              } else {
+                targetElev = currentElev;
+              }
+            } else {
+              continue;
+            }
+          }
+        } else {
+          // 海面下強制モード (preserveHighlandElevation: false)
+          const effectiveLakeDepth = Math.max(2.0, Math.min(6.0, lakeDepth));
+          if (inside) {
+            if (distToEdge >= innerBankMargin) {
+              targetElev = seaLevel - effectiveLakeDepth;
+            } else {
+              const u = distToEdge / innerBankMargin;
+              targetElev = seaLevel - 0.15 - (effectiveLakeDepth - 0.15) * 0.5 * (1 - Math.cos(Math.PI * u));
+            }
+          } else {
+            if (distToEdge <= lakeValleyMargin) {
+              const v = distToEdge / lakeValleyMargin;
+              const w = v * v * (3 - 2 * v);
+              const bankElev = seaLevel + 0.15;
+              if (currentElev > bankElev) {
+                targetElev = bankElev + (currentElev - bankElev) * w;
+              } else {
+                targetElev = currentElev;
+              }
+            } else {
+              continue;
+            }
           }
         }
 

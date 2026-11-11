@@ -165,7 +165,11 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
           <Waves className="w-4 h-4 text-cyan-400" />
           <span className="font-bold text-stone-100 text-sm">水域編集 (川・湖)</span>
           <span className="text-[11px] text-cyan-300 font-mono bg-cyan-950/70 px-2 py-0.5 rounded border border-cyan-800/60">
-            川 {rivers.length}本 / 湖 {lakes.length}個
+            {rivers.length > 0 || lakes.length > 0
+              ? `手動描画: 川 ${rivers.length}本 / 湖 ${lakes.length}個`
+              : lastResult
+              ? `地形水場: 川 ${lastResult.riverCount}本 / 湖 ${lastResult.lakeCount}個`
+              : '直接彫り込み方式'}
           </span>
         </div>
 
@@ -180,10 +184,10 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                 setTimeout(() => setCarvedStatusMessage(null), 3500);
               }}
               className="px-2 py-1 rounded bg-gradient-to-r from-teal-800 to-cyan-800 hover:from-teal-700 hover:to-cyan-700 text-teal-100 border border-teal-500/60 font-semibold text-[11px] flex items-center gap-1 transition shadow cursor-pointer"
-              title="川や湖の標高に合わせて、自然な河谷や湖盆（浅い谷・盆地）を標高グリッドに刻みます。高標高の山地でも海面下に落ち込まず、自然な渓谷・高地湖の地形になります。"
+              title="川床や湖盆を標高グリッドに水場（水面下）として彫り込み、河岸と河谷の自然な斜面を形成します。水域ベクターを削除・非表示にしても、本物の水場地形としてそのまま残ります。"
             >
               <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
-              <span>水系を地形に反映 (河谷・湖盆)</span>
+              <span>水系を地形に彫り込み (水場化)</span>
             </button>
           )}
 
@@ -331,27 +335,46 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
               <span className="text-[10px] text-stone-400">大きいほど、川が上流(山の奥)まで延びます</span>
             </div>
 
-            {/* 6. Carve Into Terrain Toggle */}
-            <div className="flex items-center justify-between col-span-2 pt-1 border-t border-stone-800/60">
-              <div className="flex flex-col">
-                <span className="text-stone-200 font-semibold text-[11px]" title="川や湖の標高に合わせて、自然な河谷や湖盆（浅い谷・盆地）を標高グリッドに刻みます。高標高の山地でも海面下に落ち込まず、自然な渓谷・高地湖の地形になります。">
-                  水系を地形に反映 (河谷・湖盆の形成):
-                </span>
-                <span className="text-[10px] text-stone-400">
-                  水面下に落とし込まず、各標高（高山・高原）に合わせた自然な河谷・湖盆を地形に刻みます
+            {/* 6. Carve Explanation */}
+            <div className="flex flex-col gap-0.5 col-span-2 pt-1 border-t border-stone-800/60 bg-teal-950/40 border-teal-800/40 p-2 rounded-lg">
+              <div className="flex items-center gap-1.5 text-teal-300 font-semibold text-[11px]">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>直接彫り込み方式 (テクスチャ貼り付けなし)</span>
+              </div>
+              <span className="text-[10px] text-teal-200/80 leading-relaxed">
+                水のテクスチャ（2Dベクター）を貼り付けるのではなく、標高グリッドの川床・湖底を直接水場として彫り込み、自然な水面・浅瀬・河谷を形成します。
+              </span>
+            </div>
+
+            {/* 7. Carve Depth Slider (川の窪み深さ調整) */}
+            <div className="flex flex-col gap-1 col-span-2 pt-1 border-t border-stone-800/60">
+              <div className="flex justify-between text-stone-300">
+                <span title="川の窪みの深さを調整します。小さくすると浅く平坦な河谷、大きくすると深い河谷になります。">川の窪み・水深:</span>
+                <span className="font-mono text-cyan-300 font-bold">
+                  {(waterSettings.carveDepthFactor ?? 0.6) <= 0.35
+                    ? 'ごく浅い'
+                    : (waterSettings.carveDepthFactor ?? 0.6) <= 0.75
+                    ? '浅め (推奨)'
+                    : (waterSettings.carveDepthFactor ?? 0.6) <= 1.15
+                    ? '標準'
+                    : '深め'}{' '}
+                  ({(waterSettings.carveDepthFactor ?? 0.6).toFixed(1)}x)
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => onChangeWaterSettings({ carveIntoTerrain: waterSettings.carveIntoTerrain === true ? false : true })}
-                className={`px-2.5 py-1 rounded text-[11px] font-bold border transition cursor-pointer ${
-                  waterSettings.carveIntoTerrain === true
-                    ? 'bg-teal-900/90 text-teal-200 border-teal-500 shadow'
-                    : 'bg-stone-800 text-stone-400 border-stone-700'
-                }`}
-              >
-                {waterSettings.carveIntoTerrain === true ? 'ON (河谷・湖盆を形成)' : 'OFF (水面レイヤーのみ)'}
-              </button>
+              <input
+                type="range"
+                min={0.2}
+                max={1.5}
+                step={0.1}
+                value={waterSettings.carveDepthFactor ?? 0.6}
+                disabled={isGenerating}
+                onChange={(e) => onChangeWaterSettings({ carveDepthFactor: Number(e.target.value) })}
+                className="accent-cyan-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg"
+                title="川の窪み・水深の深さを調整します (既定: 浅め 0.6x)"
+              />
+              <span className="text-[10px] text-stone-400">
+                川床や河谷の窪みの深さを調整します。0.6x 前後の浅め設定が最も自然です
+              </span>
             </div>
           </div>
         )}
@@ -362,7 +385,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
             <div className="flex-1 flex items-center justify-between bg-cyan-950/80 border border-cyan-700/60 rounded-md px-3 py-1.5">
               <div className="flex items-center gap-2 text-cyan-200">
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-                <span className="text-[11px] font-medium">{genProgress?.message || '計算中...'}</span>
+                <span className="text-[11px] font-medium">{genProgress?.message || '地形水文シミュレーション中...'}</span>
                 <span className="text-[10px] text-cyan-400 font-mono font-bold">({genProgress?.percent ?? 0}%)</span>
               </div>
               <button
@@ -380,10 +403,10 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                 onClick={handleStartAutoGenerate}
                 disabled={!onAutoGenerateWater}
                 className="flex-1 py-1.5 px-3 rounded-md bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-stone-950 font-bold flex items-center justify-center gap-1.5 shadow transition disabled:opacity-50 cursor-pointer"
-                title="現在の標高地形から下流への水の流れを計算し、川と湖を再構築します"
+                title="現在の標高地形から水流を解析し、水のテクスチャを貼るのではなく標高グリッドに水場として直接彫り込みます"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>地形から水系を自動生成</span>
+                <span>地形から水系を自動生成 (直接彫り込み)</span>
               </button>
 
               {lastResult && (
@@ -391,14 +414,14 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                   <div className="flex items-center gap-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <span>
-                      生成完了: 川 {lastResult.riverCount}本 / 湖 {lastResult.lakeCount}個
+                      地形彫り込み完了: 川 {lastResult.riverCount}本 / 湖 {lastResult.lakeCount}個
                       {lastResult.computationTimeMs ? ` (${lastResult.computationTimeMs}ms)` : ''}
                     </span>
                   </div>
-                  {rivers.length > 0 && (
+                  {(lastResult.riverCount ?? 0) > 0 && (
                     <div className="text-[10px] text-stone-300 pl-5 flex items-center gap-3">
-                      <span>最長の川: {longestRiverKm.toFixed(1)} km</span>
-                      <span>川の平均の長さ: {avgRiverLengthKm.toFixed(1)} km</span>
+                      <span>最長の川: {(lastResult.longestRiverKm ?? longestRiverKm).toFixed(1)} km</span>
+                      <span>川の平均の長さ: {(lastResult.avgRiverLengthKm ?? avgRiverLengthKm).toFixed(1)} km</span>
                     </div>
                   )}
                 </div>

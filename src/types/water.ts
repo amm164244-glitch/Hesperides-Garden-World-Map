@@ -47,9 +47,9 @@ export interface WaterToolSettings {
   riverCount?: number;
   lakeCount?: number;
   headExtension?: number;     // 0 ~ 100, default 80
-  carveIntoTerrain?: boolean; // 地形に直接彫り込み完全に地形化 (既定: false - 標高破壊防止)
-  carveDepthFactor?: number;  // 彫り込み水深係数 (0.5 ~ 2.0, 既定: 1.0)
-  carveWidthFactor?: number;  // 彫り込み川幅係数 (0.5 ~ 2.5, 既定: 1.2)
+  carveIntoTerrain?: boolean; // 地形に直接彫り込む (水面テクスチャを貼らない) (既定: true)
+  carveDepthFactor?: number;  // 彫り込み水深係数 (0.2 ~ 1.5, 既定: 0.6)
+  carveWidthFactor?: number;  // 彫り込み川幅係数 (0.5 ~ 2.5, 既定: 1.1)
   autoSnapToValleys?: boolean;// 谷筋スナップ・下り坂誘導 (既定: true)
 }
 
@@ -64,9 +64,9 @@ export const DEFAULT_WATER_TOOL_SETTINGS: WaterToolSettings = {
   riverCount: 14,
   lakeCount: 6,
   headExtension: 80,
-  carveIntoTerrain: false,
-  carveDepthFactor: 1.0,
-  carveWidthFactor: 1.2,
+  carveIntoTerrain: true,
+  carveDepthFactor: 0.6,
+  carveWidthFactor: 1.1,
   autoSnapToValleys: true,
 };
 
