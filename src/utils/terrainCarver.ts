@@ -223,6 +223,9 @@ export function carveWaterIntoElevationGrid(
           const idx = r * cols + c;
           const currentElev = elevationGrid[idx];
 
+          // 既に海抜面以下の海洋セルは、川の終端カプセルで円形ドーム状に窪ませない（海の自然な地形を保持）
+          if (currentElev <= seaLevel) continue;
+
           // Interpolate local water surface elevation along segment
           const localSurfaceElev = elevA + (elevB - elevA) * t;
 

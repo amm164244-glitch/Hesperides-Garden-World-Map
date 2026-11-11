@@ -126,18 +126,15 @@ export function buildWaterGrid(
             const { distance, t } = pointToSegmentDistance(gx, gy, pA[0], pA[1], pB[0], pB[1]);
             const localR = rA + (rB - rA) * t;
 
+            const idx = rowOffset + c;
             if (distance <= localR) {
-              const idx = rowOffset + c;
-              if (!elevationGrid || seaLevel === undefined || elevationGrid[idx] >= seaLevel - 0.2) {
-                grid[idx] = 255;
-              }
+              grid[idx] = 255;
             } else if (distance < localR + avgCell) {
               // Antialiased edge
               const edgeDist = distance - localR;
               const alpha = Math.max(0, Math.min(1, 1.0 - edgeDist / avgCell));
               const val = Math.round(alpha * 220);
-              const idx = rowOffset + c;
-              if ((!elevationGrid || seaLevel === undefined || elevationGrid[idx] >= seaLevel - 0.2) && val > grid[idx]) {
+              if (val > grid[idx]) {
                 grid[idx] = val;
               }
             }

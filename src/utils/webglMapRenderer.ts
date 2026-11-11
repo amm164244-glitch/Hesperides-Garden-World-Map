@@ -148,7 +148,7 @@ vec3 getParchmentColor(
 
     vec3 waterCol;
     if (elev < seaLevel) {
-      float seaT = clamp(elev / seaLevel, 0.0, 1.0);
+      float seaT = clamp(elev / max(1.0, seaLevel), 0.0, 1.0);
       if (seaT < 0.5) {
         waterCol = mix(deepSea, midSea, seaT / 0.5);
       } else {
@@ -156,8 +156,11 @@ vec3 getParchmentColor(
       }
     } else {
       // Inland water (highland rivers and lakes above sea level)
+      // At river mouths and lowlands, smoothly matches coastalSea (#408087) with zero color boundary
       float depthT = clamp((inlandWater - 0.35) / 0.65, 0.0, 1.0);
-      waterCol = mix(coastalSea, midSea, depthT * 0.75);
+      float landElevDiff = clamp((elev - seaLevel) / 12.0, 0.0, 1.0);
+      vec3 highlandRiver = mix(coastalSea, midSea, depthT * 0.40);
+      waterCol = mix(coastalSea, highlandRiver, landElevDiff);
     }
 
     // Gentle turquoise coastal / riverbank shallows aura
@@ -286,11 +289,14 @@ void main() {
   // Combined distance to nearest water boundary (ocean coast or riverbank)
   float effectiveDistToBank = pixelDistToCoast;
   if (elev < seaLevel) {
-    // 海面下（海洋）: 境界線は陸地との海岸線のみ。海水中での川の終端境界線は一切引かない（海に完全同化）
-    effectiveDistToBank = pixelDistToCoast;
+    // 海洋: 川が海へ開口する場所 (inlandWater > 0.12) では海岸線を消去し、河口を海へ完全開口
+    float mouthOpenFactor = smoothstep(0.12, 0.40, inlandWater);
+    effectiveDistToBank = mix(pixelDistToCoast, 999.0, mouthOpenFactor);
   } else if (inlandWater > 0.35) {
     // 海水面より上の内陸水域（高地の川や湖）: 川岸・湖岸までの距離
-    effectiveDistToBank = pixelDistToBank;
+    // 河口部 (海抜面付近 elev < seaLevel + 0.8) では海へ向かう端部境界線を消去して海へ完全同化
+    float seaProximity = smoothstep(seaLevel + 0.8, seaLevel - 0.2, elev);
+    effectiveDistToBank = mix(pixelDistToBank, 999.0, seaProximity);
   } else {
     // 陸地: 最も近い水域（海洋海岸線または内陸河岸）までの距離
     effectiveDistToBank = min(pixelDistToCoast, pixelDistToBank);
