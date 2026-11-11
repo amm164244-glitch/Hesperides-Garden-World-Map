@@ -766,7 +766,7 @@ export function drawWaterBodies(
 
     // Pass 1A: River Bank Sand Wash & Sepia Halo (河岸の砂岸・明色ハロー)
   // 地形に直接彫り込まれている場合は地形自体の陰影と標高色があるため、二重の砂岸ハローはスキップして自然な河床に密着
-  if (!options.carvedIntoTerrain) {
+  if (!skipHeavyVectorPasses) {
     // 1A-1: Outer antique parchment sepia halo
     ctx.strokeStyle = '#c4b882';
     ctx.fillStyle = '#c4b882';

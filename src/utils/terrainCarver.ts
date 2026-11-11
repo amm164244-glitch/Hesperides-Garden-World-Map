@@ -161,7 +161,9 @@ export function carveWaterIntoElevationGrid(
       rows,
       mapWidth,
       mapHeight,
-      seaLevel
+      seaLevel,
+      0.35,
+      river.terminatesAt
     );
     const surfElevs = profile.waterSurfaceProfile;
 
@@ -239,7 +241,19 @@ export function carveWaterIntoElevationGrid(
               const u = distance / Math.max(0.001, localR);
               // 川床中央 (u = 0): localSurfaceElev - channelDepth
               // 川縁 (u = 1): localSurfaceElev
-              const channelBed = (localSurfaceElev - channelDepth) + channelDepth * (u * u);
+              let channelBed = (localSurfaceElev - channelDepth) + channelDepth * (u * u);
+
+              // 海と接する場所（河口）は海抜面まで（または海抜面下へ）標高を下げて海に完全同化
+              const isOceanRiver = river.terminatesAt === 'ocean' || (river.terminatesAt !== 'lake' && river.terminatesAt !== 'river');
+              if (isOceanRiver && localSurfaceElev <= seaLevel + 1.0) {
+                const mouthProximity = Math.max(0, Math.min(1, (seaLevel + 1.0 - localSurfaceElev) / 1.0));
+                // 河口先端では川床全体（幅全体）を確実に海抜面下 (seaLevel - 0.2m以下) に沈める
+                const mouthBedTarget = (seaLevel - channelDepth) + channelDepth * (u * u * 0.7) - 0.25 * mouthProximity;
+                if (mouthBedTarget < channelBed) {
+                  channelBed = mouthBedTarget;
+                }
+              }
+
               targetElev = channelBed;
             } else {
               // 岸辺・河谷の斜面: 川縁 (localSurfaceElev) から周囲の地形へ滑らかに立ち上げ

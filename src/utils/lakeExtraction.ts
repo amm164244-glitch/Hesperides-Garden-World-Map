@@ -432,11 +432,9 @@ export function extractLakes(
     if (finalPolygon.length < 3) continue;
 
     const lakeId = `lake_${seed}_${idx + 1}`;
-    const name = FANTASY_LAKE_NAMES[idx % FANTASY_LAKE_NAMES.length];
 
     lakes.push({
       id: lakeId,
-      name,
       polygon: finalPolygon,
       elevation: dep.spillElevation,
       depth: Math.round(dep.maxDepth * 80 + 30),

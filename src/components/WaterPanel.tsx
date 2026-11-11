@@ -86,7 +86,6 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
   const [isGenerating, setIsGenerating] = useState(false);
   const [genProgress, setGenProgress] = useState<{ percent: number; message: string } | null>(null);
   const [lastResult, setLastResult] = useState<AutoGenResult | null>(null);
-  const [carvedStatusMessage, setCarvedStatusMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const riverDensity = waterSettings.riverDensity ?? 40;
@@ -163,14 +162,14 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
       <div className="flex items-center justify-between border-b border-stone-800 pb-2">
         <div className="flex items-center gap-2">
           <Waves className="w-4 h-4 text-cyan-400" />
-          <span className="font-bold text-stone-100 text-sm">水域編集 (川・湖)</span>
-          <span className="text-[11px] text-cyan-300 font-mono bg-cyan-950/70 px-2 py-0.5 rounded border border-cyan-800/60">
-            {rivers.length > 0 || lakes.length > 0
-              ? `手動描画: 川 ${rivers.length}本 / 湖 ${lakes.length}個`
-              : lastResult
-              ? `地形水場: 川 ${lastResult.riverCount}本 / 湖 ${lastResult.lakeCount}個`
-              : '直接彫り込み方式'}
-          </span>
+          <span className="font-bold text-stone-100 text-sm">水域編集</span>
+          {(rivers.length > 0 || lakes.length > 0 || lastResult) && (
+            <span className="text-[11px] text-cyan-300 font-mono bg-cyan-950/70 px-2 py-0.5 rounded border border-cyan-800/60">
+              {rivers.length > 0 || lakes.length > 0
+                ? `手動描画: 川 ${rivers.length}本 / 湖 ${lakes.length}個`
+                : `地形水場: 川 ${lastResult?.riverCount}本 / 湖 ${lastResult?.lakeCount}個`}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5">
@@ -200,61 +199,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
         </div>
       </div>
 
-      {/* Primary Permanent Button: Carve Water Into Terrain (水系を地形に彫り込む) */}
-      <div className="bg-gradient-to-r from-teal-950/90 via-cyan-950/80 to-stone-900/90 border border-teal-500/70 rounded-lg p-2.5 shadow-md flex flex-col gap-1.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 font-bold text-teal-200 text-xs">
-            <Sparkles className="w-4 h-4 text-cyan-300 shrink-0" />
-            <span>水系を地形に彫り込む (完全に地形化)</span>
-          </div>
-          <span className="text-[10px] text-cyan-300 font-mono bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60">
-            登録水域: 川 {rivers.length}本 / 湖 {lakes.length}個
-          </span>
-        </div>
 
-        <p className="text-[11px] text-stone-300 leading-snug">
-          2Dベクターを重ね貼りするのではなく、標高グリッドの川床や湖底を直接物理的な水場・河谷として彫り込みます。
-          標高50m→20mへ流れる川（彫り込み1m）は最大49m・最小19mの自然な下り勾配となります。
-        </p>
-
-        <div className="flex items-center gap-2 pt-0.5">
-          <button
-            type="button"
-            disabled={!onCarveWaterIntoTerrain || (rivers.length === 0 && lakes.length === 0)}
-            onClick={() => {
-              if (onCarveWaterIntoTerrain) {
-                onCarveWaterIntoTerrain();
-                setCarvedStatusMessage(`水系 (川 ${rivers.length}本 / 湖 ${lakes.length}個) を地形(河谷・湖底)に完全に彫り込みました`);
-                setTimeout(() => setCarvedStatusMessage(null), 3500);
-              }
-            }}
-            className="flex-1 py-1.5 px-3 rounded bg-gradient-to-r from-teal-600 via-cyan-600 to-teal-500 hover:from-teal-500 hover:to-cyan-500 text-stone-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            title="現在の川・湖の標高プロファイルに基づいて、標高グリッドの川床・湖盆を直接地形化します"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-stone-950 shrink-0" />
-            <span>水系を地形に彫り込む (完全に地形化)</span>
-          </button>
-
-          {/* Auto-carve toggle checkbox */}
-          <label className="flex items-center gap-1.5 text-[10px] text-stone-300 bg-stone-950/80 border border-stone-800 px-2 py-1.5 rounded cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              checked={waterSettings.carveIntoTerrain !== false}
-              onChange={(e) => onChangeWaterSettings({ carveIntoTerrain: e.target.checked })}
-              className="accent-cyan-500 rounded cursor-pointer"
-            />
-            <span title="川の描画完了時や自動生成時に自動的に地形へ彫り込みます">自動彫り込み (推奨)</span>
-          </label>
-        </div>
-      </div>
-
-      {/* Carved Status Notification Banner */}
-      {carvedStatusMessage && (
-        <div className="bg-teal-950/90 border border-teal-500/70 rounded-lg px-3 py-1.5 flex items-center gap-2 text-teal-200 text-[11px] animate-in fade-in shadow-lg">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span className="font-medium">{carvedStatusMessage}</span>
-        </div>
-      )}
 
       {/* Auto-Generation Hydrology Section */}
       <div className="bg-stone-950/70 border border-cyan-900/60 rounded-lg p-2.5 flex flex-col gap-2">
@@ -366,16 +311,6 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
               <span className="text-[10px] text-stone-400">大きいほど、川が上流(山の奥)まで延びます</span>
             </div>
 
-            {/* 6. Carve Explanation */}
-            <div className="flex flex-col gap-0.5 col-span-2 pt-1 border-t border-stone-800/60 bg-teal-950/40 border-teal-800/40 p-2 rounded-lg">
-              <div className="flex items-center gap-1.5 text-teal-300 font-semibold text-[11px]">
-                <Sparkles className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                <span>直接彫り込み方式 (テクスチャ貼り付けなし)</span>
-              </div>
-              <span className="text-[10px] text-teal-200/80 leading-relaxed">
-                水のテクスチャ（2Dベクター）を貼り付けるのではなく、標高グリッドの川床・湖底を直接水場として彫り込み、自然な水面・浅瀬・河谷を形成します。
-              </span>
-            </div>
 
             {/* 7. Carve Depth Slider (川の窪み深さ調整) */}
             <div className="flex flex-col gap-1 col-span-2 pt-1 border-t border-stone-800/60">

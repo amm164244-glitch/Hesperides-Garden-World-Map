@@ -1716,7 +1716,6 @@ export function extractRivers(
   for (let i = 0; i < filled.length; i++) filledF32[i] = filled[i];
 
   const resultRivers: RiverData[] = [];
-  let mainNameIndex = 0;
 
   for (let rIdx = 0; rIdx < filteredRawRivers.length; rIdx++) {
     const raw = filteredRawRivers[rIdx];
@@ -1962,12 +1961,8 @@ export function extractRivers(
       processedPoints = deduplicated;
     }
     
-    const isMain = raw.terminatesAt !== 'river';
-    const name = isMain ? FANTASY_RIVER_NAMES[mainNameIndex++ % FANTASY_RIVER_NAMES.length] : undefined;
-
     const riverObj: RiverData = {
       id: raw.id,
-      name,
       points: processedPoints,
       widthStart,
       widthEnd,

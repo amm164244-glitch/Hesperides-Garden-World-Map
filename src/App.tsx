@@ -769,7 +769,7 @@ export default function App() {
   const [showMesh, setShowMesh] = useState<boolean>(false);
   const [showShading, setShowShading] = useState<boolean>(true);
   const [showRipples, setShowRipples] = useState<boolean>(true);
-  const [showCompass, setShowCompass] = useState<boolean>(true);
+  const [showCompass, setShowCompass] = useState<boolean>(false);
   const [dimOutsideRegion, setDimOutsideRegion] = useState<boolean>(true);
   const [compassPos, setCompassPos] = useState<{ x: number; y: number }>({ x: 280, y: 320 });
 

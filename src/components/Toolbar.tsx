@@ -905,7 +905,7 @@ const ToolbarComponent: React.FC<ToolbarProps> = ({
           <div className="flex items-center justify-between text-[11px]">
             <span className="font-bold text-cyan-300 flex items-center gap-1.5">
               <Waves className="w-3.5 h-3.5 text-cyan-400" />
-              <span>水域編集 (川・湖)</span>
+              <span>水域編集</span>
             </span>
             <span className="text-[10px] text-stone-400 font-mono">
               選択中: {WATER_SUBTOOLS.find((s) => s.id === brushSettings.mode)?.label ?? ''}

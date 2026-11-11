@@ -20,7 +20,9 @@ export function buildWaterGrid(
   mapWidth: number,
   mapHeight: number,
   rivers: RiverData[],
-  lakes: LakeData[]
+  lakes: LakeData[],
+  elevationGrid?: Float32Array,
+  seaLevel?: number
 ): Uint8Array {
   const totalCells = cols * rows;
   const grid = new Uint8Array(totalCells);
@@ -88,9 +90,8 @@ export function buildWaterGrid(
       if (!pts || pts.length < 2) continue;
 
       const numSegments = pts.length - 1;
-      const wStart = river.widthStart ?? river.width ?? 1.5;
-      const wEnd = river.widthEnd ?? river.width ?? 4.5;
-      const widths = river.widths;
+      const wStart = river.widthStart ?? 1.5;
+      const wEnd = river.widthEnd ?? 4.5;
 
       for (let sIdx = 0; sIdx < numSegments; sIdx++) {
         const pA = pts[sIdx];
@@ -98,8 +99,8 @@ export function buildWaterGrid(
 
         const fracA = sIdx / numSegments;
         const fracB = (sIdx + 1) / numSegments;
-        const rawWA = widths ? (widths[sIdx] ?? (wStart + (wEnd - wStart) * fracA)) : (wStart + (wEnd - wStart) * fracA);
-        const rawWB = widths ? (widths[sIdx + 1] ?? (wStart + (wEnd - wStart) * fracB)) : (wStart + (wEnd - wStart) * fracB);
+        const rawWA = wStart + (wEnd - wStart) * fracA;
+        const rawWB = wStart + (wEnd - wStart) * fracB;
 
         // Half width in world coordinates, ensuring at least ~0.8 cell radius for visibility
         const rA = Math.max(rawWA * 0.5, avgCell * 0.75);
@@ -127,14 +128,18 @@ export function buildWaterGrid(
 
             if (distance <= localR) {
               const idx = rowOffset + c;
-              grid[idx] = 255;
+              if (!elevationGrid || seaLevel === undefined || elevationGrid[idx] >= seaLevel - 0.2) {
+                grid[idx] = 255;
+              }
             } else if (distance < localR + avgCell) {
               // Antialiased edge
               const edgeDist = distance - localR;
               const alpha = Math.max(0, Math.min(1, 1.0 - edgeDist / avgCell));
               const val = Math.round(alpha * 220);
               const idx = rowOffset + c;
-              if (val > grid[idx]) grid[idx] = val;
+              if ((!elevationGrid || seaLevel === undefined || elevationGrid[idx] >= seaLevel - 0.2) && val > grid[idx]) {
+                grid[idx] = val;
+              }
             }
           }
         }

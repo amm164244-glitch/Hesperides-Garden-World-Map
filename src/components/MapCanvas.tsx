@@ -225,7 +225,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   showMesh,
   showShading,
   showRipples = true,
-  showCompass = true,
+  showCompass = false,
   compassPos,
   onUpdateCompassPos,
   symbols = [],
@@ -504,9 +504,11 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       currentWidth,
       currentHeight,
       effectiveRivers,
-      effectiveLakes
+      effectiveLakes,
+      currentElevation,
+      currentSeaLevel ?? 35.0
     );
-  }, [currentCols, currentRows, currentWidth, currentHeight, effectiveRivers, effectiveLakes]);
+  }, [currentCols, currentRows, currentWidth, currentHeight, effectiveRivers, effectiveLakes, currentElevation, currentSeaLevel]);
 
   const [drawingRiverPoints, setDrawingRiverPoints] = useState<[number, number][]>([]);
   const [drawingLakeStart, setDrawingLakeStart] = useState<[number, number] | null>(null);
@@ -818,17 +820,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     };
   }, []);
 
-  // Update textures when target map or water bodies change
-  useEffect(() => {
-    if (rendererRef.current) {
-      rendererRef.current.updateGridTextures(
-        currentElevation,
-        currentCols,
-        currentRows,
-        waterGrid
-      );
-    }
-  }, [currentElevation, currentCols, currentRows, waterGrid]);
+
 
   // Screen to World coordinates
   const screenToWorld = useCallback(
@@ -886,6 +878,19 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
   useEffect(() => {
     renderWebGL();
   }, [renderWebGL]);
+
+  // Update textures when target map or water bodies change, and immediately re-render WebGL
+  useEffect(() => {
+    if (rendererRef.current) {
+      rendererRef.current.updateGridTextures(
+        currentElevation,
+        currentCols,
+        currentRows,
+        waterGrid
+      );
+      renderWebGL();
+    }
+  }, [currentElevation, currentCols, currentRows, waterGrid, renderWebGL]);
 
   // Biome color lookup table for dynamic custom biome slots (1-255)
   const biomeColorTable = useMemo(() => {
@@ -1831,7 +1836,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       const id = `river_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const newRiver: RiverData = {
         id,
-        name: `河川 ${effectiveRivers.length + 1}`,
         points: pts,
         widthStart: waterSettings?.riverWidthStart ?? 1.5,
         widthEnd: waterSettings?.riverWidthEnd ?? 4.5,
@@ -1927,7 +1931,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       const id = `lake_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const newLake: LakeData = {
         id,
-        name: `湖 ${effectiveLakes.length + 1}`,
         polygon: points,
         elevation: lakeEval.surfaceElevation,
         depth: lakeEval.depth,
@@ -5808,7 +5811,6 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       );
       const newLake: LakeData = {
         id: `lake_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        name: `湖 ${effectiveLakes.length + 1}`,
         polygon,
         elevation: lakeEval.surfaceElevation,
         depth: lakeEval.depth,
@@ -5969,7 +5971,7 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
       }
       renderWebGL();
       onCommitHistory({
-        description: '水系を地形に彫り込み (完全に地形化)',
+        description: '水系を地形に彫り込み',
         timestamp: Date.now(),
         changes: res.changes,
         waterChanges: {

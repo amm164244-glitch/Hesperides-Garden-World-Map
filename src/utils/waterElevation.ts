@@ -52,7 +52,8 @@ export function analyzeRiverElevation(
   mapW: number,
   mapH: number,
   seaLevel: number = 35.0,
-  uphillTolerance: number = 0.35
+  uphillTolerance: number = 0.35,
+  terminatesAt?: 'ocean' | 'lake' | 'river' | 'inland'
 ): RiverElevationProfile {
   const n = points.length;
   if (n === 0) {
@@ -83,7 +84,9 @@ export function analyzeRiverElevation(
   }
 
   const startElev = elevations[0];
-  const endElev = elevations[n - 1];
+  const rawEndElev = elevations[n - 1];
+  const isOceanMouth = (terminatesAt === 'ocean' || (terminatesAt !== 'lake' && terminatesAt !== 'river')) && rawEndElev <= seaLevel + 1.8;
+  const endElev = isOceanMouth ? Math.min(rawEndElev, seaLevel) : rawEndElev;
   const totalDrop = startElev - endElev;
 
   // Check monotonicity (downhill progression)

@@ -285,9 +285,14 @@ void main() {
 
   // Combined distance to nearest water boundary (ocean coast or riverbank)
   float effectiveDistToBank = pixelDistToCoast;
-  if (inlandWater > 0.35) {
-    effectiveDistToBank = (elev < seaLevel) ? min(pixelDistToCoast, pixelDistToBank) : pixelDistToBank;
+  if (elev < seaLevel) {
+    // 海面下（海洋）: 境界線は陸地との海岸線のみ。海水中での川の終端境界線は一切引かない（海に完全同化）
+    effectiveDistToBank = pixelDistToCoast;
+  } else if (inlandWater > 0.35) {
+    // 海水面より上の内陸水域（高地の川や湖）: 川岸・湖岸までの距離
+    effectiveDistToBank = pixelDistToBank;
   } else {
+    // 陸地: 最も近い水域（海洋海岸線または内陸河岸）までの距離
     effectiveDistToBank = min(pixelDistToCoast, pixelDistToBank);
   }
 
