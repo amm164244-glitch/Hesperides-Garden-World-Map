@@ -19,6 +19,9 @@ import {
   quantizeWidth,
   partitionRiverStrokeBuckets,
   getRiverColorAtFrac,
+  getRiverShallowColorAtFrac,
+  interpolateRgb,
+  parseRgb,
 } from './waterRenderer';
 import { createTerrainWaterSampler } from './town/townSample';
 import { RiverData, LakeData } from '../types/water';
@@ -1641,6 +1644,28 @@ test('河川のカラーグラデーションと接続部の開口: getRiverColo
   for (let g = 0; g < groups.length - 1; g++) {
     assert.equal(groups[g].endIndex, groups[g + 1].startIndex);
   }
+});
+
+test('河川の岸辺浅瀬・水深グラデーションと色彩補間の検証', () => {
+  // 1. 河口の浅瀬色 (t = 1.0) は海岸線の淡い水色 paleShallow rgb(123, 196, 196) と一致
+  const mouthShallow = getRiverShallowColorAtFrac(1.0);
+  assert.equal(mouthShallow, 'rgb(123, 196, 196)');
+
+  // 2. 源流の浅瀬色 (t = 0.0) は山岳渓流の明るく澄んだ浅瀬色 rgb(142, 216, 214)
+  const sourceShallow = getRiverShallowColorAtFrac(0.0);
+  assert.equal(sourceShallow, 'rgb(142, 216, 214)');
+
+  // 3. 中流の浅瀬色 (t = 0.5)
+  const midShallow = getRiverShallowColorAtFrac(0.5);
+  assert.equal(midShallow, 'rgb(133, 206, 205)');
+
+  // 4. parseRgb が hex と rgb() を正しく分解
+  assert.deepEqual(parseRgb('#7bc4c4'), { r: 123, g: 196, b: 196 });
+  assert.deepEqual(parseRgb('rgb(77, 122, 130)'), { r: 77, g: 122, b: 130 });
+
+  // 5. interpolateRgb が色間を滑らかに線形補間
+  const interpolated = interpolateRgb('rgb(100, 100, 100)', 'rgb(200, 200, 200)', 0.5);
+  assert.equal(interpolated, 'rgb(150, 150, 150)');
 });
 
 

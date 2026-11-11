@@ -27,13 +27,88 @@ export interface DrawWaterOptions {
 export const WATER_STYLE = {
   // Rich antique fantasy teal matching planetary sea / ocean
   waterFill: '#4d7a82',
+  // Luminous turquoise shallows matching ocean paleShallow (#7bc5c5)
   waterShallow: '#7bc4c4',
+  // Deeper core channel teal
+  waterDeep: '#3a666e',
+  // Soft antique sand / parchment wash bordering riverbanks and lake shores
+  bankSand: '#d9c9a6',
   // Dark drawing ink border
-  ink: '#192422',
+  ink: '#1e1a14',
   selectedGlow: '#f59e0b',
   hoverGlow: '#38bdf8',
   vertexHandle: '#fbbf24',
 };
+
+/**
+ * Parses RGB or Hex CSS color string into numeric RGB components.
+ */
+export function parseRgb(color: string): { r: number; g: number; b: number } {
+  if (color.startsWith('#')) {
+    let hex = color.slice(1);
+    if (hex.length === 3) {
+      hex = hex.split('').map((c) => c + c).join('');
+    }
+    if (hex.length >= 6) {
+      return {
+        r: parseInt(hex.slice(0, 2), 16),
+        g: parseInt(hex.slice(2, 4), 16),
+        b: parseInt(hex.slice(4, 6), 16),
+      };
+    }
+  } else if (color.startsWith('rgb')) {
+    const match = color.match(/\d+/g);
+    if (match && match.length >= 3) {
+      return {
+        r: parseInt(match[0], 10),
+        g: parseInt(match[1], 10),
+        b: parseInt(match[2], 10),
+      };
+    }
+  }
+  return { r: 77, g: 122, b: 130 };
+}
+
+/**
+ * Linearly interpolates between two RGB or Hex colors.
+ */
+export function interpolateRgb(c1: string, c2: string, t: number): string {
+  const p1 = parseRgb(c1);
+  const p2 = parseRgb(c2);
+  const clampT = Math.max(0, Math.min(1, t));
+  const r = Math.round(p1.r + (p2.r - p1.r) * clampT);
+  const g = Math.round(p1.g + (p2.g - p1.g) * clampT);
+  const b = Math.round(p1.b + (p2.b - p1.b) * clampT);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * Computes the river shallow water color at fractional position t along the river (0 = source, 1 = mouth).
+ * Matches the sea's bright coastal shallow aura (#7bc5c5 / rgb(123, 196, 196)):
+ * - Source (t = 0): Luminous highland mountain stream shallows (rgb(142, 216, 214))
+ * - Mouth (t = 1): Matches coastal ocean / paleShallow (rgb(123, 196, 196))
+ */
+export function getRiverShallowColorAtFrac(t: number, customColor?: string): string {
+  const clampT = Math.max(0, Math.min(1, t));
+  if (customColor && customColor !== WATER_STYLE.waterFill) {
+    const base = parseRgb(customColor);
+    const r = Math.round(base.r * 0.40 + 123 * 0.60);
+    const g = Math.round(base.g * 0.40 + 196 * 0.60);
+    const b = Math.round(base.b * 0.40 + 196 * 0.60);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  // Source: luminous, clear highland stream shallows
+  const sR = 142, sG = 216, sB = 214;
+  // Mouth: ocean paleShallow / waterShallow (rgb(123, 196, 196))
+  const mR = 123, mG = 196, mB = 196;
+
+  const r = Math.round(sR + (mR - sR) * clampT);
+  const g = Math.round(sG + (mG - sG) * clampT);
+  const b = Math.round(sB + (mB - sB) * clampT);
+
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 /**
  * Converts a hex or rgb CSS color string to rgba with specified alpha opacity.
@@ -427,11 +502,94 @@ function getLakeJunctions(lake: LakeData, rivers: RiverData[]): LakeRiverJunctio
   return junctions;
 }
 
+export interface OceanPlumeData {
+  pCoast: [number, number];
+  dir: [number, number];
+  mouthWidth: number;
+}
+
+/**
+ * Detects whether a river terminates at or near the coastline, and locates the exact
+ * coastline crossing point (pCoast) and outflow direction vector (dir).
+ */
+export function findRiverCoastline(
+  pts: [number, number][],
+  elevationGrid: Float32Array,
+  cols: number,
+  rows: number,
+  mapW: number,
+  mapH: number,
+  seaLevel: number,
+  mouthWidth: number
+): { pCoast: [number, number]; dir: [number, number] } | null {
+  const n = pts.length;
+  if (n < 2) return null;
+
+  const pLast = pts[n - 1];
+  const pPrev = pts[n - 2];
+  const dx = pLast[0] - pPrev[0];
+  const dy = pLast[1] - pPrev[1];
+  const len = Math.hypot(dx, dy) || 1;
+  const dir: [number, number] = [dx / len, dy / len];
+
+  const eLast = sampleElev(elevationGrid, cols, rows, mapW, mapH, pLast[0], pLast[1]);
+
+  // Case 1: pLast is already in the sea or right on the shoreline
+  if (eLast <= seaLevel) {
+    for (let i = n - 2; i >= 0; i--) {
+      const eA = sampleElev(elevationGrid, cols, rows, mapW, mapH, pts[i][0], pts[i][1]);
+      const eB = sampleElev(elevationGrid, cols, rows, mapW, mapH, pts[i + 1][0], pts[i + 1][1]);
+      if (eA >= seaLevel && eB <= seaLevel) {
+        const t = eA === eB ? 0.5 : Math.max(0, Math.min(1, (seaLevel - eA) / (eB - eA)));
+        return {
+          pCoast: [
+            pts[i][0] + t * (pts[i + 1][0] - pts[i][0]),
+            pts[i][1] + t * (pts[i + 1][1] - pts[i][1]),
+          ],
+          dir,
+        };
+      }
+    }
+    return { pCoast: [pLast[0], pLast[1]], dir };
+  }
+
+  // Case 2: pLast is on land (e.g. beach) heading towards the sea.
+  // Search downstream along dir up to searchDist for the coastline.
+  const searchDist = Math.max(40, mouthWidth * 4.0);
+  const steps = 16;
+  let prevPt = pLast;
+  let prevElev = eLast;
+
+  for (let s = 1; s <= steps; s++) {
+    const dist = (s / steps) * searchDist;
+    const candPt: [number, number] = [pLast[0] + dir[0] * dist, pLast[1] + dir[1] * dist];
+    const candElev = sampleElev(elevationGrid, cols, rows, mapW, mapH, candPt[0], candPt[1]);
+
+    if (candElev <= seaLevel) {
+      const t = prevElev === candElev ? 0.5 : Math.max(0, Math.min(1, (seaLevel - prevElev) / (candElev - prevElev)));
+      return {
+        pCoast: [
+          prevPt[0] + t * (candPt[0] - prevPt[0]),
+          prevPt[1] + t * (candPt[1] - prevPt[1]),
+        ],
+        dir,
+      };
+    }
+    prevPt = candPt;
+    prevElev = candElev;
+  }
+
+  return null;
+}
+
 interface PreparedRiver {
   river: RiverData;
+  points: [number, number][];
   strokeGroups: RiverStrokeGroup[];
   isSelected: boolean;
   isHovered: boolean;
+  isAtSea: boolean;
+  oceanPlume?: OceanPlumeData;
 }
 
 /**
@@ -495,12 +653,61 @@ export function drawWaterBodies(
   // ==========================================
   const preparedRivers: PreparedRiver[] = [];
   for (const river of rivers) {
-    const pts = river.points;
-    if (!pts || pts.length < 2) continue;
+    const rawPts = river.points;
+    if (!rawPts || rawPts.length < 2) continue;
 
     const wStart = river.widthStart ?? 1.5;
     const wEnd = river.widthEnd ?? 4.5;
-    const isEstuary = river.terminatesAt === 'ocean';
+
+    // Detect if river terminates at or near the ocean/sea
+    const nPts = rawPts.length;
+    const pLast = rawPts[nPts - 1];
+    const pPrev = rawPts[nPts - 2];
+    const rawDx = pLast[0] - pPrev[0];
+    const rawDy = pLast[1] - pPrev[1];
+    const rawLen = Math.hypot(rawDx, rawDy) || 1;
+    const rawDir: [number, number] = [rawDx / rawLen, rawDy / rawLen];
+
+    let isAtSea = river.terminatesAt === 'ocean';
+    let coastInfo: { pCoast: [number, number]; dir: [number, number] } | null = null;
+
+    if (river.terminatesAt !== 'lake' && river.terminatesAt !== 'river') {
+      if (options.elevationGrid && options.gridCols && options.gridRows && options.seaLevel !== undefined) {
+        coastInfo = findRiverCoastline(
+          rawPts,
+          options.elevationGrid,
+          options.gridCols,
+          options.gridRows,
+          options.mapWidth || 1000,
+          options.mapHeight || 1000,
+          options.seaLevel,
+          wEnd
+        );
+        if (coastInfo) {
+          isAtSea = true;
+        } else if (isAtSea) {
+          coastInfo = { pCoast: [pLast[0], pLast[1]], dir: rawDir };
+        }
+      } else if (isAtSea) {
+        coastInfo = { pCoast: [pLast[0], pLast[1]], dir: rawDir };
+      }
+    }
+
+    const pts: [number, number][] = rawPts.map((p) => [p[0], p[1]]);
+    if (isAtSea && coastInfo) {
+      pts[pts.length - 1] = [coastInfo.pCoast[0], coastInfo.pCoast[1]];
+    }
+
+    const oceanPlume: OceanPlumeData | undefined =
+      isAtSea && coastInfo
+        ? {
+            pCoast: coastInfo.pCoast,
+            dir: coastInfo.dir,
+            mouthWidth: Math.max(wEnd, 3.5),
+          }
+        : undefined;
+
+    const isEstuary = isAtSea;
 
     if (viewBounds) {
       let rMinX = Infinity;
@@ -531,12 +738,16 @@ export function drawWaterBodies(
 
     preparedRivers.push({
       river,
+      points: pts,
       strokeGroups,
       isSelected: selectedId === river.id,
       isHovered: hoveredId === river.id,
+      isAtSea,
+      oceanPlume,
     });
   }
 
+  // Common stroke settings for casing and fill
   // Common stroke settings for casing and fill
   const minWidthWorld = 1.0 / zoomPx;
   const borderWidth = 1.1 / zoomPx;
@@ -544,112 +755,349 @@ export function drawWaterBodies(
   ctx.lineJoin = 'round';
 
   // ==========================================
-  // Pass 1: River Casing (Outlines / Borders)
-  // All rivers' casings drawn first so confluences blend seamlessly in Pass 2
+  // Pass 1A: River Bank Sand Wash & Sepia Halo (河岸の砂岸・明色ハロー)
+  // Two-tier warm sandy border where water meets land along the riverbanks,
+  // matching the WebGL coastline's beach sand ribbon (#d9c9a6) and sepia halo (#b38f5c).
+  // Uses lineCap = 'butt' at ocean mouth so nothing protrudes past the coastline.
+  // ==========================================
+  // 1A-1: Outer antique parchment sepia halo
+  ctx.strokeStyle = '#c4b882';
+  ctx.fillStyle = '#c4b882';
+  for (const prep of preparedRivers) {
+    const numGroups = prep.strokeGroups.length;
+    for (let gIdx = 0; gIdx < numGroups; gIdx++) {
+      const group = prep.strokeGroups[gIdx];
+      const gPts = group.points;
+      if (gPts.length < 2) continue;
+
+      const effW = Math.max(group.width, minWidthWorld);
+      ctx.lineWidth = effW + 2 * borderWidth + (4.6 / zoomPx);
+
+      const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
+      ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
+
+      ctx.beginPath();
+      ctx.moveTo(gPts[0][0], gPts[0][1]);
+      for (let i = 1; i < gPts.length; i++) {
+        ctx.lineTo(gPts[i][0], gPts[i][1]);
+      }
+      ctx.stroke();
+
+      if (numGroups === 1 && prep.isAtSea) {
+        ctx.beginPath();
+        ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // 1A-2: Inner authentic dune sand ribbon (#d9c9a6)
+  ctx.strokeStyle = WATER_STYLE.bankSand;
+  ctx.fillStyle = WATER_STYLE.bankSand;
+  for (const prep of preparedRivers) {
+    const numGroups = prep.strokeGroups.length;
+    for (let gIdx = 0; gIdx < numGroups; gIdx++) {
+      const group = prep.strokeGroups[gIdx];
+      const gPts = group.points;
+      if (gPts.length < 2) continue;
+
+      const effW = Math.max(group.width, minWidthWorld);
+      ctx.lineWidth = effW + 2 * borderWidth + (2.4 / zoomPx);
+
+      const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
+      ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
+
+      ctx.beginPath();
+      ctx.moveTo(gPts[0][0], gPts[0][1]);
+      for (let i = 1; i < gPts.length; i++) {
+        ctx.lineTo(gPts[i][0], gPts[i][1]);
+      }
+      ctx.stroke();
+
+      if (numGroups === 1 && prep.isAtSea) {
+        ctx.beginPath();
+        ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // ==========================================
+  // Pass 1B: River Casing (墨の縁取り線)
+  // All rivers' casings drawn first so confluences blend seamlessly in Pass 2.
+  // For rivers terminating at ocean, the terminal stroke uses lineCap = 'butt' so
+  // no rounded black cap protrudes into the sea.
   // ==========================================
   for (const prep of preparedRivers) {
     const borderColor = prep.river.borderColor || WATER_STYLE.ink;
     ctx.strokeStyle = borderColor;
+    ctx.fillStyle = borderColor;
+    ctx.lineJoin = 'round';
 
-    for (const group of prep.strokeGroups) {
+    const numGroups = prep.strokeGroups.length;
+    for (let gIdx = 0; gIdx < numGroups; gIdx++) {
+      const group = prep.strokeGroups[gIdx];
       const gPts = group.points;
       if (gPts.length < 2) continue;
 
       const effW = Math.max(group.width, minWidthWorld);
       ctx.lineWidth = effW + 2 * borderWidth;
 
+      const isOceanLastGroup = prep.isAtSea && gIdx === numGroups - 1;
+      ctx.lineCap = isOceanLastGroup ? 'butt' : 'round';
+
       ctx.beginPath();
       ctx.moveTo(gPts[0][0], gPts[0][1]);
       for (let i = 1; i < gPts.length; i++) {
         ctx.lineTo(gPts[i][0], gPts[i][1]);
       }
       ctx.stroke();
+
+      if (numGroups === 1 && prep.isAtSea) {
+        ctx.beginPath();
+        ctx.arc(gPts[0][0], gPts[0][1], ctx.lineWidth * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 
   // ==========================================
-  // Pass 2: River Fills (Water Core & Open Seamless Junctions)
-  // Drawn on top of all casings, creating continuous river surfaces, natural gradients,
-  // and completely eliminating black dividing lines at river-sea, lake, and confluence junctions.
+  // Pass 2: River Fills with Delicate, Seamless Shallow-to-Deep Water
+  // Completely OPAQUE layers to strictly eliminate circular bead / disc artifacts
+  // and provide a delicate, refined transition like the sea's coastal shallows.
   // ==========================================
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
   for (const prep of preparedRivers) {
-    const pts = prep.river.points;
+    const pts = prep.points;
     const n = pts.length;
     if (n < 2) continue;
 
-    // Precompute cumulative lengths along polyline to determine tFrac for each segment/group
     const cumDists: number[] = [0];
     for (let i = 0; i < n - 1; i++) {
       cumDists.push(cumDists[i] + Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]));
     }
     const totalLen = cumDists[n - 1] || 1;
+    const numGroups = prep.strokeGroups.length;
 
-    for (const group of prep.strokeGroups) {
+    // Precalculate group metadata
+    const groupInfos = prep.strokeGroups.map((group, gIdx) => {
       const gPts = group.points;
-      if (gPts.length < 2) continue;
-
       const effW = Math.max(group.width, minWidthWorld);
-      ctx.lineWidth = effW;
-
+      const screenW = effW * zoomPx;
       const startIdx = group.startIndex ?? 0;
       const endIdx = group.endIndex ?? (n - 1);
       const tStart = (cumDists[Math.min(startIdx, n - 1)] ?? 0) / totalLen;
       const tEnd = (cumDists[Math.min(endIdx, n - 1)] ?? totalLen) / totalLen;
+      const colDeepStart = getRiverColorAtFrac(tStart, prep.river.color);
+      const colDeepEnd = getRiverColorAtFrac(tEnd, prep.river.color);
+      const colShallowStart = getRiverShallowColorAtFrac(tStart, prep.river.color);
+      const colShallowEnd = getRiverShallowColorAtFrac(tEnd, prep.river.color);
 
-      const colStart = getRiverColorAtFrac(tStart, prep.river.color);
-      const colEnd = getRiverColorAtFrac(tEnd, prep.river.color);
+      const isOceanLast = prep.isAtSea && gIdx === numGroups - 1;
 
-      if (colStart === colEnd || gPts.length < 2) {
-        ctx.strokeStyle = colStart;
-      } else {
-        const pA = gPts[0];
-        const pB = gPts[gPts.length - 1];
-        if (Math.hypot(pB[0] - pA[0], pB[1] - pA[1]) < 0.1) {
+      return {
+        group,
+        gPts,
+        effW,
+        screenW,
+        colDeepStart,
+        colDeepEnd,
+        colShallowStart,
+        colShallowEnd,
+        isOceanLast,
+      };
+    });
+
+    let maxScreenW = 0;
+    for (const info of groupInfos) {
+      if (info.screenW > maxScreenW) maxScreenW = info.screenW;
+    }
+
+    // Determine sub-pixel depth layers:
+    // All layers are 100% OPAQUE to strictly eliminate circular bead / disc artifacts
+    // and scale proportionally with river width to ensure luminous shallows are always visible
+    type LayerSpec = {
+      widthRatio: number; // multiplier on effW
+      minInsetPx: number; // minimum screen inset in pixels
+      colFactor: number;  // 1.0 = pure shallows, 0.0 = pure deep core
+    };
+
+    let layers: LayerSpec[];
+    if (maxScreenW <= 3.2) {
+      // Very narrow stream: clear shallow mountain stream tint
+      layers = [{ widthRatio: 1.0, minInsetPx: 0, colFactor: 0.65 }];
+    } else if (maxScreenW <= 8.0) {
+      // Narrow river: bank shallows + core channel
+      layers = [
+        { widthRatio: 1.0, minInsetPx: 0, colFactor: 1.0 },
+        { widthRatio: 0.65, minInsetPx: 0.8, colFactor: 0.0 },
+      ];
+    } else if (maxScreenW <= 18.0) {
+      // Medium river: 3-tier shallows transition
+      layers = [
+        { widthRatio: 1.0, minInsetPx: 0, colFactor: 1.0 },
+        { widthRatio: 0.72, minInsetPx: 1.0, colFactor: 0.55 },
+        { widthRatio: 0.42, minInsetPx: 1.8, colFactor: 0.0 },
+      ];
+    } else {
+      // Wide river / estuary (zoomed in): 5-tier rich continuous shallows
+      layers = [
+        { widthRatio: 1.0, minInsetPx: 0, colFactor: 1.0 },     // Luminous turquoise shallows (#7bc5c5)
+        { widthRatio: 0.80, minInsetPx: 1.0, colFactor: 0.72 },  // Outer shallow gradient
+        { widthRatio: 0.60, minInsetPx: 2.0, colFactor: 0.44 },  // Mid channel transition
+        { widthRatio: 0.42, minInsetPx: 3.2, colFactor: 0.20 },  // Inner core transition
+        { widthRatio: 0.26, minInsetPx: 4.5, colFactor: 0.0 },   // Deep ocean teal core (#408087)
+      ];
+    }
+
+    for (const layer of layers) {
+      for (let gIdx = 0; gIdx < numGroups; gIdx++) {
+        const info = groupInfos[gIdx];
+        const gPts = info.gPts;
+        if (gPts.length < 2) continue;
+
+        let layerW = info.effW * layer.widthRatio;
+        if (layer.minInsetPx > 0) {
+          const maxAllowedW = info.effW - (layer.minInsetPx * 2.0) / zoomPx;
+          if (maxAllowedW <= minWidthWorld * 0.5) continue;
+          layerW = Math.min(layerW, maxAllowedW);
+        }
+        layerW = Math.max(minWidthWorld, layerW);
+
+        ctx.lineWidth = layerW;
+        ctx.lineCap = info.isOceanLast ? 'butt' : 'round';
+
+        const colStart =
+          layer.colFactor === 1.0
+            ? info.colShallowStart
+            : layer.colFactor === 0.0
+            ? info.colDeepStart
+            : interpolateRgb(info.colDeepStart, info.colShallowStart, layer.colFactor);
+
+        const colEnd =
+          layer.colFactor === 1.0
+            ? info.colShallowEnd
+            : layer.colFactor === 0.0
+            ? info.colDeepEnd
+            : interpolateRgb(info.colDeepEnd, info.colShallowEnd, layer.colFactor);
+
+        if (colStart === colEnd || gPts.length < 2) {
           ctx.strokeStyle = colStart;
         } else {
-          const grad = ctx.createLinearGradient(pA[0], pA[1], pB[0], pB[1]);
-          grad.addColorStop(0, colStart);
-          grad.addColorStop(1, colEnd);
-          ctx.strokeStyle = grad;
+          const pA = gPts[0];
+          const pB = gPts[gPts.length - 1];
+          if (Math.hypot(pB[0] - pA[0], pB[1] - pA[1]) < 0.1) {
+            ctx.strokeStyle = colStart;
+          } else {
+            const grad = ctx.createLinearGradient(pA[0], pA[1], pB[0], pB[1]);
+            grad.addColorStop(0, colStart);
+            grad.addColorStop(1, colEnd);
+            ctx.strokeStyle = grad;
+          }
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(gPts[0][0], gPts[0][1]);
+        for (let i = 1; i < gPts.length; i++) {
+          ctx.lineTo(gPts[i][0], gPts[i][1]);
+        }
+        ctx.stroke();
+
+        if (numGroups === 1 && prep.isAtSea) {
+          ctx.fillStyle = colStart;
+          ctx.beginPath();
+          ctx.arc(gPts[0][0], gPts[0][1], layerW * 0.5, 0, Math.PI * 2);
+          ctx.fill();
         }
       }
-
-      ctx.beginPath();
-      ctx.moveTo(gPts[0][0], gPts[0][1]);
-      for (let i = 1; i < gPts.length; i++) {
-        ctx.lineTo(gPts[i][0], gPts[i][1]);
-      }
-      ctx.stroke();
     }
 
     // ----------------------------------------------------
-    // Open Junction: Eliminate black divider line at connections
-    // If river connects to ocean, lake, or another river:
-    // fill the forward mouth cap with the mouth water color
-    // so it cleanly opens into the receiving water body without a black line.
+    // Ocean Estuary Gateway: Breaches the coastline and flows directly into the sea
+    // Completely covers the beach and coastline edge with a flush, flared gateway polygon
+    // matching the coastal shallows (#7bc5c5) and coastal sea (#408087).
+    // NO circular dome, NO bubble arc!
     // ----------------------------------------------------
-    const isOceanConn = prep.river.terminatesAt === 'ocean';
+    if (prep.oceanPlume) {
+      const { pCoast, dir, mouthWidth } = prep.oceanPlume;
+      const effMouthW = Math.max(mouthWidth, minWidthWorld * 2.5);
+      const mouthHW = effMouthW * 0.5;
+
+      const normX = -dir[1];
+      const normY = dir[0];
+
+      // Reach just 2.8 screen pixels offshore to completely erase the WebGL 1.8px coastline bar
+      const reachOffshore = 2.8 / zoomPx;
+      const flareHW = mouthHW * 1.12;
+
+      // Upstream reach on land to guarantee 100% seamless overlap with the river strokes
+      const upstreamDist = Math.max(2.0 / zoomPx, mouthHW * 0.35);
+
+      const pLeftCoast: [number, number] = [pCoast[0] + normX * mouthHW, pCoast[1] + normY * mouthHW];
+      const pRightCoast: [number, number] = [pCoast[0] - normX * mouthHW, pCoast[1] - normY * mouthHW];
+
+      const pLeftOffshore: [number, number] = [
+        pCoast[0] + dir[0] * reachOffshore + normX * flareHW,
+        pCoast[1] + dir[1] * reachOffshore + normY * flareHW,
+      ];
+      const pRightOffshore: [number, number] = [
+        pCoast[0] + dir[0] * reachOffshore - normX * flareHW,
+        pCoast[1] + dir[1] * reachOffshore - normY * flareHW,
+      ];
+
+      const pLeftLand: [number, number] = [
+        pCoast[0] - dir[0] * upstreamDist + normX * mouthHW,
+        pCoast[1] - dir[1] * upstreamDist + normY * mouthHW,
+      ];
+      const pRightLand: [number, number] = [
+        pCoast[0] - dir[0] * upstreamDist - normX * mouthHW,
+        pCoast[1] - dir[1] * upstreamDist - normY * mouthHW,
+      ];
+
+      ctx.save();
+
+      // 1. Bank shallows wash across estuary mouth (100% OPAQUE turquoise shallows #7bc5c5)
+      // Erases the dark coastline bar and beach sand across the mouth width
+      ctx.fillStyle = WATER_STYLE.waterShallow;
+      ctx.beginPath();
+      ctx.moveTo(pLeftLand[0], pLeftLand[1]);
+      ctx.lineTo(pLeftCoast[0], pLeftCoast[1]);
+      ctx.lineTo(pLeftOffshore[0], pLeftOffshore[1]);
+      ctx.lineTo(pRightOffshore[0], pRightOffshore[1]);
+      ctx.lineTo(pRightCoast[0], pRightCoast[1]);
+      ctx.lineTo(pRightLand[0], pRightLand[1]);
+      ctx.closePath();
+      ctx.fill();
+
+      // 2. Core water fill across mouth (100% OPAQUE coastal sea #408087 / rgb(77, 122, 130))
+      // Connects the river's deep channel directly to the coastal sea
+      const coreHW = mouthHW * 0.50;
+      const coreFlareHW = flareHW * 0.50;
+      const colMouth = getRiverColorAtFrac(1.0, prep.river.color);
+      ctx.fillStyle = colMouth;
+      ctx.beginPath();
+      ctx.moveTo(pCoast[0] - dir[0] * upstreamDist + normX * coreHW, pCoast[1] - dir[1] * upstreamDist + normY * coreHW);
+      ctx.lineTo(pCoast[0] + normX * coreHW, pCoast[1] + normY * coreHW);
+      ctx.lineTo(pCoast[0] + dir[0] * reachOffshore + normX * coreFlareHW, pCoast[1] + dir[1] * reachOffshore + normY * coreFlareHW);
+      ctx.lineTo(pCoast[0] + dir[0] * reachOffshore - normX * coreFlareHW, pCoast[1] + dir[1] * reachOffshore - normY * coreFlareHW);
+      ctx.lineTo(pCoast[0] - normX * coreHW, pCoast[1] - normY * coreHW);
+      ctx.lineTo(pCoast[0] - dir[0] * upstreamDist - normX * coreHW, pCoast[1] - dir[1] * upstreamDist - normY * coreHW);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // ----------------------------------------------------
+    // Open Junction: Eliminate black divider lines at inland connections
+    // For ocean connections: FLUSH terminal at coastline with ZERO protruding bubble/arc!
+    // ----------------------------------------------------
     const isLakeConn = prep.river.terminatesAt === 'lake';
     const isRiverConn = prep.river.terminatesAt === 'river';
 
-    let isAtSea = isOceanConn;
-    if (!isAtSea && options.elevationGrid && options.seaLevel !== undefined) {
-      const lastP = pts[n - 1];
-      const eMouth = sampleElev(
-        options.elevationGrid,
-        options.gridCols || 1024,
-        options.gridRows || 512,
-        options.mapWidth || 1024,
-        options.mapHeight || 512,
-        lastP[0],
-        lastP[1]
-      );
-      if (eMouth <= options.seaLevel + 1.2) {
-        isAtSea = true;
-      }
-    }
-
-    if (isAtSea || isLakeConn || isRiverConn) {
+    if (isLakeConn || isRiverConn) {
       const pPrev = pts[n - 2];
       const pMouth = pts[n - 1];
       const dx = pMouth[0] - pPrev[0];
@@ -661,18 +1109,15 @@ export function drawWaterBodies(
 
       const mouthW = Math.max(prep.river.widthEnd ?? 4.0, minWidthWorld);
       const effHW = mouthW * 0.5;
-      const mouthCol = getRiverColorAtFrac(1.0, prep.river.color);
+      const mouthCol = isLakeConn ? WATER_STYLE.waterShallow : getRiverColorAtFrac(1.0, prep.river.color);
 
       ctx.save();
       ctx.fillStyle = mouthCol;
       ctx.beginPath();
-      // Draw forward cap into receiving water:
-      // Covers the casing arc (radius effHW + borderWidth)
-      // by extending with radius effHW + borderWidth * 2.2 facing downstream
       ctx.arc(
         pMouth[0],
         pMouth[1],
-        effHW + borderWidth * 2.2,
+        effHW + borderWidth * 0.8,
         mouthTheta - Math.PI * 0.52,
         mouthTheta + Math.PI * 0.52
       );
@@ -694,7 +1139,7 @@ export function drawWaterBodies(
 
       const sourceW = Math.max(prep.river.widthStart ?? 1.5, minWidthWorld);
       const effHW = sourceW * 0.5;
-      const sourceCol = getRiverColorAtFrac(0.0, prep.river.color);
+      const sourceCol = WATER_STYLE.waterShallow;
 
       ctx.save();
       ctx.fillStyle = sourceCol;
@@ -702,7 +1147,7 @@ export function drawWaterBodies(
       ctx.arc(
         pSource[0],
         pSource[1],
-        effHW + borderWidth * 2.2,
+        effHW + borderWidth * 0.8,
         sourceTheta - Math.PI * 0.52,
         sourceTheta + Math.PI * 0.52
       );
@@ -713,7 +1158,7 @@ export function drawWaterBodies(
   }
 
   // ==========================================
-  // Pass 3: Lake Shorelines (with open gateways at river junctions)
+  // Pass 3: Lake Shorelines (with open gateways at river junctions & shallow water aura)
   // ==========================================
   for (const lake of lakes) {
     const poly = lake.polygon;
@@ -723,16 +1168,33 @@ export function drawWaterBodies(
     const isHovered = hoveredId === lake.id;
     const junctions = getLakeJunctions(lake, rivers);
 
-    // Subtle inner shallows glow
-    ctx.strokeStyle = WATER_STYLE.waterShallow;
-    ctx.lineWidth = 1.8 / zoomPx;
-    ctx.globalAlpha = 0.28;
+    // 1. Soft bank sand halo along lake perimeter (land side)
+    ctx.strokeStyle = WATER_STYLE.bankSand;
+    ctx.lineWidth = 3.2 / zoomPx;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.beginPath();
     ctx.moveTo(poly[0][0], poly[0][1]);
     for (let i = 1; i < poly.length; i++) {
       ctx.lineTo(poly[i][0], poly[i][1]);
     }
     ctx.closePath();
+    ctx.stroke();
+
+    // 2. Luminous turquoise inner shallows ribbon (water side)
+    ctx.strokeStyle = WATER_STYLE.waterShallow;
+    ctx.lineWidth = 3.6 / zoomPx;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(poly[0][0], poly[0][1]);
+    for (let i = 1; i < poly.length; i++) {
+      ctx.lineTo(poly[i][0], poly[i][1]);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.lineWidth = 1.8 / zoomPx;
+    ctx.globalAlpha = 0.85;
     ctx.stroke();
     ctx.globalAlpha = 1.0;
 
@@ -817,7 +1279,7 @@ export function drawWaterBodies(
   // ==========================================
   for (const prep of preparedRivers) {
     if (!prep.isSelected && !prep.isHovered) continue;
-    const pts = prep.river.points;
+    const pts = prep.points;
 
     ctx.save();
     ctx.beginPath();
