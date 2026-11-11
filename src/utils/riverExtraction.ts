@@ -360,7 +360,29 @@ function breakStraightRuns(
           if (!valid) continue;
 
           for (let k = runStart; k <= runEndIdx; k++) pts[k] = candidate[k - runStart];
-          if (hasSelfIntersection(pts)) {
+          let causesIntersect = false;
+          const sMin = Math.max(0, runStart - 1);
+          const sMax = Math.min(n - 2, runEndIdx);
+          for (let s = sMin; s <= sMax && !causesIntersect; s++) {
+            const p1 = pts[s];
+            const p2 = pts[s + 1];
+            const segMinX = p1[0] < p2[0] ? p1[0] : p2[0];
+            const segMaxX = p1[0] > p2[0] ? p1[0] : p2[0];
+            const segMinY = p1[1] < p2[1] ? p1[1] : p2[1];
+            const segMaxY = p1[1] > p2[1] ? p1[1] : p2[1];
+            for (let j = 0; j < n - 1; j++) {
+              if (Math.abs(s - j) <= 1) continue;
+              const p3 = pts[j];
+              const p4 = pts[j + 1];
+              if (segMaxX < (p3[0] < p4[0] ? p3[0] : p4[0]) || segMinX > (p3[0] > p4[0] ? p3[0] : p4[0])) continue;
+              if (segMaxY < (p3[1] < p4[1] ? p3[1] : p4[1]) || segMinY > (p3[1] > p4[1] ? p3[1] : p4[1])) continue;
+              if (segsIntersect(p1, p2, p3, p4)) {
+                causesIntersect = true;
+                break;
+              }
+            }
+          }
+          if (causesIntersect) {
             for (let k = runStart; k <= runEndIdx; k++) pts[k] = saved[k - runStart];
             continue;
           }
@@ -725,7 +747,7 @@ export function limitRiverCurvature(
 
       const ePrev = sampleElev(filledGrid, cols, rows, mapW, mapH, pPrev[0], pPrev[1]);
 
-      for (const alpha of [0.85, 0.65, 0.45, 0.25]) {
+      for (const alpha of [0.8, 0.4]) {
         const candX = pCurr[0] * (1 - alpha) + midX * alpha;
         const candY = pCurr[1] * (1 - alpha) + midY * alpha;
         const cand: [number, number] = [candX, candY];
@@ -1879,7 +1901,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      8
+      4
     );
     // Pass 2: Fine Gaussian smoothing
     processedPoints = smoothRiverGaussian(
@@ -1901,7 +1923,7 @@ export function extractRivers(
       rows,
       mapWidth,
       mapHeight,
-      8
+      4
     );
     let hasSharpCurv = false;
     for (let k = 1; k < processedPoints.length - 1; k++) {
@@ -1921,7 +1943,7 @@ export function extractRivers(
         rows,
         mapWidth,
         mapHeight,
-        6
+        3
       );
     }
     processedPoints = clampSharpCorners(processedPoints);
@@ -2017,7 +2039,7 @@ export function extractRivers(
           rows,
           mapWidth,
           mapHeight,
-          8
+          4
         );
       }
     }

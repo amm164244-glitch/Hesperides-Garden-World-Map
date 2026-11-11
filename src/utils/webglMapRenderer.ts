@@ -126,7 +126,7 @@ float sampleSmoothElev(vec2 uv) {
 // Antique Parchment & Portolan Palette
 // Matches authentic fantasy cartography (reference antique map style):
 // Teal sea-green ocean, clean shallow coastal aura, crisp dark ink coastline, warm ochre halo, parchment planes
-vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDistToCoast, float slope) {
+vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDistToCoast, float slope, float rippleFade) {
   // Ocean colors
   if (elev < seaLevel) {
     float depth = (seaLevel - elev);
@@ -152,7 +152,7 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
 
     // Single subtle, clean coastal wave echo (穏やかで控えめな単一波紋)
     if (u_show_ripples > 0.5) {
-      float r1 = smoothstep(1.3, 0.0, abs(pixelDistToCoast - 5.0)) * 0.32;
+      float r1 = smoothstep(1.3, 0.0, abs(pixelDistToCoast - 5.0)) * 0.32 * rippleFade;
       waterCol = mix(waterCol, crestWhite, r1);
     }
 
@@ -222,7 +222,7 @@ vec3 getParchmentColor(float elev, float seaLevel, vec2 worldPos, float pixelDis
   // Antique warm ochre/sepia vignette halo bordering the coast inside the land (reference style)
   if (pixelDistToCoast < 8.0) {
     vec3 coastalSepia = vec3(0.70, 0.56, 0.36); // #b38f5c warm antique ochre/sepia border
-    float haloAlpha = smoothstep(8.0, 1.2, pixelDistToCoast) * 0.50;
+    float haloAlpha = smoothstep(8.0, 1.2, pixelDistToCoast) * 0.50 * rippleFade;
     landCol = mix(landCol, coastalSepia, haloAlpha);
   }
 
@@ -254,7 +254,8 @@ void main() {
   // Accurate screen-space gradient for distance to isocontour (seaLevel)
   vec2 dF = vec2(dFdx(elev), dFdy(elev));
   float gradLen = length(dF);
-  float pixelDistToCoast = abs(elev - seaLevel) / max(0.0001, gradLen);
+  float pixelDistToCoast = abs(elev - seaLevel) / max(0.02, gradLen);
+  float rippleFade = smoothstep(0.01, 0.08, gradLen);
 
   // Instantaneous hardware screen-space derivatives for terrain slope and hillshading
   float slopeX = dF.x * 1.5;
@@ -264,7 +265,7 @@ void main() {
   vec3 col = vec3(0.0);
 
   if (u_view_mode == 0) {
-    col = getParchmentColor(elev, seaLevel, worldPos, pixelDistToCoast, slope);
+    col = getParchmentColor(elev, seaLevel, worldPos, pixelDistToCoast, slope, rippleFade);
 
     // North-West Shaded Relief (Light from Top-Left, increased contrast)
     if (u_show_shading > 0.5) {
