@@ -84,6 +84,7 @@ export interface CustomMapAsset {
   originY: number;       // Base vertical anchor (e.g. 0.85 - 0.95)
   createdAt: number;
   isPixelArt?: boolean;
+  displayWidth?: number; // Width in world units at scale 1.0 (default 64). Height follows aspect ratio.
   gridSize?: number;     // 16, 24, 32, 48
   gridData?: string[][]; // Raw 2D array of color strings ('' for transparent)
 }

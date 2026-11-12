@@ -71,6 +71,7 @@ import { BiomePalette } from './components/BiomePalette';
 import { buildWaterGrid } from './utils/waterGrid';
 import { PixelArtStudioModal } from './components/PixelArtStudioModal';
 import { ImageToPixelModal } from './components/ImageToPixelModal';
+import { IllustrationImportModal } from './components/IllustrationImportModal';
 import { ImageToTerrainModal, CroppedTerrainResult } from './components/ImageToTerrainModal';
 import { BiomeTypeEditor } from './components/BiomeTypeEditor';
 import { BiomeType, DEFAULT_BIOME_TYPES } from './types/biome';
@@ -913,6 +914,7 @@ export default function App() {
   const [isPixelStudioOpen, setIsPixelStudioOpen] = useState<boolean>(false);
   const [editingPixelAsset, setEditingPixelAsset] = useState<CustomMapAsset | null>(null);
   const [isImageToPixelOpen, setIsImageToPixelOpen] = useState<boolean>(false);
+  const [isIllustrationImportOpen, setIsIllustrationImportOpen] = useState<boolean>(false);
   const [isImageToTerrainOpen, setIsImageToTerrainOpen] = useState<boolean>(false);
   const [segmentedTerrainResult, setSegmentedTerrainResult] = useState<CroppedTerrainResult | null>(null);
   const [mapBackgroundUrl, setMapBackgroundUrl] = useState<string | null>(null);
@@ -2170,6 +2172,8 @@ export default function App() {
               activeRegionId={activeRegionId}
               waterGrid={currentWaterGrid}
               onApplyBiomeAndSymbols={handleApplyBiomeAndSymbols}
+              onUpdateBiomeTypes={(updated) => handleSaveBiomeTypes(updated, [])}
+              customCategories={categories}
             />
           </div>
         )}
@@ -2190,6 +2194,7 @@ export default function App() {
               onDeleteCategory={handleDeleteCategory}
               onOpenPixelStudio={handleOpenPixelStudio}
               onOpenImageToPixel={() => setIsImageToPixelOpen(true)}
+              onOpenIllustrationImport={() => setIsIllustrationImportOpen(true)}
               onDeleteCustomAsset={handleDeleteCustomAsset}
               onClearSymbols={handleClearSymbols}
               showSymbols={showSymbols}
@@ -2231,6 +2236,15 @@ export default function App() {
           onSaveCustomAsset={handleSaveCustomAsset}
           onDeleteCustomAsset={handleDeleteCustomAsset}
           initialAsset={editingPixelAsset}
+        />
+
+        {/* Illustration Import Modal (hand-drawn style images, bulk) */}
+        <IllustrationImportModal
+          isOpen={isIllustrationImportOpen}
+          onClose={() => setIsIllustrationImportOpen(false)}
+          categories={categories}
+          onAddCategory={handleAddCategory}
+          onSaveCustomAsset={handleSaveCustomAsset}
         />
 
         {/* Image to Pixel Art Converter Modal */}
@@ -2285,6 +2299,7 @@ export default function App() {
           onSave={handleSaveBiomeTypes}
           mapData={mapData}
           customAssets={customAssets}
+          customCategories={categories}
           seaLevel={activeRegionalMap ? activeRegionalMap.seaLevel : mapData.seaLevel}
         />
 

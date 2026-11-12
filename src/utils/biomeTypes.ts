@@ -299,74 +299,77 @@ export function buildDefaultSymbolRules(
           kind: 'builtin',
           symbolType: 'mountain_snow',
           weight: 4,
-          scaleMin: 0.9,
-          scaleMax: 1.2,
-          elevationMin: Number(Math.min(99, seaLevel + p96).toFixed(1)),
+          scaleMin: 0.85,
+          scaleMax: 1.15,
+          elevationMin: Number((seaLevel + p88 * 0.90).toFixed(1)),
+          elevationMax: Number((seaLevel + p96).toFixed(1)),
           scaleByElevation: true,
         },
         {
           kind: 'builtin',
           symbolType: 'mountain_rock',
           weight: 6,
-          scaleMin: 0.8,
-          scaleMax: 1.15,
-          elevationMin: Number((seaLevel + p88 * 0.8).toFixed(1)),
+          scaleMin: 0.78,
+          scaleMax: 1.05,
+          elevationMin: Number((seaLevel + p70 * 0.70).toFixed(1)),
+          elevationMax: Number((seaLevel + p96).toFixed(1)),
           scaleByElevation: true,
         },
         {
           kind: 'builtin',
           symbolType: 'mountain_ridge',
           weight: 5,
-          scaleMin: 0.75,
-          scaleMax: 1.05,
-          elevationMin: Number((seaLevel + p70 * 0.85).toFixed(1)),
+          scaleMin: 0.72,
+          scaleMax: 0.95,
+          elevationMin: Number((seaLevel + p70 * 0.55).toFixed(1)),
+          elevationMax: Number((seaLevel + p88).toFixed(1)),
           scaleByElevation: true,
         },
         {
           kind: 'builtin',
           symbolType: 'hill_mound',
           weight: 3,
-          scaleMin: 0.6,
-          scaleMax: 0.9,
+          scaleMin: 0.55,
+          scaleMax: 0.80,
           elevationMax: Number((seaLevel + p88).toFixed(1)),
         },
       ];
     }
     case 1: {
-      // Coniferous Forest: Individual spruce & clustered pine forest
+      // Coniferous Forest: Individual spruce dominates; cluster trees reduced for visible gaps
       return [
         {
           kind: 'builtin',
           symbolType: 'tree_pine',
           weight: 5,
-          scaleMin: 0.7,
-          scaleMax: 1.0,
+          scaleMin: 0.42,
+          scaleMax: 0.58,
         },
         {
           kind: 'builtin',
           symbolType: 'tree_pine_cluster',
-          weight: 6,
-          scaleMin: 0.8,
-          scaleMax: 1.1,
+          weight: 1,
+          scaleMin: 0.48,
+          scaleMax: 0.62,
         },
       ];
     }
     case 2: {
-      // Broadleaf Forest: Individual oaks & dense deciduous woodland clusters
+      // Broadleaf Forest: Individual oaks dominate; cluster trees reduced for visible gaps
       return [
         {
           kind: 'builtin',
           symbolType: 'tree_oak',
           weight: 5,
-          scaleMin: 0.7,
-          scaleMax: 1.0,
+          scaleMin: 0.42,
+          scaleMax: 0.58,
         },
         {
           kind: 'builtin',
           symbolType: 'tree_oak_cluster',
-          weight: 6,
-          scaleMin: 0.8,
-          scaleMax: 1.1,
+          weight: 1,
+          scaleMin: 0.48,
+          scaleMax: 0.62,
         },
       ];
     }
@@ -377,13 +380,25 @@ export function buildDefaultSymbolRules(
           kind: 'builtin',
           symbolType: 'tree_dead',
           weight: 2,
-          scaleMin: 0.6,
-          scaleMax: 0.9,
+          scaleMin: 0.45,
+          scaleMax: 0.70,
+        },
+      ];
+    }
+    case 6: {
+      // Snow / Tundra: Sparse pine trees in sub-arctic tundra / taiga edge
+      return [
+        {
+          kind: 'builtin',
+          symbolType: 'tree_pine',
+          weight: 2,
+          scaleMin: 0.40,
+          scaleMax: 0.55,
         },
       ];
     }
     default:
-      // Slots 3 (Grassland), 5 (Wetland), 6 (Snow / Tundra) have no default symbols
+      // Slots 3 (Grassland), 5 (Wetland) have no default symbols
       return [];
   }
 }
@@ -411,20 +426,26 @@ export function applyDefaultRulesToBiomeTypes(
     let defaultDensity = b.density;
     let defaultMinDistance = b.minDistance;
     let defaultRidgeWeight = b.ridgeWeight;
+    let defaultCoastBuffer = b.coastBuffer;
 
     if (b.slot === 7) {
-      defaultDensity = 70;
-      defaultMinDistance = 22;
-      defaultRidgeWeight = 0.6;
+      defaultDensity = 90;
+      defaultMinDistance = 16;
+      defaultRidgeWeight = 0.25;
     } else if (b.slot === 1) {
-      defaultDensity = 80;
-      defaultMinDistance = 6;
+      defaultDensity = 65;
+      defaultMinDistance = 5.2;
+      defaultCoastBuffer = 12;
     } else if (b.slot === 2) {
-      defaultDensity = 75;
-      defaultMinDistance = 7;
+      defaultDensity = 60;
+      defaultMinDistance = 5.2;
+      defaultCoastBuffer = 12;
     } else if (b.slot === 4) {
       defaultDensity = 15;
-      defaultMinDistance = 20;
+      defaultMinDistance = 18;
+    } else if (b.slot === 6) {
+      defaultDensity = 6;
+      defaultMinDistance = 24;
     }
 
     return {
@@ -433,6 +454,7 @@ export function applyDefaultRulesToBiomeTypes(
       density: defaultDensity,
       minDistance: defaultMinDistance,
       ridgeWeight: defaultRidgeWeight ?? b.ridgeWeight,
+      coastBuffer: defaultCoastBuffer ?? b.coastBuffer,
     };
   });
 }

@@ -4,6 +4,7 @@ import {
   generateBiomeGridFromTerrain,
   calculateLandElevPercentiles,
   resolveSlotWithFallback,
+  removeThinBands,
 } from './biomeAutoGenerator';
 
 function createTerrainSetup() {
@@ -204,3 +205,44 @@ test('5. Terrain elevation classification: high peaks receive mountain/snow (slo
     `High peak cells should mostly be mountain or snow (got ${mountainOrSnowCount}/${totalPeakCells})`
   );
 });
+
+test('6. removeThinBands: removes 1-cell wide forest ribbons while preserving thick patches', () => {
+  const cols = 20;
+  const rows = 20;
+  const grid = new Uint8Array(cols * rows).fill(3); // Background is Grassland (3)
+
+  // 1. Add a 1-cell wide forest line (slot 1) at row 5, cols 2..15
+  for (let c = 2; c <= 15; c++) {
+    grid[5 * cols + c] = 1;
+  }
+
+  // 2. Add a thick 6x6 forest patch (slot 2) at rows 10..15, cols 10..15
+  for (let r = 10; r <= 15; r++) {
+    for (let c = 10; c <= 15; c++) {
+      grid[r * cols + c] = 2;
+    }
+  }
+
+  removeThinBands(grid, cols, rows, [1, 2], 2);
+
+  // The 1-cell wide line should have been eliminated and replaced by grassland (3)
+  for (let c = 2; c <= 15; c++) {
+    assert.equal(
+      grid[5 * cols + c],
+      3,
+      `Cell at (5, ${c}) in thin line should be replaced with grassland (3)`
+    );
+  }
+
+  // The center of the 6x6 patch should remain forest (slot 2)
+  for (let r = 11; r <= 14; r++) {
+    for (let c = 11; c <= 14; c++) {
+      assert.equal(
+        grid[r * cols + c],
+        2,
+        `Core cell of thick forest at (${r}, ${c}) must be preserved`
+      );
+    }
+  }
+});
+

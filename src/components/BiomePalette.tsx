@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { BrushMode, Viewport } from '../types/map';
-import { CustomMapAsset, MapSymbolInstance } from '../types/symbols';
+import { CustomMapAsset, CustomSymbolCategory, MapSymbolInstance } from '../types/symbols';
 import { BiomePlacePanel } from './BiomePlacePanel';
 
 export interface BiomePaletteProps {
@@ -36,6 +36,8 @@ export interface BiomePaletteProps {
   onClose: () => void;
   biomeTypes?: BiomeType[];
   onOpenEditor?: () => void;
+  onUpdateBiomeTypes?: (updated: BiomeType[]) => void;
+  customCategories?: CustomSymbolCategory[];
 
   // Auto-placement props
   customAssets?: CustomMapAsset[];
@@ -91,6 +93,8 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
   activeRegionId,
   waterGrid,
   onApplyBiomeAndSymbols,
+  onUpdateBiomeTypes,
+  customCategories,
 }) => {
   const [showConfirmClear, setShowConfirmClear] = useState<boolean>(false);
   const activeBiomeTypes = biomeTypes && biomeTypes.length > 0 ? biomeTypes : DEFAULT_BIOME_TYPES;
@@ -332,6 +336,8 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
           activeRegionId={activeRegionId ?? null}
           waterGrid={waterGrid}
           onApplyBiomeAndSymbols={onApplyBiomeAndSymbols}
+          onUpdateBiomeTypes={onUpdateBiomeTypes}
+          customCategories={customCategories}
         />
       )}
 

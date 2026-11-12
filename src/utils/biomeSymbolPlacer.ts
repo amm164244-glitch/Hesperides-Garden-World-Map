@@ -22,6 +22,7 @@ export interface PlaceBiomeSymbolsParams {
   edgeFade?: number;
   maxCount?: number;
   dryRun?: boolean;
+  overallDensity?: number;
   onProgress?: (progress: number, message: string, slot?: number) => void;
 }
 
@@ -240,6 +241,20 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
 
   const newlyPlacedSymbols: MapSymbolInstance[] = [];
 
+  // Compute water distance transform once if any biome specifies a coastBuffer
+  let distToWaterMap: Float32Array | null = null;
+  const needsCoastDist = effectiveBiomeTypes.some((b) => (b.coastBuffer ?? 0) > 0);
+  if (needsCoastDist) {
+    const landMask = new Uint8Array(gridCols * gridRows);
+    for (let i = 0; i < landMask.length; i++) {
+      const elev = elevationGrid ? elevationGrid[i] : 50;
+      if (elev >= seaLevel && !(waterGrid && waterGrid[i] >= 128)) {
+        landMask[i] = 1;
+      }
+    }
+    distToWaterMap = computeChamferDistance(landMask, gridCols, gridRows, mapWidth, mapHeight);
+  }
+
   for (let bIdx = 0; bIdx < effectiveBiomeTypes.length; bIdx++) {
     const b = effectiveBiomeTypes[bIdx];
     const slot = b.slot;
@@ -273,6 +288,8 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
     // 3. Build placeable mask
     const mask = new Uint8Array(gridCols * gridRows);
     let placeableCellCount = 0;
+    const bufferDist = b.coastBuffer ?? 0;
+    const cellMargin = Math.max(cellW, cellH) * 0.5;
 
     for (let r = 0; r < gridRows; r++) {
       const rowOff = r * gridCols;
@@ -285,6 +302,9 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
           }
           const elev = elevationGrid ? elevationGrid[idx] : 50;
           if (elev >= seaLevel) {
+            if (bufferDist > 0 && distToWaterMap && distToWaterMap[idx] < bufferDist + cellMargin) {
+              continue;
+            }
             mask[idx] = 1;
             placeableCellCount++;
           }
@@ -320,7 +340,10 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
       const c = Math.floor((wx / mapWidth) * gridCols);
       const r = Math.floor((wy / mapHeight) * gridRows);
       if (c < 0 || c >= gridCols || r < 0 || r >= gridRows) return false;
-      return mask[r * gridCols + c] === 1;
+      const idx = r * gridCols + c;
+      if (mask[idx] !== 1) return false;
+      if (bufferDist > 0 && distToWaterMap && distToWaterMap[idx] < bufferDist + cellMargin) return false;
+      return true;
     };
 
     const minDistSq = minDist * minDist;
@@ -461,11 +484,19 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
         const ridgeness = elevDiff > 0 ? smoothstep(0, 7.0, elevDiff) : 0;
 
         // Modulate candidate acceptance probability along mountain ridges
-        ridgeFactor = (1 - w * 0.8) + (w * 2.3) * ridgeness;
+        // Baseline 1.0 ensures continuous highlands are populated evenly, with extra boost on crests
+        ridgeFactor = 1.0 + (w * 1.5) * ridgeness;
       }
 
+      const overallMult = Math.max(0.01, Math.min(1.0, params.overallDensity ?? 1.0));
       const baseDensity = (b.density ?? 50) / 100;
-      const densityProb = Math.min(1.0, baseDensity * ridgeFactor);
+
+      // For mountain biomes (minDistance >= 12), avoid over-decimation to keep continuous ranges unbroken
+      const isMountainBiome = (b.minDistance ?? 8) >= 12;
+      const densityProb = isMountainBiome
+        ? Math.min(1.0, baseDensity * ridgeFactor * Math.min(1.0, overallMult * 2.2))
+        : Math.min(1.0, baseDensity * ridgeFactor * overallMult);
+
       if (rng.next() >= densityProb) {
         continue;
       }
@@ -531,9 +562,10 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
         ) {
           t = Math.max(0, Math.min(1, (cellElev - chosenRule.elevationMin) / (chosenRule.elevationMax - chosenRule.elevationMin)));
         } else if (chosenRule.elevationMin !== undefined) {
-          t = Math.max(0, Math.min(1, (cellElev - chosenRule.elevationMin) / Math.max(1, 100 - chosenRule.elevationMin)));
+          const maxRef = chosenRule.elevationMax ?? Math.max(chosenRule.elevationMin + 15, 95);
+          t = Math.max(0, Math.min(1, (cellElev - chosenRule.elevationMin) / Math.max(1, maxRef - chosenRule.elevationMin)));
         } else {
-          t = Math.max(0, Math.min(1, (cellElev - seaLevel) / Math.max(1, 100 - seaLevel)));
+          t = Math.max(0, Math.min(1, (cellElev - seaLevel) / Math.max(1, 95 - seaLevel)));
         }
         const baseScale = scaleMin + t * (scaleMax - scaleMin);
         const jitter = 1 + (rng.next() * 0.16 - 0.08); // ±8% natural variation

@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { BiomeType, BiomeSymbolRule, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { MapData } from '../types/map';
-import { CustomMapAsset } from '../types/symbols';
+import { CustomMapAsset, CustomSymbolCategory } from '../types/symbols';
 import {
   addBiomeType,
   countBiomeUsage,
@@ -26,6 +26,21 @@ import {
   resolveSymbolRule,
 } from '../utils/biomeTypes';
 
+
+const CATEGORY_LABELS: Record<string, string> = {
+  tree: '樹木・森林',
+  mountain: '山脈・火山・丘',
+  settlement: '拠点・城',
+  village: '村',
+  town: '街・都市',
+  port: '港',
+  tower: '塔',
+  dungeon: 'ダンジョン・遺跡',
+  maritime: '海洋',
+  landmark: 'ランドマーク',
+  custom: 'その他',
+};
+
 interface BiomeTypeEditorProps {
   isOpen: boolean;
   onClose: () => void;
@@ -33,6 +48,7 @@ interface BiomeTypeEditorProps {
   onSave: (updatedBiomeTypes: BiomeType[], removedSlots: number[]) => void;
   mapData: MapData;
   customAssets?: CustomMapAsset[];
+  customCategories?: CustomSymbolCategory[];
   seaLevel?: number;
 }
 
@@ -43,6 +59,7 @@ const BiomeTypeEditorComponent: React.FC<BiomeTypeEditorProps> = ({
   onSave,
   mapData,
   customAssets = [],
+  customCategories = [],
   seaLevel,
 }) => {
   const [draftTypes, setDraftTypes] = useState<BiomeType[]>([]);
@@ -194,6 +211,20 @@ const BiomeTypeEditorComponent: React.FC<BiomeTypeEditorProps> = ({
     if (!currentBiome) return;
     const existing = currentBiome.symbols || [];
     updateCurrent({ symbols: [...existing, rule] });
+    setIsSymbolPickerOpen(false);
+  };
+
+  /** Adds several rules at once, skipping custom assets this biome already uses. */
+  const handleAddSymbolRules = (rules: BiomeSymbolRule[]) => {
+    if (!currentBiome) return;
+    const existing = currentBiome.symbols || [];
+    const used = new Set(
+      existing.filter((r: BiomeSymbolRule) => r.kind === 'custom' && !!r.customAssetId).map((r: BiomeSymbolRule) => r.customAssetId as string)
+    );
+    const fresh = rules.filter((r: BiomeSymbolRule) => !(r.kind === 'custom' && r.customAssetId && used.has(r.customAssetId)));
+    if (fresh.length > 0) {
+      updateCurrent({ symbols: [...existing, ...fresh] });
+    }
     setIsSymbolPickerOpen(false);
   };
 
@@ -891,36 +922,70 @@ const BiomeTypeEditorComponent: React.FC<BiomeTypeEditorProps> = ({
                   <div className="flex items-center justify-between text-xs font-bold text-emerald-300 border-b border-stone-800 pb-1">
                     <span className="flex items-center gap-1.5">
                       <ImageIcon className="w-3.5 h-3.5" />
-                      登録ドット絵シンボル ({customAssets.length})
+                      登録シンボル ({customAssets.length})
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {customAssets.map((asset) => (
-                      <button
-                        key={asset.id}
-                        type="button"
-                        onClick={() =>
-                          handleAddSymbolRule({
-                            kind: 'custom',
-                            customAssetId: asset.id,
-                            weight: 5,
-                            scaleMin: 0.8,
-                            scaleMax: 1.2,
-                          })
-                        }
-                        className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group cursor-pointer"
-                      >
-                        <img
-                          src={asset.dataUrl}
-                          alt={asset.name}
-                          className="w-8 h-8 rounded bg-stone-900 object-contain p-0.5 border border-stone-700"
-                        />
-                        <span className="text-xs text-stone-300 group-hover:text-amber-200 truncate">
-                          {asset.name}
+                  {Object.entries(
+                    (customAssets as CustomMapAsset[]).reduce<Record<string, CustomMapAsset[]>>((acc: Record<string, CustomMapAsset[]>, asset: CustomMapAsset) => {
+                      const key = asset.category || 'custom';
+                      (acc[key] ||= []).push(asset);
+                      return acc;
+                    }, {})
+                  ).map(([category, group]: [string, CustomMapAsset[]]) => (
+                    <div key={category} className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-stone-400">
+                          {customCategories.find((c: CustomSymbolCategory) => c.id === category)?.name ?? CATEGORY_LABELS[category] ?? category} ({group.length})
                         </span>
-                      </button>
-                    ))}
-                  </div>
+                        {group.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleAddSymbolRules(
+                                group.map((asset: CustomMapAsset) => ({
+                                  kind: 'custom' as const,
+                                  customAssetId: asset.id,
+                                  weight: 5,
+                                  scaleMin: 0.8,
+                                  scaleMax: 1.2,
+                                }))
+                              )
+                            }
+                            className="text-[11px] px-2 py-0.5 rounded bg-emerald-700/40 hover:bg-emerald-600/60 text-emerald-200 border border-emerald-600/50 transition"
+                          >
+                            このカテゴリを全て追加
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {group.map((asset: CustomMapAsset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            onClick={() =>
+                              handleAddSymbolRule({
+                                kind: 'custom',
+                                customAssetId: asset.id,
+                                weight: 5,
+                                scaleMin: 0.8,
+                                scaleMax: 1.2,
+                              })
+                            }
+                            className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group cursor-pointer"
+                          >
+                            <img
+                              src={asset.dataUrl}
+                              alt={asset.name}
+                              className="w-8 h-8 rounded bg-stone-900 object-contain p-0.5 border border-stone-700"
+                            />
+                            <span className="text-xs text-stone-300 group-hover:text-amber-200 truncate">
+                              {asset.name}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

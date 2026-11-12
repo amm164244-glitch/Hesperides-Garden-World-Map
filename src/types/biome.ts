@@ -25,6 +25,7 @@ export interface BiomeType {
   minDistance: number;            // 地図座標でのシンボル間の最小距離。初期値 8、範囲 2〜60
   flipRandom: boolean;            // 左右反転をランダムにするか。初期値 true
   ridgeWeight?: number;           // 0〜1。尾根・稜線に沿って優先配置する重み (山脈用、既定 0)
+  coastBuffer?: number;           // 水辺・海岸線からの最小除外距離（ワールド単位、既定 0）
 }
 
 export const DEFAULT_BIOME_TYPES: BiomeType[] = [
@@ -36,6 +37,7 @@ export const DEFAULT_BIOME_TYPES: BiomeType[] = [
     density: 50,
     minDistance: 8,
     flipRandom: true,
+    coastBuffer: 12,
   },
   {
     slot: 2,
@@ -45,6 +47,7 @@ export const DEFAULT_BIOME_TYPES: BiomeType[] = [
     density: 50,
     minDistance: 8,
     flipRandom: true,
+    coastBuffer: 12,
   },
   {
     slot: 3,

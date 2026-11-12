@@ -868,4 +868,119 @@ test('17. ridgeWeight prioritizes mountain ridge placement and scaleByElevation 
   }
 });
 
+test('18. overallDensity scales symbol placement count predictably', () => {
+  const setup = createTestSetup();
+
+  const forestBiome: BiomeType = {
+    slot: 1,
+    name: '森林',
+    color: '#1f5d3a',
+    symbols: [
+      {
+        kind: 'builtin',
+        symbolType: 'tree_pine',
+        weight: 5,
+        scaleMin: 0.5,
+        scaleMax: 0.8,
+      },
+    ],
+    density: 80,
+    minDistance: 6,
+    flipRandom: true,
+  };
+
+  const res100 = placeBiomeSymbols({
+    ...setup,
+    biomeTypes: [forestBiome],
+    targetSlots: [1],
+    seed: 8888,
+    edgeFade: 0,
+    overallDensity: 1.0,
+  });
+
+  const res40 = placeBiomeSymbols({
+    ...setup,
+    biomeTypes: [forestBiome],
+    targetSlots: [1],
+    seed: 8888,
+    edgeFade: 0,
+    overallDensity: 0.4,
+  });
+
+  const res10 = placeBiomeSymbols({
+    ...setup,
+    biomeTypes: [forestBiome],
+    targetSlots: [1],
+    seed: 8888,
+    edgeFade: 0,
+    overallDensity: 0.1,
+  });
+
+  assert(
+    res100.stats.totalPlaced > res40.stats.totalPlaced,
+    `100% density (${res100.stats.totalPlaced}) should produce more symbols than 40% density (${res40.stats.totalPlaced})`
+  );
+  assert(
+    res40.stats.totalPlaced > res10.stats.totalPlaced,
+    `40% density (${res40.stats.totalPlaced}) should produce more symbols than 10% density (${res10.stats.totalPlaced})`
+  );
+  assert(
+    res10.stats.totalPlaced > 0,
+    `10% density should still place some symbols`
+  );
+});
+
+test('19. coastBuffer strictly excludes symbol placement near water/coastline', () => {
+  const setup = createTestSetup();
+  // Set sea level so bottom half is land, top half is sea
+  const seaLevel = 35;
+  for (let r = 0; r < setup.gridRows; r++) {
+    for (let c = 0; c < setup.gridCols; c++) {
+      const idx = r * setup.gridCols + c;
+      setup.elevationGrid[idx] = r < setup.gridRows / 2 ? 10 : 50; // top half is water (elev 10 < 35)
+      setup.biomeGrid[idx] = r < setup.gridRows / 2 ? 0 : 1; // bottom half is forest
+    }
+  }
+
+  const bufferedBiome: BiomeType = {
+    slot: 1,
+    name: '針葉樹林',
+    color: '#1f5d3a',
+    symbols: [
+      {
+        kind: 'builtin',
+        symbolType: 'tree_pine',
+        weight: 5,
+        scaleMin: 0.5,
+        scaleMax: 0.8,
+      },
+    ],
+    density: 100,
+    minDistance: 4,
+    flipRandom: true,
+    coastBuffer: 30, // 30 world units from water
+  };
+
+  const res = placeBiomeSymbols({
+    ...setup,
+    seaLevel,
+    biomeTypes: [bufferedBiome],
+    targetSlots: [1],
+    seed: 42,
+    edgeFade: 0,
+  });
+
+  assert(res.symbols.length > 0, 'Should place symbols away from coast');
+
+  const waterBoundaryY = setup.mapHeight / 2;
+  for (const sym of res.symbols) {
+    const distToWater = sym.y - waterBoundaryY;
+    assert(
+      distToWater >= 30,
+      `Symbol at y=${sym.y.toFixed(1)} must be at least 30 units away from water boundary ${waterBoundaryY} (actual dist: ${distToWater.toFixed(1)})`
+    );
+  }
+});
+
+
 

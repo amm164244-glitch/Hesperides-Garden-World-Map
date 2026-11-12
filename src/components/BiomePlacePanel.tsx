@@ -13,9 +13,13 @@ import {
   ChevronUp,
   Wand2,
   Mountain,
+  Plus,
+  Sliders,
+  X,
+  Image as ImageIcon,
 } from 'lucide-react';
-import { BiomeType } from '../types/biome';
-import { CustomMapAsset, MapSymbolInstance } from '../types/symbols';
+import { BiomeSymbolRule, BiomeType } from '../types/biome';
+import { CustomMapAsset, CustomSymbolCategory, MapSymbolInstance, MapSymbolType } from '../types/symbols';
 import { Viewport } from '../types/map';
 import {
   placeBiomeSymbols,
@@ -32,12 +36,13 @@ import {
   generateBiomeGridFromTerrain,
   calculateLandElevPercentiles,
 } from '../utils/biomeAutoGenerator';
-import { applyDefaultRulesToBiomeTypes } from '../utils/biomeTypes';
+import { applyDefaultRulesToBiomeTypes, buildDefaultSymbolRules } from '../utils/biomeTypes';
 
 export interface BiomePlacePanelProps {
   selectedBiomeId: number;
   biomeTypes: BiomeType[];
   customAssets?: CustomMapAsset[];
+  customCategories?: CustomSymbolCategory[];
   activeBiomeGrid?: Uint8Array;
   elevationGrid?: Float32Array;
   seaLevel: number;
@@ -55,6 +60,7 @@ export interface BiomePlacePanelProps {
     newSymbols: MapSymbolInstance[],
     description: string
   ) => void;
+  onUpdateBiomeTypes?: (updated: BiomeType[]) => void;
 }
 
 const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
@@ -74,6 +80,8 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
   activeRegionId,
   waterGrid,
   onApplyBiomeAndSymbols,
+  onUpdateBiomeTypes,
+  customCategories = [],
 }) => {
   // Panel collapsed state
   const [isSectionOpen, setIsSectionOpen] = useState<boolean>(true);
@@ -84,8 +92,79 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
   const [rangeType, setRangeType] = useState<'all' | 'viewport'>('all');
   const [mode, setMode] = useState<'replace' | 'append'>('replace');
   const [edgeFade, setEdgeFade] = useState<number>(6);
+  const [overallDensity, setOverallDensity] = useState<number>(40);
   const [seed, setSeed] = useState<number>(() => Math.floor(Math.random() * 900000) + 100000);
   const [maxCount, setMaxCount] = useState<number>(20000);
+
+  // Mountain Symbol Configuration State (Slot 7)
+  const [isMountainPickerOpen, setIsMountainPickerOpen] = useState<boolean>(false);
+  const [mountainScaleFactor, setMountainScaleFactor] = useState<number>(1.0);
+
+  // Get current slot 7 biome
+  const mountainBiome = useMemo(() => {
+    return biomeTypes.find((b) => b.slot === 7) || null;
+  }, [biomeTypes]);
+
+  // Current mountain symbol rules (or default fallback rules if empty)
+  const currentMountainRules: BiomeSymbolRule[] = useMemo(() => {
+    if (mountainBiome && mountainBiome.symbols && mountainBiome.symbols.length > 0) {
+      return mountainBiome.symbols;
+    }
+    return buildDefaultSymbolRules(7, seaLevel);
+  }, [mountainBiome, seaLevel]);
+
+  // Handler to update mountain symbol rules (slot 7)
+  const handleUpdateMountainRules = useCallback((newRules: BiomeSymbolRule[]) => {
+    if (!onUpdateBiomeTypes) return;
+    const updated = biomeTypes.map((b) => {
+      if (b.slot === 7) {
+        return {
+          ...b,
+          symbols: newRules,
+          density: b.density || 90,
+          minDistance: b.minDistance || 16,
+          ridgeWeight: b.ridgeWeight !== undefined ? b.ridgeWeight : 0.25,
+        };
+      }
+      return b;
+    });
+    onUpdateBiomeTypes(updated);
+  }, [biomeTypes, onUpdateBiomeTypes]);
+
+  // Handler to add a symbol rule to mountains
+  const handleAddMountainSymbol = useCallback((rule: BiomeSymbolRule) => {
+    const nextRules = [...currentMountainRules, rule];
+    handleUpdateMountainRules(nextRules);
+  }, [currentMountainRules, handleUpdateMountainRules]);
+
+  // Handler to remove a symbol rule from mountains
+  const handleRemoveMountainSymbol = useCallback((index: number) => {
+    const nextRules = currentMountainRules.filter((_, i) => i !== index);
+    handleUpdateMountainRules(nextRules);
+  }, [currentMountainRules, handleUpdateMountainRules]);
+
+  // Handler to reset mountains to default rules
+  const handleResetMountainDefaults = useCallback(() => {
+    const defaultRules = buildDefaultSymbolRules(7, seaLevel);
+    handleUpdateMountainRules(defaultRules);
+    setMountainScaleFactor(1.0);
+  }, [seaLevel, handleUpdateMountainRules]);
+
+  // Handler to scale mountain symbols
+  const handleApplyMountainScaleMultiplier = useCallback((multiplier: number) => {
+    setMountainScaleFactor(multiplier);
+    const updatedRules = currentMountainRules.map((r) => {
+      // Scale min & max proportionally, clamped between 0.3 and 3.0
+      const baseMin = 0.8;
+      const baseMax = 1.1;
+      return {
+        ...r,
+        scaleMin: Number(Math.max(0.3, Math.min(3.0, (r.scaleMin || baseMin) * (multiplier / mountainScaleFactor))).toFixed(2)),
+        scaleMax: Number(Math.max(0.35, Math.min(3.0, (r.scaleMax || baseMax) * (multiplier / mountainScaleFactor))).toFixed(2)),
+      };
+    });
+    handleUpdateMountainRules(updatedRules);
+  }, [currentMountainRules, mountainScaleFactor, handleUpdateMountainRules]);
 
   // Deletion target setting
   const [deleteTargetMode, setDeleteTargetMode] = useState<'selected' | 'all'>('selected');
@@ -190,6 +269,17 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
     return countAutoBiomeSymbols(existingSymbols);
   }, [existingSymbols]);
 
+  // Counts of currently placed auto-symbols per biome slot
+  const placedCountsPerSlot = useMemo(() => {
+    const counts: Record<number, number> = {};
+    for (const sym of existingSymbols) {
+      if (sym.autoBiomeSlot !== undefined) {
+        counts[sym.autoBiomeSlot] = (counts[sym.autoBiomeSlot] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [existingSymbols]);
+
   // Debounced estimation (dryRun)
   useEffect(() => {
     if (!activeBiomeGrid) {
@@ -238,6 +328,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             seed,
             edgeFade,
             maxCount,
+            overallDensity: overallDensity / 100,
             dryRun: true,
           },
         };
@@ -283,6 +374,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             seed,
             edgeFade,
             maxCount,
+            overallDensity: overallDensity / 100,
             dryRun: true,
           });
           if (activeReqIdRef.current === reqId) {
@@ -319,6 +411,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
     seed,
     edgeFade,
     maxCount,
+    overallDensity,
     getOrCreateWorker,
   ]);
 
@@ -381,6 +474,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             seed,
             edgeFade,
             maxCount,
+            overallDensity: overallDensity / 100,
             dryRun: false,
           },
         };
@@ -460,6 +554,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               seed,
               edgeFade,
               maxCount,
+              overallDensity: overallDensity / 100,
               dryRun: false,
             });
 
@@ -501,6 +596,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
       seed,
       edgeFade,
       maxCount,
+      overallDensity,
       estimatedStats,
       getOrCreateWorker,
       onApplySymbols,
@@ -565,6 +661,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
           seed,
           edgeFade,
           maxCount,
+          overallDensity: overallDensity / 100,
           dryRun: false,
           onProgress: (p, msg) => {
             setProgressInfo({ progress: 45 + Math.round(p * 0.5), message: msg });
@@ -621,6 +718,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
     existingSymbols,
     edgeFade,
     maxCount,
+    overallDensity,
     onApplyBiomeAndSymbols,
     onApplySymbols,
   ]);
@@ -696,6 +794,109 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               />
               <span>バイオームを地形から再生成</span>
             </label>
+
+            {/* Mountain Symbols Specification & Size Slider */}
+            <div className="mt-1 pt-2 border-t border-amber-700/40 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-amber-200 flex items-center gap-1">
+                  <Mountain className="w-3.5 h-3.5 text-amber-400" />
+                  <span>配置する山のシンボル ({currentMountainRules.length}種)</span>
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={handleResetMountainDefaults}
+                    className="text-[10px] text-stone-400 hover:text-stone-200 px-1 py-0.5 rounded hover:bg-stone-800 transition"
+                    title="山のシンボルを標準（雪冠峰・岩峰・岩稜・丘陵）に戻す"
+                  >
+                    リセット
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsMountainPickerOpen(true)}
+                    className="text-[10px] text-amber-300 hover:text-amber-100 font-semibold px-1.5 py-0.5 rounded bg-amber-900/60 hover:bg-amber-800/80 border border-amber-600/60 transition flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>シンボル追加</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Symbol chips list */}
+              <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-0.5">
+                {currentMountainRules.map((rule, idx) => {
+                  let label = '山シンボル';
+                  let iconThumb = '⛰️';
+                  let assetUrl: string | undefined;
+
+                  if (rule.kind === 'builtin') {
+                    const typeMap: Record<string, string> = {
+                      mountain_snow: '雪冠主峰',
+                      mountain_rock: '岩峰',
+                      mountain_ridge: '岩稜',
+                      hill_mound: '丘陵群',
+                      volcano: '火山',
+                    };
+                    label = typeMap[rule.symbolType || ''] || rule.symbolType || '山';
+                    iconThumb = rule.symbolType === 'volcano' ? '🌋' : rule.symbolType === 'hill_mound' ? '🟢' : '⛰️';
+                  } else if (rule.kind === 'custom') {
+                    const asset = customAssets.find((a) => a.id === rule.customAssetId);
+                    label = asset?.name || 'カスタム';
+                    assetUrl = asset?.dataUrl;
+                  }
+
+                  return (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-stone-900/90 border border-stone-700/80 text-[10.5px] text-stone-200 shadow-xs"
+                    >
+                      {assetUrl ? (
+                        <img src={assetUrl} alt={label} className="w-3.5 h-3.5 object-contain rounded-xs" />
+                      ) : (
+                        <span className="text-[11px]">{iconThumb}</span>
+                      )}
+                      <span className="truncate max-w-[70px]">{label}</span>
+                      <span className="text-[9px] text-amber-400 font-mono">w{rule.weight}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveMountainSymbol(idx)}
+                        className="text-stone-500 hover:text-rose-400 p-0.5 transition"
+                        title="この山シンボルを除外"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Mountain Scale (Size) Slider */}
+              <div className="flex flex-col gap-1 pt-1 border-t border-amber-900/40">
+                <div className="flex justify-between items-center text-[10.5px]">
+                  <span className="text-stone-300 font-medium flex items-center gap-1">
+                    <Sliders className="w-3 h-3 text-amber-400" />
+                    <span>山の大きさ (倍率):</span>
+                  </span>
+                  <span className="font-mono text-amber-400 font-bold bg-stone-900 px-1.5 py-0.2 rounded border border-stone-700 text-[10px]">
+                    {mountainScaleFactor.toFixed(2)}x
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0.6}
+                  max={1.8}
+                  step={0.05}
+                  value={mountainScaleFactor}
+                  onChange={(e) => handleApplyMountainScaleMultiplier(Number(e.target.value))}
+                  className="w-full h-1 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                />
+                <div className="flex justify-between text-[9px] text-stone-500">
+                  <span>小 (0.6x)</span>
+                  <span>標準 (1.0x)</span>
+                  <span>大 (1.8x)</span>
+                </div>
+              </div>
+            </div>
 
             <button
               type="button"
@@ -823,7 +1024,31 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             </div>
           </div>
 
-          {/* 4. Edge Fade Slider */}
+          {/* 4. Overall Density Slider */}
+          <div className="flex flex-col gap-1 bg-stone-900/60 p-2 rounded border border-stone-800/80">
+            <div className="flex justify-between items-center text-[11px]">
+              <span className="text-stone-300 font-medium">全体の配置量:</span>
+              <span className="font-mono text-amber-400 font-bold bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/50">
+                {overallDensity}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min={10}
+              max={100}
+              step={5}
+              value={overallDensity}
+              onChange={(e) => setOverallDensity(Number(e.target.value))}
+              className="accent-amber-500 cursor-pointer h-1.5 bg-stone-700 rounded-lg w-full"
+            />
+            <div className="flex justify-between text-[9px] text-stone-500">
+              <span>10% (疎ら)</span>
+              <span>40% (標準)</span>
+              <span>100% (高密度)</span>
+            </div>
+          </div>
+
+          {/* 5. Edge Fade Slider */}
           <div className="flex flex-col gap-1">
             <div className="flex justify-between text-stone-400 text-[11px]">
               <span>境界を薄くする幅:</span>
@@ -841,6 +1066,35 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             <div className="flex justify-between text-[9px] text-stone-500">
               <span>0 (境界まで密集)</span>
               <span>30 (端を自然に薄く)</span>
+            </div>
+          </div>
+
+          {/* Persistent Placed Symbols Breakdown */}
+          <div className="bg-stone-900/80 border border-stone-800 p-2 rounded-lg flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-stone-300 font-medium">
+                マップ上の自動配置シンボル:
+              </span>
+              <span className="font-mono font-bold text-xs text-amber-300">
+                {totalAutoPlacedCount.toLocaleString()} 個
+              </span>
+            </div>
+            <div className="text-[10px] text-stone-400 flex flex-wrap gap-x-2.5 gap-y-1">
+              {biomeTypes.map((b) => {
+                const count = placedCountsPerSlot[b.slot] || 0;
+                return (
+                  <span key={b.slot} className="inline-flex items-center gap-1">
+                    <span
+                      className="w-1.5 h-1.5 rounded-full shrink-0"
+                      style={{ backgroundColor: b.color }}
+                    />
+                    <span className="truncate max-w-[80px]">{b.name}</span>
+                    <span className={`font-mono ${count > 0 ? 'text-amber-200 font-semibold' : 'text-stone-500'}`}>
+                      {count}
+                    </span>
+                  </span>
+                );
+              })}
             </div>
           </div>
 
@@ -1112,6 +1366,119 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
                 </span>
               </button>
             )}
+          </div>
+        </div>
+      )}
+      {/* Mountain Symbol Picker Modal */}
+      {isMountainPickerOpen && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150">
+          <div className="bg-stone-900 border border-stone-700 rounded-2xl max-w-md w-full max-h-[80vh] flex flex-col shadow-2xl text-stone-200 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-stone-800 bg-stone-950/80">
+              <div className="flex items-center gap-2">
+                <Mountain className="w-4 h-4 text-amber-400" />
+                <h4 className="font-bold text-sm text-amber-200">山脈に配置するシンボルを選択</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMountainPickerOpen(false)}
+                className="p-1 text-stone-400 hover:text-stone-100 rounded"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 text-xs">
+              {/* Built-in Mountain Symbols */}
+              <div className="space-y-2">
+                <div className="font-bold text-amber-300 border-b border-stone-800 pb-1">
+                  標準の山脈・丘陵シンボル
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { type: 'mountain_snow' as MapSymbolType, name: '峻厳な雪冠主峰', icon: '🏔️', defaultMin: 0.85, defaultMax: 1.15, elevationMin: 70 },
+                    { type: 'mountain_rock' as MapSymbolType, name: '鋭利な岩峰', icon: '⛰️', defaultMin: 0.78, defaultMax: 1.05, elevationMin: 55 },
+                    { type: 'mountain_ridge' as MapSymbolType, name: '連続する岩稜', icon: '🗻', defaultMin: 0.72, defaultMax: 0.95, elevationMin: 48 },
+                    { type: 'hill_mound' as MapSymbolType, name: 'なだらかな丘陵群', icon: '🟢', defaultMin: 0.55, defaultMax: 0.80 },
+                    { type: 'volcano' as MapSymbolType, name: '孤高の火山・噴火口', icon: '🌋', defaultMin: 0.80, defaultMax: 1.10 },
+                  ].map((item) => (
+                    <button
+                      key={item.type}
+                      type="button"
+                      onClick={() => {
+                        handleAddMountainSymbol({
+                          kind: 'builtin',
+                          symbolType: item.type,
+                          weight: 5,
+                          scaleMin: Number((item.defaultMin * mountainScaleFactor).toFixed(2)),
+                          scaleMax: Number((item.defaultMax * mountainScaleFactor).toFixed(2)),
+                          elevationMin: item.elevationMin,
+                          scaleByElevation: item.elevationMin !== undefined,
+                        });
+                        setIsMountainPickerOpen(false);
+                      }}
+                      className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group cursor-pointer"
+                    >
+                      <span className="text-xl shrink-0">{item.icon}</span>
+                      <div className="truncate">
+                        <div className="font-semibold text-stone-200 group-hover:text-amber-200 truncate">
+                          {item.name}
+                        </div>
+                        <div className="text-[10px] text-stone-500 font-mono">
+                          {item.defaultMin}x 〜 {item.defaultMax}x
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Custom Registered / Imported Symbols */}
+              {customAssets.length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-stone-800">
+                  <div className="flex items-center justify-between font-bold text-emerald-300 border-b border-stone-800 pb-1">
+                    <span className="flex items-center gap-1.5">
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      登録・インポートしたシンボル ({customAssets.length})
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {customAssets.map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        onClick={() => {
+                          handleAddMountainSymbol({
+                            kind: 'custom',
+                            customAssetId: asset.id,
+                            weight: 5,
+                            scaleMin: Number((0.8 * mountainScaleFactor).toFixed(2)),
+                            scaleMax: Number((1.1 * mountainScaleFactor).toFixed(2)),
+                            scaleByElevation: true,
+                          });
+                          setIsMountainPickerOpen(false);
+                        }}
+                        className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group cursor-pointer"
+                      >
+                        <img
+                          src={asset.dataUrl}
+                          alt={asset.name}
+                          className="w-8 h-8 rounded bg-stone-900 object-contain p-0.5 border border-stone-700 shrink-0"
+                        />
+                        <div className="truncate">
+                          <div className="font-semibold text-stone-200 group-hover:text-amber-200 truncate">
+                            {asset.name}
+                          </div>
+                          <div className="text-[10px] text-stone-500">
+                            {asset.category || 'カスタム'}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

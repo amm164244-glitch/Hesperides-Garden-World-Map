@@ -8,6 +8,7 @@
  */
 
 import { MapSymbolInstance, MapSymbolType, CustomMapAsset, SymbolColorTheme } from '../types/symbols';
+import { mipLevelCount, pickMipLevel } from './illustrationAsset';
 
 // Palette Constants & Dynamic Theme Colors
 export interface ActiveSymbolColors {
@@ -49,24 +50,76 @@ export let ROOF_BLUE = '#2b4d6b';
 export let GOLD_ACCENT = '#c99e38';
 
 // In-memory Image Cache for Custom Assets
-const customAssetImageCache = new Map<string, HTMLImageElement>();
+interface CachedAssetImage {
+  src: string;
+  img: HTMLImageElement;
+  /** Halving mip chain built once the image has loaded (index 0 = original). */
+  mips?: Array<HTMLImageElement | HTMLCanvasElement>;
+}
+const customAssetImageCache = new Map<string, CachedAssetImage>();
 let onImageLoadedCallback: (() => void) | null = null;
 
 export function setCustomImageLoadedCallback(cb: (() => void) | null) {
   onImageLoadedCallback = cb;
 }
 
-export function getCachedCustomImage(asset: CustomMapAsset): HTMLImageElement | null {
-  let img = customAssetImageCache.get(asset.id);
-  if (!img) {
-    img = new Image();
+function getCachedEntry(asset: CustomMapAsset): CachedAssetImage | null {
+  let entry = customAssetImageCache.get(asset.id);
+  // Re-create when the asset image was edited but kept its id.
+  if (!entry || entry.src !== asset.dataUrl) {
+    const img = new Image();
     img.onload = () => {
       onImageLoadedCallback?.();
     };
     img.src = asset.dataUrl;
-    customAssetImageCache.set(asset.id, img);
+    entry = { src: asset.dataUrl, img };
+    customAssetImageCache.set(asset.id, entry);
   }
-  return img.complete && img.naturalWidth > 0 ? img : null;
+  return entry.img.complete && entry.img.naturalWidth > 0 ? entry : null;
+}
+
+export function getCachedCustomImage(asset: CustomMapAsset): HTMLImageElement | null {
+  return getCachedEntry(asset)?.img ?? null;
+}
+
+function buildMips(entry: CachedAssetImage): Array<HTMLImageElement | HTMLCanvasElement> {
+  const base = entry.img;
+  const mips: Array<HTMLImageElement | HTMLCanvasElement> = [base];
+  const levels = mipLevelCount(base.naturalWidth);
+  let prev: CanvasImageSource = base;
+  let w = base.naturalWidth;
+  let h = base.naturalHeight;
+  for (let i = 1; i < levels; i++) {
+    w = Math.max(1, Math.round(w / 2));
+    h = Math.max(1, Math.round(h / 2));
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const cctx = c.getContext('2d');
+    if (!cctx) break;
+    cctx.imageSmoothingEnabled = true;
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(prev, 0, 0, w, h);
+    mips.push(c);
+    prev = c;
+  }
+  return mips;
+}
+
+/**
+ * Returns the pre-scaled copy that is best for drawing `targetPx` device pixels wide.
+ * Drawing a 300px illustration down to 20px straight from the original shimmers and is slow;
+ * stepping through halved copies keeps it smooth.
+ */
+export function getAssetImageForSize(
+  asset: CustomMapAsset,
+  targetPx: number
+): HTMLImageElement | HTMLCanvasElement | null {
+  const entry = getCachedEntry(asset);
+  if (!entry) return null;
+  if (!entry.mips) entry.mips = buildMips(entry);
+  const level = pickMipLevel(entry.img.naturalWidth, targetPx, entry.mips.length);
+  return entry.mips[level];
 }
 
 /**
@@ -116,15 +169,18 @@ export function drawMapSymbol(
     if (customAssetId && customAssets) {
       const asset = customAssets.find((a) => a.id === customAssetId);
       if (asset) {
-        const img = getCachedCustomImage(asset);
+        const displayW = asset.displayWidth ?? 64;
+        const displayH = (asset.height / asset.width) * displayW;
+        // Device pixels the symbol will actually cover (ctx already holds zoom/DPR, scale and flip).
+        const m = ctx.getTransform();
+        const targetPx = displayW * Math.hypot(m.a, m.b);
+        const img = asset.isPixelArt ? getCachedCustomImage(asset) : getAssetImageForSize(asset, targetPx);
         if (img) {
           // If asset is pixel art, disable smoothing so pixel edges stay crisp and retro
           if (asset.isPixelArt) {
             ctx.imageSmoothingEnabled = false;
           }
-          // Render centered at base anchor
-          const displayW = 64;
-          const displayH = (asset.height / asset.width) * displayW;
+          // Render anchored at the ground-contact origin
           const ox = asset.originX ?? 0.5;
           const oy = asset.originY ?? 0.85;
           ctx.drawImage(img, -ox * displayW, -oy * displayH, displayW, displayH);
@@ -315,7 +371,19 @@ export function drawSortedSymbols(
       ctx.strokeStyle = '#f59e0b';
       ctx.lineWidth = 1.8 / (zoom * sym.scale);
       ctx.setLineDash([4 / (zoom * sym.scale), 3 / (zoom * sym.scale)]);
-      ctx.strokeRect(-24, -36, 48, 44);
+      const selAsset =
+        sym.type === 'custom' && sym.customAssetId
+          ? customAssets?.find((a) => a.id === sym.customAssetId)
+          : undefined;
+      if (selAsset) {
+        const dw = selAsset.displayWidth ?? 64;
+        const dh = (selAsset.height / selAsset.width) * dw;
+        const sox = selAsset.originX ?? 0.5;
+        const soy = selAsset.originY ?? 0.85;
+        ctx.strokeRect((sym.flipX ? -(1 - sox) : -sox) * dw, -soy * dh, dw, dh);
+      } else {
+        ctx.strokeRect(-24, -36, 48, 44);
+      }
       ctx.restore();
     }
   }

@@ -17,29 +17,32 @@ export const BIOME_GEN_CONSTANTS = {
   P96_RATIO: 0.96,
 
   // Slope Thresholds
-  STEEP_SLOPE_THRESHOLD: 0.35,
+  STEEP_SLOPE_THRESHOLD: 0.20,
 
   // Temperature Parameters
-  SNOW_TEMP_THRESHOLD: 0.22,
-  TEMP_ELEV_LAPSE_RATE: 0.007,
+  SNOW_TEMP_THRESHOLD: 0.18,
+  TEMP_ELEV_LAPSE_RATE: 0.0050,
   CONIFER_TEMP_MAX: 0.50,
-  DESERT_TEMP_MIN: 0.45,
+  DESERT_TEMP_MIN: 0.44,
 
   // Moisture Parameters
-  WETLAND_LAND_H_MAX: 9.0,
-  WETLAND_MOISTURE_MIN: 0.60,
-  WETLAND_WATER_DIST_MAX: 50.0,
-  DESERT_MOISTURE_MAX: 0.34,
+  WETLAND_LAND_H_MAX: 8.0,
+  WETLAND_MOISTURE_MIN: 0.65,
+  WETLAND_WATER_DIST_MAX: 45.0,
+  DESERT_MOISTURE_MAX: 0.32,
   CONIFER_MOISTURE_MIN: 0.42,
-  CONIFER_SUBALPINE_H_MIN: 18.0,
+  CONIFER_SUBALPINE_H_MIN: 15.0,
   BROADLEAF_MOISTURE_MIN: 0.42,
 
   // Noise & Jitter Scales
-  MOISTURE_NOISE_SCALE: 0.0025,
+  MOISTURE_NOISE_SCALE: 0.002,
+  PATCH_NOISE_SCALE: 0.001,
+  PATCH_AMPLITUDE: 0.15,
   TEMP_NOISE_SCALE: 0.002,
   JITTER_NOISE_SCALE: 0.015,
   JITTER_AMPLITUDE: 0.04,
-  WATER_DECAY_DIST: 120.0,
+  WATER_DECAY_DIST: 60.0,
+  WATER_BONUS_MAX: 0.10,
 };
 
 export interface GenerateBiomeGridParams {
@@ -189,6 +192,150 @@ export function applyMajorityFilter(
 }
 
 /**
+ * Morphological opening / core-distance filter to eliminate thin bands and isolated strands
+ * of target biome slots (e.g. 1-cell wide forest ribbons along coastlines).
+ * Targets without an interior core of radius >= minRadius (diameter ~ 2 * minRadius + 1 cells)
+ * are eliminated and replaced by the surrounding non-target land majority (typically grassland).
+ */
+export function removeThinBands(
+  grid: Uint8Array,
+  cols: number,
+  rows: number,
+  targetSlots: number[],
+  minRadius: number = 2
+): void {
+  const size = cols * rows;
+  const targetSet = new Set(targetSlots);
+  const mask = new Uint8Array(size);
+  let targetCount = 0;
+  for (let i = 0; i < size; i++) {
+    if (targetSet.has(grid[i])) {
+      mask[i] = 1;
+      targetCount++;
+    }
+  }
+
+  if (targetCount === 0) return;
+
+  // 1. Distance transform to nearest non-target cell
+  const dist = new Float32Array(size);
+  for (let i = 0; i < size; i++) {
+    dist[i] = mask[i] ? 9999 : 0;
+  }
+
+  for (let r = 0; r < rows; r++) {
+    const rowOff = r * cols;
+    for (let c = 0; c < cols; c++) {
+      const idx = rowOff + c;
+      if (!mask[idx]) continue;
+      let d = dist[idx];
+      if (r > 0) d = Math.min(d, dist[(r - 1) * cols + c] + 1);
+      if (c > 0) d = Math.min(d, dist[idx - 1] + 1);
+      if (r > 0 && c > 0) d = Math.min(d, dist[(r - 1) * cols + (c - 1)] + 1.414);
+      if (r > 0 && c < cols - 1) d = Math.min(d, dist[(r - 1) * cols + (c + 1)] + 1.414);
+      dist[idx] = d;
+    }
+  }
+
+  for (let r = rows - 1; r >= 0; r--) {
+    const rowOff = r * cols;
+    for (let c = cols - 1; c >= 0; c--) {
+      const idx = rowOff + c;
+      if (!mask[idx]) continue;
+      let d = dist[idx];
+      if (r < rows - 1) d = Math.min(d, dist[(r + 1) * cols + c] + 1);
+      if (c < cols - 1) d = Math.min(d, dist[idx + 1] + 1);
+      if (r < rows - 1 && c > 0) d = Math.min(d, dist[(r + 1) * cols + (c - 1)] + 1.414);
+      if (r < rows - 1 && c < cols - 1) d = Math.min(d, dist[(r + 1) * cols + (c + 1)] + 1.414);
+      dist[idx] = d;
+    }
+  }
+
+  // 2. Cores: cells deep inside the target region (dist >= minRadius)
+  const isCore = new Uint8Array(size);
+  for (let i = 0; i < size; i++) {
+    if (dist[i] >= minRadius) {
+      isCore[i] = 1;
+    }
+  }
+
+  // 3. Propagation from cores within the target region
+  const distFromCore = new Float32Array(size);
+  for (let i = 0; i < size; i++) {
+    distFromCore[i] = isCore[i] ? 0 : 9999;
+  }
+
+  for (let r = 0; r < rows; r++) {
+    const rowOff = r * cols;
+    for (let c = 0; c < cols; c++) {
+      const idx = rowOff + c;
+      if (!mask[idx] || isCore[idx]) continue;
+      let d = distFromCore[idx];
+      if (r > 0 && mask[(r - 1) * cols + c]) d = Math.min(d, distFromCore[(r - 1) * cols + c] + 1);
+      if (c > 0 && mask[idx - 1]) d = Math.min(d, distFromCore[idx - 1] + 1);
+      if (r > 0 && c > 0 && mask[(r - 1) * cols + (c - 1)]) d = Math.min(d, distFromCore[(r - 1) * cols + (c - 1)] + 1.414);
+      if (r > 0 && c < cols - 1 && mask[(r - 1) * cols + (c + 1)]) d = Math.min(d, distFromCore[(r - 1) * cols + (c + 1)] + 1.414);
+      distFromCore[idx] = d;
+    }
+  }
+
+  for (let r = rows - 1; r >= 0; r--) {
+    const rowOff = r * cols;
+    for (let c = cols - 1; c >= 0; c--) {
+      const idx = rowOff + c;
+      if (!mask[idx] || isCore[idx]) continue;
+      let d = distFromCore[idx];
+      if (r < rows - 1 && mask[(r + 1) * cols + c]) d = Math.min(d, distFromCore[(r + 1) * cols + c] + 1);
+      if (c < cols - 1 && mask[idx + 1]) d = Math.min(d, distFromCore[idx + 1] + 1);
+      if (r < rows - 1 && c > 0 && mask[(r + 1) * cols + (c - 1)]) d = Math.min(d, distFromCore[(r + 1) * cols + (c - 1)] + 1.414);
+      if (r < rows - 1 && c < cols - 1 && mask[(r + 1) * cols + (c + 1)]) d = Math.min(d, distFromCore[(r + 1) * cols + (c + 1)] + 1.414);
+      distFromCore[idx] = d;
+    }
+  }
+
+  // 4. Any target cell that cannot reach a core within maxReach (minRadius + 1.5) is discarded
+  const maxReach = minRadius + 1.5;
+  const toReplace: number[] = [];
+  for (let i = 0; i < size; i++) {
+    if (mask[i] && distFromCore[i] > maxReach) {
+      toReplace.push(i);
+    }
+  }
+
+  // 5. Replace discarded cells with the surrounding non-target land majority
+  for (const idx of toReplace) {
+    const r = Math.floor(idx / cols);
+    const c = idx % cols;
+    const counts = new Map<number, number>();
+
+    const rMin = Math.max(0, r - 3);
+    const rMax = Math.min(rows - 1, r + 3);
+    const cMin = Math.max(0, c - 3);
+    const cMax = Math.min(cols - 1, c + 3);
+
+    for (let nr = rMin; nr <= rMax; nr++) {
+      const rowOff = nr * cols;
+      for (let nc = cMin; nc <= cMax; nc++) {
+        const nSlot = grid[rowOff + nc];
+        if (nSlot !== 0 && !targetSet.has(nSlot)) {
+          counts.set(nSlot, (counts.get(nSlot) || 0) + 1);
+        }
+      }
+    }
+
+    let bestSlot = 3; // Default grassland fallback
+    let bestCount = -1;
+    for (const [slot, count] of counts.entries()) {
+      if (count > bestCount) {
+        bestCount = count;
+        bestSlot = slot;
+      }
+    }
+    grid[idx] = bestSlot;
+  }
+}
+
+/**
  * Generates biomeGrid based on terrain elevation, slope, latitude, and water coverage.
  */
 export function generateBiomeGridFromTerrain(params: GenerateBiomeGridParams): Uint8Array {
@@ -233,6 +380,7 @@ export function generateBiomeGridFromTerrain(params: GenerateBiomeGridParams): U
 
   // 4. Initialize deterministic procedural noise
   const moistNoise = new Noise2D(seed ^ 0xa8f152d1);
+  const patchNoise = new Noise2D(seed ^ 0x51c3b87a);
   const tempNoise = new Noise2D(seed ^ 0x3d7b891e);
   const jitterNoise = new Noise2D(seed ^ 0x6e2a91f4);
 
@@ -278,16 +426,17 @@ export function generateBiomeGridFromTerrain(params: GenerateBiomeGridParams): U
       const slope = Math.hypot(dx, dy);
 
       // Temperature calculation
-      const baseTemp = 1.0 - Math.pow(lat, 1.2);
+      const baseTemp = 1.0 - Math.pow(lat, 1.25);
       const elevLapse = landH * BIOME_GEN_CONSTANTS.TEMP_ELEV_LAPSE_RATE;
       const tNoise = tempNoise.sample(wx * BIOME_GEN_CONSTANTS.TEMP_NOISE_SCALE, wy * BIOME_GEN_CONSTANTS.TEMP_NOISE_SCALE) * 0.08;
       const temperature = Math.max(0, Math.min(1, baseTemp - elevLapse + tNoise));
 
-      // Moisture calculation
+      // Moisture calculation: combine medium-frequency FBM with low-frequency forest patch noise and moderated water bonus
       const mNoise = moistNoise.fbm(wx * BIOME_GEN_CONSTANTS.MOISTURE_NOISE_SCALE, wy * BIOME_GEN_CONSTANTS.MOISTURE_NOISE_SCALE, 3, 0.5, 2.0) * 0.5 + 0.5;
+      const pNoise = patchNoise.sample(wx * BIOME_GEN_CONSTANTS.PATCH_NOISE_SCALE, wy * BIOME_GEN_CONSTANTS.PATCH_NOISE_SCALE) * BIOME_GEN_CONSTANTS.PATCH_AMPLITUDE;
       const waterDist = distToWater[idx];
-      const waterBonus = Math.exp(-waterDist / BIOME_GEN_CONSTANTS.WATER_DECAY_DIST);
-      const moisture = Math.max(0, Math.min(1, mNoise * 0.65 + waterBonus * 0.35));
+      const waterBonus = Math.exp(-waterDist / BIOME_GEN_CONSTANTS.WATER_DECAY_DIST) * BIOME_GEN_CONSTANTS.WATER_BONUS_MAX;
+      const moisture = Math.max(0, Math.min(1, mNoise * 0.70 + pNoise + waterBonus));
 
       // Boundary jitter
       const jitter = jitterNoise.sample(wx * BIOME_GEN_CONSTANTS.JITTER_NOISE_SCALE, wy * BIOME_GEN_CONSTANTS.JITTER_NOISE_SCALE) * BIOME_GEN_CONSTANTS.JITTER_AMPLITUDE;
@@ -295,12 +444,17 @@ export function generateBiomeGridFromTerrain(params: GenerateBiomeGridParams): U
       // Priority-based biome classification
       let assignedSlot = 3; // Default: Grassland (3)
 
-      if (temperature + jitter < BIOME_GEN_CONSTANTS.SNOW_TEMP_THRESHOLD || landH >= percentiles.p96) {
-        // 1. Snow / Tundra (6)
-        assignedSlot = 6;
-      } else if (landH >= percentiles.p88 || (slope > BIOME_GEN_CONSTANTS.STEEP_SLOPE_THRESHOLD && landH >= percentiles.p70)) {
-        // 2. Rocky Mountain (7)
+      if (
+        landH >= percentiles.p70 ||
+        (landH >= percentiles.p70 * 0.85 && slope > 0.11) ||
+        (landH >= percentiles.p88)
+      ) {
+        // 1. Rocky Mountain (7): Continuous crests, ridges, and elevated highlands
+        // Evaluated before temperature snow check to keep connected mountain ranges intact
         assignedSlot = 7;
+      } else if (temperature + jitter < BIOME_GEN_CONSTANTS.SNOW_TEMP_THRESHOLD) {
+        // 2. Snow / Tundra (6): Polar and frigid climate
+        assignedSlot = 6;
       } else if (
         landH < BIOME_GEN_CONSTANTS.WETLAND_LAND_H_MAX &&
         moisture + jitter > BIOME_GEN_CONSTANTS.WETLAND_MOISTURE_MIN &&
@@ -315,17 +469,17 @@ export function generateBiomeGridFromTerrain(params: GenerateBiomeGridParams): U
         // 4. Desert / Wasteland (4)
         assignedSlot = 4;
       } else if (
-        moisture + jitter >= BIOME_GEN_CONSTANTS.CONIFER_MOISTURE_MIN &&
-        (temperature + jitter < BIOME_GEN_CONSTANTS.CONIFER_TEMP_MAX || landH >= BIOME_GEN_CONSTANTS.CONIFER_SUBALPINE_H_MIN)
+        moisture + jitter >= BIOME_GEN_CONSTANTS.CONIFER_MOISTURE_MIN
       ) {
-        // 5. Coniferous Forest (1)
-        assignedSlot = 1;
-      } else if (
-        moisture + jitter >= BIOME_GEN_CONSTANTS.BROADLEAF_MOISTURE_MIN &&
-        temperature + jitter >= BIOME_GEN_CONSTANTS.CONIFER_TEMP_MAX
-      ) {
-        // 6. Broadleaf Forest (2)
-        assignedSlot = 2;
+        // 5 & 6. Forest: Partitioned into Coniferous vs Broadleaf by temperature and elevation
+        if (
+          temperature + jitter < BIOME_GEN_CONSTANTS.CONIFER_TEMP_MAX ||
+          landH >= BIOME_GEN_CONSTANTS.CONIFER_SUBALPINE_H_MIN
+        ) {
+          assignedSlot = 1; // Coniferous Forest (1)
+        } else {
+          assignedSlot = 2; // Broadleaf Forest (2)
+        }
       } else {
         // 7. Grassland (3)
         assignedSlot = 3;
@@ -336,7 +490,12 @@ export function generateBiomeGridFromTerrain(params: GenerateBiomeGridParams): U
     }
   }
 
-  // 6. Post-processing: 3x3 Majority filter to smooth small salt-and-pepper noise
+  // 6. Post-processing:
+  // Remove thin ribbon bands (< 5 cells wide) for forest (slots 1, 2)
+  removeThinBands(resultGrid, gridCols, gridRows, [1, 2], 2);
+  // Keep mountain ridges (slot 7) intact without eroding ridge chains
+
+  // 3x3 Majority filter to smooth small salt-and-pepper noise
   applyMajorityFilter(resultGrid, gridCols, gridRows, 1);
 
   // If preservePainted is true, re-enforce existing painted cells after majority filter

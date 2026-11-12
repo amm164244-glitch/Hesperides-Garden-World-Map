@@ -40,6 +40,7 @@ interface SymbolPaletteProps {
   onDeleteCategory: (categoryId: string) => void;
   onOpenPixelStudio: (asset?: CustomMapAsset) => void;
   onOpenImageToPixel?: () => void;
+  onOpenIllustrationImport?: () => void;
   onDeleteCustomAsset: (assetId: string) => void;
   onClearSymbols: () => void;
   showSymbols: boolean;
@@ -62,6 +63,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
   onDeleteCategory,
   onOpenPixelStudio,
   onOpenImageToPixel,
+  onOpenIllustrationImport,
   onDeleteCustomAsset,
   onClearSymbols,
   showSymbols,
@@ -174,6 +176,15 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
             >
               <Sparkles className="w-3.5 h-3.5 text-stone-950" />
               <span>📷 画像から変換</span>
+            </button>
+          )}
+          {onOpenIllustrationImport && (
+            <button
+              onClick={onOpenIllustrationImport}
+              className="col-span-2 py-2.5 px-2 rounded-lg bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-600 hover:to-emerald-500 text-emerald-50 font-serif font-bold text-xs flex items-center justify-center gap-1.5 shadow-md border border-emerald-400/40 transition-all active:scale-[0.98]"
+              title="手描き風イラスト(PNG等)を、そのままの絵柄でまとめて登録する"
+            >
+              <span>🖼 イラストを取り込む(複数OK)</span>
             </button>
           )}
         </div>
@@ -592,6 +603,14 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
                     className="px-3 py-1.5 rounded-lg bg-[#241f19] text-[#c4b59d] hover:text-[#f5ebd9] border border-[#3d3326] text-xs flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <span>📷 画像から変換</span>
+                  </button>
+                )}
+                {onOpenIllustrationImport && (
+                  <button
+                    onClick={onOpenIllustrationImport}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-700 text-emerald-50 hover:bg-emerald-600 text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>🖼 イラストを取り込む</span>
                   </button>
                 )}
               </div>
