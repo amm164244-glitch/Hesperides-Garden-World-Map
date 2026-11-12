@@ -29,7 +29,6 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
   onClose,
 }) => {
   const [seedInput, setSeedInput] = useState<string>(String(config.seed));
-  const [showSmoothingConfirm, setShowSmoothingConfirm] = useState(false);
 
   const handleRandomSeed = () => {
     const nextSeed = Math.floor(Math.random() * 90000000) + 10000000;
@@ -43,7 +42,7 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
       <div className="flex items-center justify-between border-b border-stone-800 pb-2">
         <div className="flex items-center gap-2">
           <Globe className="w-4 h-4 text-amber-400" />
-          <h2 className="font-bold text-stone-100 text-sm">世界マップ生成パラメータ</h2>
+          <h2 className="font-bold text-stone-100 text-sm">マップ生成</h2>
         </div>
         <button
           type="button"
@@ -75,7 +74,6 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
       <div className="flex flex-col gap-1.5 bg-stone-950/60 p-2.5 rounded-lg border border-stone-800">
         <label htmlFor="seed-input" className="font-medium text-stone-300 flex items-center justify-between">
           <span>シード値 (Seed)</span>
-          <span className="text-[10px] text-stone-500">同じシードで同一地形</span>
         </label>
         <div className="flex gap-1.5">
           <input
@@ -104,10 +102,10 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
         </div>
       </div>
 
-      {/* World Grid Resolution (2:1 Ratio) */}
+      {/* World Grid Resolution */}
       <div className="flex flex-col gap-1.5 bg-stone-950/60 p-2.5 rounded-lg border border-stone-800">
         <div className="flex justify-between items-center">
-          <label htmlFor="grid-resolution-select" className="font-medium text-stone-300">標高グリッド解像度 (縦横比 2:1)</label>
+          <label htmlFor="grid-resolution-select" className="font-medium text-stone-300">解像度</label>
           <span className="font-mono text-amber-400 font-semibold">{config.gridResolution}</span>
         </div>
         <select
@@ -121,9 +119,6 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
           <option value="4096x2048">4096 × 2048 (4K超高精細)</option>
           <option value="8192x4096">8192 × 4096 (8K極大・超広大キャンバス)</option>
         </select>
-        <div className="text-[10px] text-stone-500">
-          ※ Float32Array標高データ。Web Workerでバックグラウンド生成されます。
-        </div>
       </div>
 
       {/* World Width (km) Setting */}
@@ -446,72 +441,6 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
         <span>{isGenerating ? 'Web Workerで計算中...' : '地形を自動生成する'}</span>
       </button>
 
-      {/* Apply Step & Coast Smoothing to Existing World Map Button */}
-      {onApplyCoastSmoothingToCurrentMap && (
-        <button
-          type="button"
-          disabled={!isWorldMapActive || isGenerating || (config.coastSmoothing ?? 5) === 0}
-          onClick={() => setShowSmoothingConfirm(true)}
-          className={`py-2 px-3 rounded-xl font-medium text-xs flex items-center justify-center gap-2 transition-all border shadow cursor-pointer ${
-            !isWorldMapActive || isGenerating || (config.coastSmoothing ?? 5) === 0
-              ? 'bg-stone-800/60 text-stone-500 border-stone-800 cursor-not-allowed opacity-60'
-              : 'bg-amber-950/70 hover:bg-amber-900/90 text-amber-200 border-amber-600/60 hover:border-amber-400'
-          }`}
-          title={
-            !isWorldMapActive
-              ? '世界マップ表示時のみ実行可能です'
-              : (config.coastSmoothing ?? 5) === 0
-              ? '「海岸線のなめらかさ」スライダーを1以上に設定してください'
-              : '現在の世界マップの段差（崖・海岸線）をなめらかに平滑化します'
-          }
-        >
-          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-          <span>いまの世界マップの段差(崖・海岸)をなめらかにする</span>
-        </button>
-      )}
-
-      {/* Step & Coast Smoothing Confirmation Dialog */}
-      {showSmoothingConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-stone-900 border border-amber-600/70 rounded-xl p-5 max-w-sm w-full shadow-2xl flex flex-col gap-3 text-stone-200">
-            <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>段差（崖・海岸）の平滑化の確認</span>
-            </div>
-            <div className="text-xs text-stone-300 space-y-2 leading-relaxed">
-              <p className="text-amber-200 font-medium">
-                標高が変更されます。この操作は取り消せません。先に保存することをおすすめします。水系(川・湖)や地域マップは、作り直さない限り、変わりません
-              </p>
-              <p className="text-stone-300 text-[11px]">
-                適用強度: <span className="font-bold text-amber-300">Lv {config.coastSmoothing ?? 5}</span>
-              </p>
-              <p className="text-stone-400 text-[10px] bg-stone-950/80 p-2 rounded border border-stone-800">
-                ※ 標高が変更されます。この操作は取り消せません。先に保存することをおすすめします。水系(川・湖)や地域マップは、作り直さない限り、変わりません
-              </p>
-            </div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-stone-800">
-              <button
-                type="button"
-                onClick={() => setShowSmoothingConfirm(false)}
-                className="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs transition cursor-pointer"
-              >
-                キャンセル
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowSmoothingConfirm(false);
-                  onApplyCoastSmoothingToCurrentMap?.();
-                }}
-                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold text-xs transition cursor-pointer shadow"
-              >
-                平滑化を実行
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Image to Terrain Button */}
       {onOpenImageToTerrain && (
         <button
@@ -536,7 +465,7 @@ const GeneratorPanelComponent: React.FC<GeneratorPanelProps> = ({
           title="大陸や山脈のない100%完全な海から自由に描き始めます"
         >
           <Waves className="w-4 h-4 text-sky-400" />
-          <span>🌊 完全な海（白紙キャンバス）を作成</span>
+          <span>🌊 海のみで生成</span>
         </button>
       )}
     </div>

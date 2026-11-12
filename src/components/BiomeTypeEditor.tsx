@@ -910,10 +910,10 @@ const BiomeTypeEditorComponent: React.FC<BiomeTypeEditorProps> = ({
                   </div>
                   <div className="space-y-1">
                     <p className="text-xs font-bold text-stone-200">
-                      登録済みのドット絵シンボルがありません
+                      登録済みのシンボルがありません
                     </p>
                     <p className="text-[11px] text-stone-400 max-w-sm mx-auto leading-relaxed">
-                      この地形タイプに配置するシンボルを追加するには、先にツールバーの「シンボルパレット」から手描きまたは画像変換でドット絵シンボルを作成・登録してください。
+                      この地形タイプに配置するシンボルを追加するには、先にツールバーの「シンボルパレット」から手描きまたは画像変換でシンボルを作成・登録してください。
                     </p>
                   </div>
                 </div>

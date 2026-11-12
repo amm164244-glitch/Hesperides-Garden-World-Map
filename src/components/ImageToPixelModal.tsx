@@ -91,7 +91,7 @@ export const ImageToPixelModal: React.FC<ImageToPixelModalProps> = ({
   const [viewMode, setViewMode] = useState<'pixel' | 'original' | 'split'>('pixel');
 
   // Registration Form
-  const [assetName, setAssetName] = useState<string>('高精細ピクセルカタコンベ');
+  const [assetName, setAssetName] = useState<string>('高精細ピクセルアート');
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>(categories[0]?.id || '');
   const [isSavedSuccess, setIsSavedSuccess] = useState<boolean>(false);
 
@@ -273,31 +273,13 @@ export const ImageToPixelModal: React.FC<ImageToPixelModalProps> = ({
               <Sparkles className="w-5 h-5 text-slate-950 font-bold" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-amber-200 tracking-wide">
-                  画像 → 高精細ピクセルアート変換スタジオ
-                </h2>
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  HD Pixel Art Engine
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                風景画・イラスト・写真を16/32-bitの高密度ドット絵に変換し、ディザリング＆限定パレットで美しく再現
-              </p>
+              <h2 className="text-base font-bold text-amber-200 tracking-wide">
+                ピクセル変換
+              </h2>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Quick Sample Preset */}
-            <button
-              onClick={() => loadPresetImage(SAMPLE_PRESETS[0])}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-amber-300 transition-colors"
-              title="参考画像（地下カタコンベ）を読み込む"
-            >
-              <Flame className="w-3.5 h-3.5 text-amber-400" />
-              <span>参考画像（カタコンベ）読込</span>
-            </button>
-
             <button
               onClick={onClose}
               className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
@@ -811,9 +793,6 @@ export const ImageToPixelModal: React.FC<ImageToPixelModalProps> = ({
                 <FolderPlus className="w-4 h-4 text-amber-400" />
                 <span>マップシンボルとして登録</span>
               </h3>
-              <p className="text-xs text-slate-400">
-                自作シンボルライブラリに保存し、地図上に配置可能にします
-              </p>
             </div>
 
             {/* Name Input */}
@@ -823,7 +802,7 @@ export const ImageToPixelModal: React.FC<ImageToPixelModalProps> = ({
                 type="text"
                 value={assetName}
                 onChange={(e) => setAssetName(e.target.value)}
-                placeholder="例: 古代遺跡カタコンベ"
+                placeholder="例: 古代遺跡"
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-amber-500"
               />
             </div>

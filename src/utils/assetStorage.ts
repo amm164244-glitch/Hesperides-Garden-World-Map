@@ -223,7 +223,7 @@ export function parseSymbolLibraryJson(jsonString: string): {
   }
 
   if (assets.length === 0 && categories.length === 0) {
-    throw new Error('有効なドット絵シンボルまたはカテゴリ情報が見つかりませんでした。');
+    throw new Error('有効なシンボルまたはカテゴリ情報が見つかりませんでした。');
   }
 
   return { assets, categories };

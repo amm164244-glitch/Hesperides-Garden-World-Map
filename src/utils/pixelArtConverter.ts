@@ -84,7 +84,7 @@ export const PALETTE_PRESETS: Record<PalettePresetKey, { name: string; descripti
   },
   catacombs: {
     name: '地下迷宮・灯火 (Catacombs)',
-    description: '石造りの遺跡・篝火の暖光と深い影（ユーザー参考画像スタイル）',
+    description: '',
     colors: [
       '#0f0b12', '#1b1424', '#2a1e35', '#382845',
       '#241f2a', '#393344', '#554d60', '#7a7088',
@@ -97,7 +97,7 @@ export const PALETTE_PRESETS: Record<PalettePresetKey, { name: string; descripti
   },
   fantasy: {
     name: '16-bit 王道ファンタジーRPG',
-    description: 'スーパーファミコン・PlayStation初期風の温かみのある鮮明なパレット',
+    description: '',
     colors: [
       '#100c14', '#241b2e', '#3e2e4f', '#61487b',
       '#1e140d', '#3b2518', '#5e3c25', '#8a5937',
@@ -110,7 +110,7 @@ export const PALETTE_PRESETS: Record<PalettePresetKey, { name: string; descripti
   },
   parchment: {
     name: '中世羊皮紙・古地図',
-    description: 'セピアインク・茶褐色・古紙風トーン',
+    description: '',
     colors: [
       '#110e0a', '#241c14', '#3d2f21', '#5c4632',
       '#7f6246', '#a6825e', '#caa880', '#e3cbb0',
@@ -120,7 +120,7 @@ export const PALETTE_PRESETS: Record<PalettePresetKey, { name: string; descripti
   },
   snes: {
     name: '90s レトロゲーム機 (SNES 32色)',
-    description: '発色の良いドット絵グラフィックス',
+    description: '',
     colors: [
       '#000000', '#1c1c1c', '#383838', '#555555',
       '#717171', '#8e8e8e', '#aaaaaa', '#ffffff',
@@ -144,7 +144,7 @@ export const PALETTE_PRESETS: Record<PalettePresetKey, { name: string; descripti
   },
   pico8: {
     name: 'PICO-8 (16色レトロ)',
-    description: '初代コンソール風のアイコニックな16色',
+    description: '',
     colors: [
       '#000000', '#1D2B53', '#7E2553', '#008751',
       '#AB5236', '#5F574F', '#C2C3C7', '#FFF1E8',
@@ -154,7 +154,7 @@ export const PALETTE_PRESETS: Record<PalettePresetKey, { name: string; descripti
   },
   gameboy: {
     name: 'ゲームボーイ (緑液晶4色)',
-    description: '初期ポータブル機のドット液晶',
+    description: '',
     colors: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f'],
   },
 };

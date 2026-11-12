@@ -675,12 +675,12 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
           onApplyBiomeAndSymbols(
             targetBiomeGrid,
             result.symbols,
-            `地形から山・森を自動配置 (${placedCount}個)`
+            `自動配置 (${placedCount}個)`
           );
         } else {
           onApplySymbols(
             result.symbols,
-            `地形から山・森を自動配置 (${placedCount}個)`
+            `自動配置 (${placedCount}個)`
           );
         }
 
@@ -771,19 +771,6 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
         <div className="flex flex-col gap-2.5 pt-1">
           {/* One-Button Auto-Generate Terrain Symbols */}
           <div className="bg-gradient-to-b from-amber-950/70 to-stone-900/90 border border-amber-600/60 p-2.5 rounded-lg flex flex-col gap-2 shadow-inner">
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-amber-300 text-xs flex items-center gap-1.5">
-                <Wand2 className="w-3.5 h-3.5 text-amber-400" />
-                <span>地形から山・森を自動配置</span>
-              </span>
-              <span className="text-[10px] text-amber-400/90 bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-700/60 font-medium">
-                1クリック
-              </span>
-            </div>
-
-            <p className="text-[10.5px] text-stone-300 leading-relaxed">
-              標高・斜面・緯度・水域からバイオームを判定し、尾根沿いに連なる山脈と平野の森林を自動配置します。
-            </p>
 
             <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] text-stone-200 hover:text-white pt-0.5">
               <input
@@ -916,7 +903,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5 text-stone-950" />
-                  <span>地形から山・森を自動配置 (Undo可能)</span>
+                  <span>自動配置</span>
                 </>
               )}
             </button>
@@ -928,7 +915,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
               <div>
                 <span className="font-semibold block">手動配置用の地形タイプが塗られていません</span>
-                <span>上部の「地形から山・森を自動配置」を実行するか、ブラシで塗ってください。</span>
+                <span>上部の「自動配置」を実行するか、ブラシで塗ってください。</span>
               </div>
             </div>
           )}
@@ -1285,7 +1272,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5 text-stone-950" />
-                  <span>配置する (Undo可能)</span>
+                  <span>配置する</span>
                 </>
               )}
             </button>

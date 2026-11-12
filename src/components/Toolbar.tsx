@@ -708,37 +708,37 @@ const ToolbarComponent: React.FC<ToolbarProps> = ({
 
       {/* Top action row */}
       <div className="flex items-center justify-between gap-2 border-b border-stone-800 pb-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
           {/* Generator Toggle */}
           <button
             type="button"
             onClick={onToggleGenerator}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               isGeneratorOpen
                 ? 'bg-amber-600 text-stone-950 font-semibold shadow-md'
                 : 'bg-stone-800 hover:bg-stone-700 text-amber-300'
             }`}
             title="地形生成パラメータの表示/非表示"
           >
-            <Sliders className="w-3.5 h-3.5" />
-            <span>地形生成</span>
+            <Sliders className="w-3.5 h-3.5 shrink-0" />
+            <span className="whitespace-nowrap">地形生成</span>
           </button>
 
           {/* Symbol Palette Toggle */}
           <button
             type="button"
             onClick={onToggleSymbolPalette}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0 ${
               isSymbolPaletteOpen
                 ? 'bg-amber-500 text-stone-950 font-bold shadow-md'
                 : 'bg-stone-800 hover:bg-stone-700 text-amber-200'
             }`}
-            title="ドット絵シンボルの自作・カテゴリ分類・配置と編集"
+            title="シンボルの自作・カテゴリ分類・配置と編集"
           >
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            <span>ドット絵シンボル</span>
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span className="whitespace-nowrap">シンボル</span>
             {symbolCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-stone-900/80 text-amber-300 font-mono">
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-stone-900/80 text-amber-300 font-mono shrink-0">
                 {symbolCount}
               </span>
             )}
@@ -749,22 +749,22 @@ const ToolbarComponent: React.FC<ToolbarProps> = ({
             <button
               type="button"
               onClick={onOpenImageToPixel}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-gradient-to-r from-amber-700/80 to-orange-700/80 hover:from-amber-600 hover:to-orange-600 text-amber-100 border border-amber-500/40 shadow-sm transition-all"
-              title="風景や写真を高密度ピクセルアートに変換 (カタコンベ等)"
+              className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 bg-gradient-to-r from-amber-700/80 to-orange-700/80 hover:from-amber-600 hover:to-orange-600 text-amber-100 border border-amber-500/40 shadow-sm transition-all whitespace-nowrap shrink-0"
+              title="風景や写真を高密度ピクセルアートに変換"
             >
-              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-              <span>画像変換</span>
+              <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+              <span className="whitespace-nowrap">画像変換</span>
             </button>
           )}
         </div>
 
-        {/* Undo / Redo */}
-        <div className="flex items-center gap-1">
+        {/* Right side: Undo / Redo & Minimize */}
+        <div className="flex items-center gap-1 shrink-0">
           <button
             type="button"
             disabled={!canUndo}
             onClick={onUndo}
-            className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-all ${
+            className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-all whitespace-nowrap shrink-0 ${
               canUndo
                 ? 'bg-stone-800 hover:bg-stone-700 text-stone-200'
                 : 'text-stone-600 cursor-not-allowed bg-stone-900'
@@ -772,14 +772,14 @@ const ToolbarComponent: React.FC<ToolbarProps> = ({
             title={`元に戻す (Ctrl+Z) [残り ${undoCount}回]`}
             aria-label="元に戻す"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline text-[11px]">戻す</span>
+            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline text-[11px] whitespace-nowrap">戻す</span>
           </button>
           <button
             type="button"
             disabled={!canRedo}
             onClick={onRedo}
-            className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-all ${
+            className={`p-1.5 rounded-lg text-xs flex items-center gap-1 transition-all whitespace-nowrap shrink-0 ${
               canRedo
                 ? 'bg-stone-800 hover:bg-stone-700 text-stone-200'
                 : 'text-stone-600 cursor-not-allowed bg-stone-900'
@@ -787,38 +787,27 @@ const ToolbarComponent: React.FC<ToolbarProps> = ({
             title={`やり直し (Ctrl+Y) [残り ${redoCount}回]`}
             aria-label="やり直し"
           >
-            <RotateCw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline text-[11px]">直す</span>
+            <RotateCw className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline text-[11px] whitespace-nowrap">直す</span>
+          </button>
+
+          {/* Minimize Button */}
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-100 hover:bg-stone-800 transition flex items-center justify-center shrink-0 border border-stone-800 hover:border-stone-700 ml-1"
+            title="操作パネルを縮小 (Tab)"
+            aria-label="操作パネルを縮小"
+          >
+            <Minus className="w-4 h-4" />
           </button>
         </div>
-
-        {/* Save & Load Modal Trigger */}
-        <button
-          type="button"
-          onClick={onOpenStorage}
-          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-800/80 hover:bg-emerald-700 text-emerald-100 flex items-center gap-1.5 border border-emerald-600/50 transition-all shadow-sm cursor-pointer"
-          title="地図データの保存 / 読込 (JSON)"
-        >
-          <Layers className="w-3.5 h-3.5" />
-          <span>保存 / 読込</span>
-        </button>
-
-        {/* Minimize Button */}
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="p-1.5 rounded-lg text-stone-400 hover:text-stone-100 hover:bg-stone-800 transition flex items-center justify-center shrink-0 border border-stone-800 hover:border-stone-700 ml-1"
-          title="操作パネルを縮小 (Tab)"
-          aria-label="操作パネルを縮小"
-        >
-          <Minus className="w-4 h-4" />
-        </button>
       </div>
 
-      {/* Brush tools grid */}
+      {/* Brush tools grid: 2段 (6列) で見やすく整理 */}
       <div>
         <div className="text-[11px] font-semibold text-stone-400 mb-1 px-1">地形編集ブラシ</div>
-        <div className="grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-12 gap-1.5">
+        <div className="grid grid-cols-6 gap-1.5">
           {tools.map((t) => {
             const isActive =
               t.group === 'biome'

@@ -104,7 +104,7 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
   const [previewBg, setPreviewBg] = useState<'transparent' | 'parchment'>('parchment');
 
   // Metadata
-  const [symbolName, setSymbolName] = useState<string>(initialAsset?.name || 'ドット絵シンボル');
+  const [symbolName, setSymbolName] = useState<string>(initialAsset?.name || 'シンボル');
   const [selectedCategory, setSelectedCategory] = useState<string>(
     initialAsset?.category || (categories[0]?.id ?? '')
   );
@@ -139,7 +139,7 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
           setGrid(Array.from({ length: sz }, () => Array(sz).fill('')));
         }
       } else {
-        setSymbolName('新規ドット絵シンボル');
+        setSymbolName('新規シンボル');
         setSelectedCategory(categories[0]?.id ?? 'cat_village');
         // Clean blank canvas
         setGridSize(24);
@@ -554,15 +554,9 @@ export const PixelArtStudioModal: React.FC<PixelArtStudioModalProps> = ({
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-serif font-bold text-base text-[#f5ebd9] flex items-center gap-2">
-                ドット絵・ピクセルアート スタジオ
-                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono">
-                  Pixel Art Creator
-                </span>
+              <h2 className="font-serif font-bold text-base text-[#f5ebd9]">
+                ドット絵編集
               </h2>
-              <p className="text-xs text-[#9e907d]">
-                レトロRPG風ドット絵でオリジナルシンボルを作成し、自在にカテゴリ分類して地図に配置できます
-              </p>
             </div>
           </div>
           <button

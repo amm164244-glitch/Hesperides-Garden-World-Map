@@ -1213,7 +1213,7 @@ export default function App() {
   // Generate 100% Blank Ocean for pure manual sculpting
   const handleGenerateBlankOcean = useCallback(() => {
     setIsGenerating(true);
-    setGenerationProgress({ progress: 30, message: '完全な海（白紙キャンバス）を構築中...' });
+    setGenerationProgress({ progress: 30, message: '海のみで生成中...' });
 
     const { width, height } = getResolutionDimensions(config.gridResolution);
 
@@ -1967,10 +1967,12 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-sm font-bold tracking-wide text-amber-100 flex items-center gap-2">
-              <span>架空世界 地図エディタ</span>
-              <span className="text-[10px] uppercase font-mono tracking-widest text-amber-400/90 px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-800/60">
-                {activeRegionalMap ? `地域マップ (${activeRegionalMap.zoomScale}x)` : '惑星規模・プレート世界マップ (2:1)'}
-              </span>
+              <span>Hesperides Garden Werld Generator</span>
+              {activeRegionalMap && (
+                <span className="text-[10px] uppercase font-mono tracking-widest text-amber-400/90 px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-800/60">
+                  {`地域マップ (${activeRegionalMap.zoomScale}x)`}
+                </span>
+              )}
             </h1>
           </div>
         </div>
@@ -1979,7 +1981,7 @@ export default function App() {
           <span className="hidden md:inline text-[11px] text-stone-400 font-mono">
             {activeRegionalMap
               ? `地域解像度: ${activeRegionalMap.gridCols}×${activeRegionalMap.gridRows}`
-              : `世界解像度: ${mapData.gridCols}×${mapData.gridRows} (${config.worldWidthKm?.toLocaleString()} km)`}
+              : `解像度: ${mapData.gridCols}×${mapData.gridRows} (${config.worldWidthKm?.toLocaleString()} km)`}
           </span>
           {Object.keys(mapData.regionalMaps || {}).length > 0 && (
             <button

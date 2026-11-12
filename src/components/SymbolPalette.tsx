@@ -142,7 +142,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
         <div className="flex items-center gap-2">
           <div className="w-3 h-3 rounded bg-amber-500 shadow-sm shadow-amber-500/50" />
           <h3 className="font-serif font-bold text-sm tracking-wide text-[#f5ebd9]">
-            ドット絵シンボルパレット
+            シンボルパレット
           </h3>
           <span className="text-xs px-2 py-0.5 rounded-full bg-[#2a241c] text-amber-300 font-mono border border-[#44382c]">
             {customAssets.length} 種類
@@ -172,7 +172,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
             <button
               onClick={onOpenImageToPixel}
               className="py-2.5 px-2 rounded-lg bg-gradient-to-r from-orange-600 via-amber-600 to-amber-700 hover:from-orange-500 hover:to-amber-500 text-stone-950 font-serif font-bold text-xs flex items-center justify-center gap-1.5 shadow-md border border-amber-400/40 transition-all active:scale-[0.98]"
-              title="風景や写真画像を高精細ドット絵に自動変換 (カタコンベ等)"
+              title="風景や写真画像を高精細ドット絵に自動変換"
             >
               <Sparkles className="w-3.5 h-3.5 text-stone-950" />
               <span>📷 画像から変換</span>
@@ -184,7 +184,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
               className="col-span-2 py-2.5 px-2 rounded-lg bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-600 hover:to-emerald-500 text-emerald-50 font-serif font-bold text-xs flex items-center justify-center gap-1.5 shadow-md border border-emerald-400/40 transition-all active:scale-[0.98]"
               title="手描き風イラスト(PNG等)を、そのままの絵柄でまとめて登録する"
             >
-              <span>🖼 イラストを取り込む(複数OK)</span>
+              <span>🖼 画像取り込み</span>
             </button>
           )}
         </div>
@@ -383,7 +383,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
           {/* Symbol Size / Scale */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-[#baa993] font-medium">シンボルの大きさ (スケール)</span>
+              <span className="text-[#baa993] font-medium">シンボルスケール</span>
               <div className="flex items-center gap-1 font-mono">
                 <button
                   type="button"
@@ -535,7 +535,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-[#c4b59d]">
-              登録ドット絵シンボル ({filteredSymbols.length})
+              登録シンボル ({filteredSymbols.length})
             </span>
             <div className="flex items-center gap-1.5 text-[11px]">
               {onExportSymbols && customAssets.length > 0 && (
@@ -543,7 +543,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
                   type="button"
                   onClick={onExportSymbols}
                   className="px-2 py-0.5 rounded bg-[#241f19] hover:bg-[#2e261f] text-[#c4b59d] hover:text-[#f5ebd9] border border-[#3d3326] flex items-center gap-1 transition cursor-pointer"
-                  title="登録ドット絵シンボルをバックアップJSONファイルとして保存"
+                  title="登録シンボルをバックアップJSONファイルとして保存"
                 >
                   <Download className="w-3 h-3 text-amber-400" />
                   <span>保存</span>
@@ -552,7 +552,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
               {onImportSymbols && (
                 <label
                   className="px-2 py-0.5 rounded bg-[#241f19] hover:bg-[#2e261f] text-[#c4b59d] hover:text-[#f5ebd9] border border-[#3d3326] flex items-center gap-1 transition cursor-pointer"
-                  title="ドット絵シンボルのバックアップJSONファイルを読み込んで復元"
+                  title="シンボルのバックアップJSONファイルを読み込んで復元"
                 >
                   <Upload className="w-3 h-3 text-emerald-400" />
                   <span>読込</span>
@@ -610,7 +610,7 @@ const SymbolPaletteComponent: React.FC<SymbolPaletteProps> = ({
                     onClick={onOpenIllustrationImport}
                     className="px-3 py-1.5 rounded-lg bg-emerald-700 text-emerald-50 hover:bg-emerald-600 text-xs flex items-center justify-center gap-1.5 cursor-pointer"
                   >
-                    <span>🖼 イラストを取り込む</span>
+                    <span>🖼 画像取り込み</span>
                   </button>
                 )}
               </div>

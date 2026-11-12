@@ -88,7 +88,7 @@ export const IllustrationImportModal: React.FC<IllustrationImportModalProps> = (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
       <div className="w-full max-w-xl max-h-[90vh] flex flex-col bg-stone-900 border border-stone-700 rounded-2xl shadow-2xl text-stone-200 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-stone-800 bg-stone-950/70 shrink-0">
-          <h2 className="text-sm font-bold text-amber-200">🖼 イラストを取り込む</h2>
+          <h2 className="text-sm font-bold text-amber-200">🖼 画像取り込み</h2>
           <button
             type="button"
             onClick={onClose}

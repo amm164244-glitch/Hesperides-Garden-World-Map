@@ -72,7 +72,7 @@ self.onmessage = (e: MessageEvent<{
         stats: result.stats,
       });
     } else if (action === 'generateBlankOcean' && config) {
-      self.postMessage({ type: 'progress', progress: 50, message: '完全な海（白紙キャンバス）を構築中...' });
+      self.postMessage({ type: 'progress', progress: 50, message: '海のみで生成中...' });
       const mapData = generateBlankOceanWorld(width, height, config);
       self.postMessage({ type: 'progress', progress: 100, message: '準備完了！' });
       self.postMessage({ type: 'success', mapData });

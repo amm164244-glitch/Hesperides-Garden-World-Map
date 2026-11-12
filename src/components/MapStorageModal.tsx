@@ -118,7 +118,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
         URL.revokeObjectURL(url);
 
         setStatusMessage({
-          text: `地図JSONを出力しました。（世界地図・階層地域マップ・バイオーム設定・自作ドット絵シンボル ${customAssets.length}件をすべて同梱）`,
+          text: `地図JSONを出力しました。（世界地図・階層地域マップ・バイオーム設定・自作シンボル ${customAssets.length}件をすべて同梱）`,
           type: 'success',
         });
       }
@@ -149,7 +149,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
       onLoadMap(result.mapData, result.customAssets, result.customCategories);
 
       const assetNote = result.customAssets && result.customAssets.length > 0
-        ? `（付属ドット絵シンボル ${result.customAssets.length}件を復元）`
+        ? `（付属シンボル ${result.customAssets.length}件を復元）`
         : '';
       const formatNote = result.format === 'fwm' ? '新形式 (.fwm)' : 'JSON形式';
       const warningNote = result.warnings && result.warnings.length > 0 ? ` ⚠️ ${result.warnings.join(' ')}` : '';
@@ -175,12 +175,12 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
   const handleExportSymbolsOnly = () => {
     try {
       if (customAssets.length === 0 && categories.length === 0) {
-        setStatusMessage({ text: '保存可能な登録ドット絵シンボルがありません。', type: 'error' });
+        setStatusMessage({ text: '保存可能な登録シンボルがありません。', type: 'error' });
         return;
       }
       exportSymbolLibraryToJson(customAssets, categories, symbolsFileName);
       setStatusMessage({
-        text: `登録ドット絵シンボル（${customAssets.length}件）をバックアップJSONとして保存しました！`,
+        text: `登録シンボル（${customAssets.length}件）をバックアップJSONとして保存しました！`,
         type: 'success',
       });
     } catch (err: any) {
@@ -202,7 +202,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
           onImportSymbols(assets, importedCats);
         }
         setStatusMessage({
-          text: `ドット絵シンボル（${assets.length}件）およびカテゴリ（${importedCats.length}件）を正常に復元・追加しました！`,
+          text: `シンボル（${assets.length}件）およびカテゴリ（${importedCats.length}件）を正常に復元・追加しました！`,
           type: 'success',
         });
       } catch (err: any) {
@@ -230,7 +230,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
             className="text-stone-400 hover:text-stone-200 p-1 rounded-lg hover:bg-[#251e16] transition cursor-pointer"
             aria-label="閉じる"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
@@ -258,7 +258,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
             }`}
           >
             <Sparkles className="w-4 h-4 text-amber-400" />
-            <span>ドット絵シンボル集の保持・管理</span>
+            <span>シンボル集の保持・管理</span>
             {customAssets.length > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-mono">
                 {customAssets.length}
@@ -340,7 +340,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                   <span>現在の地図をファイルとして保存（エクスポート）</span>
                 </div>
                 <p className="text-[#a89985] text-xs leading-relaxed">
-                  全世界地形（標高・海陸・バイオーム）、階層地域マップ、配置シンボル、および<strong>作成・登録されたドット絵シンボル（{customAssets.length}件）</strong>を完全な状態で1つのファイルにまとめて保存します。
+                  全世界地形（標高・海陸・バイオーム）、階層地域マップ、配置シンボル、および<strong>作成・登録されたシンボル（{customAssets.length}件）</strong>を完全な状態で1つのファイルにまとめて保存します。
                 </p>
 
                 {/* Format Selector */}
@@ -492,7 +492,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                   <span>保存済み地図ファイルを開く（インポート）</span>
                 </div>
                 <p className="text-[#a89985] text-xs leading-relaxed">
-                  過去に保存した地図ファイルを開きます。新形式（.fwm）と従来のJSONファイル（.json）の<strong>両方を自動判別して復元</strong>します。大陸の形状や各階層地域マップに加え、ファイルに含まれる自作ドット絵シンボルも復元されます。
+                  過去に保存した地図ファイルを開きます。新形式（.fwm）と従来のJSONファイル（.json）の<strong>両方を自動判別して復元</strong>します。大陸の形状や各階層地域マップに加え、ファイルに含まれる自作シンボルも復元されます。
                 </p>
 
                 <label
@@ -526,7 +526,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
                     自動永続保存が有効です
                   </span>
                   <p className="text-[11px] text-emerald-300/80 leading-relaxed">
-                    作成・登録したドット絵シンボル（{customAssets.length}種類）は、ブラウザ内部ストレージ（IndexedDBおよびLocalStorage）に即時自動保存されています。ブラウザを更新または再起動しても消えません。
+                    作成・登録したシンボル（{customAssets.length}種類）は、ブラウザ内部ストレージ（IndexedDBおよびLocalStorage）に即時自動保存されています。ブラウザを更新または再起動しても消えません。
                   </p>
                 </div>
               </div>
@@ -535,10 +535,10 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               <div className="p-4 bg-[#1f1a14] rounded-xl border border-[#33281b] space-y-3">
                 <div className="font-bold text-[#f5ebd9] flex items-center gap-2">
                   <Package className="w-4 h-4 text-amber-400" />
-                  <span>ドット絵シンボル集のバックアップ書き出し</span>
+                  <span>シンボル集のバックアップ書き出し</span>
                 </div>
                 <p className="text-[#a89985] text-xs leading-relaxed">
-                  地図とは独立して、あなたがこれまでに作成したすべてのドット絵シンボルとカテゴリ定義を単体のJSONバックアップファイルとしてPCに保存します。他のPCやブラウザへシンボル集を移行する場合にも便利です。
+                  地図とは独立して、あなたがこれまでに作成したすべてのシンボルとカテゴリ定義を単体のJSONバックアップファイルとしてPCに保存します。他のPCやブラウザへシンボル集を移行する場合にも便利です。
                 </p>
 
                 <div className="space-y-1.5 pt-1">
@@ -572,7 +572,7 @@ export const MapStorageModal: React.FC<MapStorageModalProps> = ({
               <div className="p-4 bg-[#1f1a14] rounded-xl border border-[#33281b] space-y-3">
                 <div className="font-bold text-[#f5ebd9] flex items-center gap-2">
                   <Upload className="w-4 h-4 text-emerald-400" />
-                  <span>ドット絵シンボル集の復元・読み込み</span>
+                  <span>シンボル集の復元・読み込み</span>
                 </div>
                 <p className="text-[#a89985] text-xs leading-relaxed">
                   過去に書き出したシンボルバックアップJSONファイルを読み込みます。既存のシンボルを残したまま新しいシンボルがライブラリへ統合・保持されます。

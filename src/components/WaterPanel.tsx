@@ -203,11 +203,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
 
       {/* Auto-Generation Hydrology Section */}
       <div className="bg-stone-950/70 border border-cyan-900/60 rounded-lg p-2.5 flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-cyan-300 font-semibold text-[11px]">
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>地形水文シミュレーション (自動生成)</span>
-          </div>
+        <div className="flex items-center justify-end">
           <button
             type="button"
             onClick={() => setShowAutoSection(!showAutoSection)}
@@ -351,7 +347,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
             <div className="flex-1 flex items-center justify-between bg-cyan-950/80 border border-cyan-700/60 rounded-md px-3 py-1.5">
               <div className="flex items-center gap-2 text-cyan-200">
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-                <span className="text-[11px] font-medium">{genProgress?.message || '地形水文シミュレーション中...'}</span>
+                <span className="text-[11px] font-medium">{genProgress?.message || '自動生成中...'}</span>
                 <span className="text-[10px] text-cyan-400 font-mono font-bold">({genProgress?.percent ?? 0}%)</span>
               </div>
               <button
@@ -372,7 +368,7 @@ const WaterPanelComponent: React.FC<WaterPanelProps> = ({
                 title="現在の標高地形から水流を解析し、水のテクスチャを貼るのではなく標高グリッドに水場として直接彫り込みます"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>地形から水系を自動生成 (直接彫り込み)</span>
+                <span>自動生成</span>
               </button>
 
               {lastResult && (
