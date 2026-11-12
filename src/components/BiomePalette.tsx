@@ -50,6 +50,12 @@ export interface BiomePaletteProps {
   existingSymbols?: MapSymbolInstance[];
   onApplySymbols?: (symbols: MapSymbolInstance[], description: string) => void;
   activeRegionId?: string | null;
+  waterGrid?: Uint8Array;
+  onApplyBiomeAndSymbols?: (
+    newBiomeGrid: Uint8Array,
+    newSymbols: MapSymbolInstance[],
+    description: string
+  ) => void;
 }
 
 const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
@@ -83,6 +89,8 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
   existingSymbols,
   onApplySymbols,
   activeRegionId,
+  waterGrid,
+  onApplyBiomeAndSymbols,
 }) => {
   const [showConfirmClear, setShowConfirmClear] = useState<boolean>(false);
   const activeBiomeTypes = biomeTypes && biomeTypes.length > 0 ? biomeTypes : DEFAULT_BIOME_TYPES;
@@ -322,6 +330,8 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
           existingSymbols={existingSymbols ?? []}
           onApplySymbols={onApplySymbols}
           activeRegionId={activeRegionId ?? null}
+          waterGrid={waterGrid}
+          onApplyBiomeAndSymbols={onApplyBiomeAndSymbols}
         />
       )}
 

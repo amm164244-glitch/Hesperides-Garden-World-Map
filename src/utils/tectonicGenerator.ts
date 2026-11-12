@@ -77,7 +77,6 @@ export function generateTectonicWorld(
   const islandDensityFactor = Math.max(1, Math.min(10, config.islandDensity || 5)) / 5.0; // 0.2 ~ 2.0
   const boundarySoftness = config.boundarySoftness !== undefined ? Math.max(0, Math.min(10, config.boundarySoftness)) : 5;
   const polarSoftness = config.polarSoftness !== undefined ? Math.max(0, Math.min(10, config.polarSoftness)) : 5;
-  const polarNoise = detailNoise;
   const blendWidth = width * (0.006 * boundarySoftness);
   const continentReach = width * 0.24 * (config.continentSize / 5.0);
   const boundaryScale = width * 0.14;
@@ -271,27 +270,6 @@ export function generateTectonicWorld(
       const detail = detailNoise.sample(wx * 0.015, wy * 0.015) * 3.5;
       elev += detail;
 
-      // Edge falloff at northern and southern map poles
-      if (polarSoftness === 0) {
-        const polarFalloff = Math.min(1.0, wy / (height * 0.04)) * Math.min(1.0, (height - wy) / (height * 0.04));
-        elev *= Math.pow(polarFalloff, 0.5);
-      } else {
-        const band = height * (0.02 + 0.01 * polarSoftness);
-        const amp = height * 0.05 * (polarSoftness / 5.0);
-        const maxPoleDist = band + amp * 1.5;
-        if (wy < maxPoleDist || wy > height - maxPoleDist) {
-          // Multi-frequency noise ensures realistic natural coastal dispersion without flat horizontal terraces
-          const n1 = polarNoise.fbm(wx * 0.008, wy < height * 0.5 ? 12.7 : 89.3, 4, 0.55, 2.0);
-          const n2 = polarNoise.sample(wx * 0.016, wy < height * 0.5 ? 44.1 : 68.9);
-          const noiseVal = n1 * 1.6 + n2 * 0.4;
-          const offset = noiseVal * amp * 1.5;
-          const yw = wy + offset;
-          const effDist = Math.min(yw, height - yw);
-          const t = Math.min(1.0, Math.max(0.0, effDist / band));
-          const f = t * t * (3.0 - 2.0 * t);
-          elev *= Math.pow(f, 0.5);
-        }
-      }
 
       elevationGrid[r * gridCols + c] = elev;
     }
@@ -346,6 +324,73 @@ export function generateTectonicWorld(
     }
 
     elevationGrid[i] = Math.max(0.0, Math.min(100.0, normalized));
+  }
+
+  // 3.5 Polar ocean shaping (極付近を自然に海へ沈める)
+  // 旧実装は「x のみに依存するノイズ」＋「標高への乗算」だったため、
+  //   - 海岸線が縦方向の筋(氷柱状のトゲ)になる
+  //   - 標高が高い場所ほど海に沈む位置が極側へずれ、山の上でトゲが長くなる
+  // という問題があった。ここでは
+  //   - ゆらぎを x,y 両方に依存する低周波 2D ノイズにする
+  //   - 「極からの距離に応じた標高の上限(cap)」で頭打ちにする
+  // ことで、標高に依らず海岸が一定の位置にできるようにする。
+  {
+    const POLAR_FLOOR = 12.0; // 極点での海底標高 (< STANDARD_SEA_LEVEL)
+    const hasNoise = polarSoftness > 0;
+    const band = height * (polarSoftness === 0 ? 0.04 : 0.03 + 0.012 * polarSoftness);
+    const amp = hasNoise ? height * 0.05 * (polarSoftness / 5.0) : 0.0;
+    const polarNoiseN = new Noise2D(seed + 6151);
+    const polarNoiseS = new Noise2D(seed + 7907);
+    const smoothMinK = 6.0; // 頭打ちを滑らかにする幅 (標高単位)
+
+    onProgress?.(60, '極域の海岸線成形中...');
+    const maxPoleDist = band + amp * 1.5;
+    const NOISE_STEP = 4;
+    const numSamples = Math.ceil(gridCols / NOISE_STEP) + 1;
+    const rowNoise = hasNoise ? new Float32Array(numSamples) : null;
+
+    for (let r = 0; r < gridRows; r++) {
+      const wy = r * cellH;
+      const distToPole = Math.min(wy, height - wy);
+      if (distToPole > maxPoleDist) continue;
+      const isNorth = wy < height * 0.5;
+      const noiseGen = isNorth ? polarNoiseN : polarNoiseS;
+
+      if (hasNoise && rowNoise) {
+        const ny1 = wy * 0.0058;
+        const ny2 = wy * 0.013 + 5.1;
+        for (let s = 0; s < numSamples; s++) {
+          const wx = s * NOISE_STEP * cellW;
+          rowNoise[s] =
+            noiseGen.fbm(wx * 0.0058, ny1, 3, 0.5, 2.0) * 0.75 +
+            noiseGen.sample(wx * 0.013 + 17.3, ny2) * 0.25;
+        }
+      }
+
+      const rowOffset = r * gridCols;
+      for (let c = 0; c < gridCols; c++) {
+        let offset = 0.0;
+        if (hasNoise && rowNoise) {
+          const s = Math.floor(c / NOISE_STEP);
+          const frac = (c % NOISE_STEP) / NOISE_STEP;
+          const n = rowNoise[s] * (1.0 - frac) + rowNoise[s + 1] * frac;
+          offset = n * amp * 1.5;
+        }
+        const effDist = Math.max(0.0, distToPole + offset);
+        const t = Math.min(1.0, effDist / band);
+        const f = t * t * (3.0 - 2.0 * t);
+        const cap = POLAR_FLOOR + (100.0 - POLAR_FLOOR) * f;
+
+        const idx = rowOffset + c;
+        const e = elevationGrid[idx];
+        if (e > cap) {
+          // smooth-min: cap との差が小さいところで滑らかに合流
+          const d = e - cap;
+          const h = Math.max(0.0, smoothMinK - d) / smoothMinK;
+          elevationGrid[idx] = cap - (h * h * smoothMinK) * 0.25;
+        }
+      }
+    }
   }
 
   // 4. Inland Distance Gradient (海岸からの距離に応じて標高を緩やかに上げる)

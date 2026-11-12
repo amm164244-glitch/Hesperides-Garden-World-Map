@@ -18,6 +18,7 @@ void main() {
 
 const FRAGMENT_SHADER_SRC = `#version 300 es
 precision highp float;
+precision highp sampler2D;
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -33,25 +34,6 @@ uniform float u_show_shading;
 uniform float u_shallows_width;
 uniform float u_show_ripples;
 uniform float u_texel_screen_px;
-
-// Fast hardware-friendly PRNG hash without slow trigonometric sin()
-float fastHash(vec2 p) {
-  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z) * 2.0 - 1.0;
-}
-
-// Optimized 2D value noise (4 textureless lookups, smooth Hermite curve)
-float noise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  float a = fastHash(i);
-  float b = fastHash(i + vec2(1.0, 0.0));
-  float c = fastHash(i + vec2(0.0, 1.0));
-  float d = fastHash(i + vec2(1.0, 1.0));
-  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
 
 // Catmull-Rom cubic weights for Hermite spline with a = -0.5
 vec4 catmullRomWeights(float t) {
@@ -366,7 +348,7 @@ export class WebGLMapRenderer {
 
   private currentCols: number = 0;
   private currentRows: number = 0;
-  private byteElev: Uint8Array | null = null;
+  private floatElev: Float32Array | null = null; // 標高/100 を 16bit float で保持 (8bit量子化による海岸のチラつき対策)
   private byteWater: Uint8Array | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -381,6 +363,10 @@ export class WebGLMapRenderer {
       console.warn('WebGL2 not available.');
       return;
     }
+
+    // Enable WebGL 2 float texture extensions for hardware linear filtering & rendering
+    gl.getExtension('OES_texture_float_linear');
+    gl.getExtension('EXT_color_buffer_float');
 
     this.gl = gl;
     this.initShaders();
@@ -474,13 +460,19 @@ export class WebGLMapRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.elevationTexture);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 
-    if (!this.byteElev || this.byteElev.length !== totalCells) {
-      this.byteElev = new Uint8Array(totalCells);
+    // 以前は R8 (0.39 刻み) だったため、海面(35)付近の平らな浅瀬で海/陸の判定が量子化ノイズでガタついた。
+    // R16F (誤差 ~0.016) にして海岸線の安定性を確保する。R16F は WebGL2 で標準的に LINEAR フィルタ可能。
+    if (!this.floatElev || this.floatElev.length !== totalCells) {
+      this.floatElev = new Float32Array(totalCells);
     }
+    const floatElev = this.floatElev;
     for (let i = 0; i < totalCells; i++) {
-      this.byteElev[i] = Math.max(0, Math.min(255, Math.round(elevationGrid[i] * 2.55)));
+      let v = elevationGrid[i] * 0.01;
+      if (v < 0) v = 0;
+      else if (v > 1) v = 1;
+      floatElev[i] = v;
     }
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows, 0, gl.RED, gl.UNSIGNED_BYTE, this.byteElev);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16F, cols, rows, 0, gl.RED, gl.FLOAT, floatElev);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -521,7 +513,7 @@ export class WebGLMapRenderer {
     maxR: number
   ) {
     const gl = this.gl;
-    if (!gl || !this.elevationTexture || !this.byteElev || cols !== this.currentCols || rows !== this.currentRows) {
+    if (!gl || !this.elevationTexture || !this.floatElev || cols !== this.currentCols || rows !== this.currentRows) {
       this.updateGridTextures(grid, cols, rows);
       return;
     }
@@ -535,13 +527,16 @@ export class WebGLMapRenderer {
     const subH = clampedMaxR - clampedMinR + 1;
     if (subW <= 0 || subH <= 0) return;
 
-    const subBuffer = new Uint8Array(subW * subH);
+    const subBuffer = new Float32Array(subW * subH);
+    const floatElev = this.floatElev;
     let subIdx = 0;
     for (let r = clampedMinR; r <= clampedMaxR; r++) {
       const rowOffset = r * cols;
       for (let c = clampedMinC; c <= clampedMaxC; c++) {
-        const val = Math.max(0, Math.min(255, Math.round(grid[rowOffset + c] * 2.55)));
-        this.byteElev[rowOffset + c] = val;
+        let val = grid[rowOffset + c] * 0.01;
+        if (val < 0) val = 0;
+        else if (val > 1) val = 1;
+        floatElev[rowOffset + c] = val;
         subBuffer[subIdx++] = val;
       }
     }
@@ -556,7 +551,7 @@ export class WebGLMapRenderer {
       subW,
       subH,
       gl.RED,
-      gl.UNSIGNED_BYTE,
+      gl.FLOAT,
       subBuffer
     );
   }

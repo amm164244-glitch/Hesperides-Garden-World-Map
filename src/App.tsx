@@ -68,6 +68,7 @@ import { RegionManagerModal } from './components/RegionManagerModal';
 import { RegionSelector } from './components/RegionSelector';
 import { SymbolPalette } from './components/SymbolPalette';
 import { BiomePalette } from './components/BiomePalette';
+import { buildWaterGrid } from './utils/waterGrid';
 import { PixelArtStudioModal } from './components/PixelArtStudioModal';
 import { ImageToPixelModal } from './components/ImageToPixelModal';
 import { ImageToTerrainModal, CroppedTerrainResult } from './components/ImageToTerrainModal';
@@ -627,6 +628,23 @@ export default function App() {
     }
     return mapData.lakes || [];
   }, [activeRegionId, mapData.regionalMaps, mapData.lakes]);
+
+  // Rasterized water grid for water-aware rendering and biome/symbol placement
+  const currentWaterGrid = useMemo(() => {
+    const cols = activeRegionalMap ? activeRegionalMap.gridCols : mapData.gridCols;
+    const rows = activeRegionalMap ? activeRegionalMap.gridRows : mapData.gridRows;
+    const w = activeRegionalMap ? activeRegionalMap.width : mapData.width;
+    const h = activeRegionalMap ? activeRegionalMap.height : mapData.height;
+    return buildWaterGrid(cols, rows, w, h, currentRivers, currentLakes);
+  }, [
+    activeRegionalMap,
+    mapData.gridCols,
+    mapData.gridRows,
+    mapData.width,
+    mapData.height,
+    currentRivers,
+    currentLakes,
+  ]);
 
   // Update rivers for the currently active map (World or Regional)
   const handleUpdateRivers = useCallback(
@@ -1383,6 +1401,35 @@ export default function App() {
     [currentSymbols, handleCommitHistory, handleUpdateSymbols]
   );
 
+  // Apply auto-generated biomes and symbols together with single-step undo history
+  const handleApplyBiomeAndSymbols = useCallback(
+    (newBiomeGrid: Uint8Array, newSymbols: MapSymbolInstance[], description: string) => {
+      const currentBiome = activeRegionalMap ? activeRegionalMap.biomeGrid : mapData.biomeGrid;
+      const biomeChanges: { gridIndex: number; prev: number; next: number }[] = [];
+      if (currentBiome) {
+        for (let i = 0; i < newBiomeGrid.length; i++) {
+          if (currentBiome[i] !== newBiomeGrid[i]) {
+            biomeChanges.push({ gridIndex: i, prev: currentBiome[i], next: newBiomeGrid[i] });
+            currentBiome[i] = newBiomeGrid[i];
+          }
+        }
+      }
+      handleCommitHistory({
+        description,
+        timestamp: Date.now(),
+        biomeChanges: biomeChanges.length > 0 ? biomeChanges : undefined,
+        symbolChanges: {
+          prevSymbols: currentSymbols,
+          newSymbols,
+        },
+      });
+      handleUpdateSymbols(newSymbols);
+      setSelectedSymbolId(null);
+      setMapData((prev) => ({ ...prev }));
+    },
+    [activeRegionalMap, mapData, currentSymbols, handleCommitHistory, handleUpdateSymbols]
+  );
+
   // Apply town objects with undo history record
   const handleApplyTownObjectsWithHistory = useCallback(
     (newObjects: TownObject[], description: string) => {
@@ -2121,6 +2168,8 @@ export default function App() {
               existingSymbols={currentSymbols}
               onApplySymbols={handleApplyAutoSymbols}
               activeRegionId={activeRegionId}
+              waterGrid={currentWaterGrid}
+              onApplyBiomeAndSymbols={handleApplyBiomeAndSymbols}
             />
           </div>
         )}

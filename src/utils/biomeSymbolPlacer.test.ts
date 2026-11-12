@@ -775,3 +775,97 @@ test('15. Integration test: dryRun estimation count strictly matches actual plac
   );
 });
 
+test('16. waterGrid excludes symbols from river and lake cells (waterGrid >= 128)', () => {
+  const setup = createTestSetup();
+  const waterGrid = new Uint8Array(setup.gridCols * setup.gridRows);
+
+  // Mark center band of slot 1 quadrant (r: 10..20, c: 0..31) as a river (waterGrid = 255)
+  for (let r = 10; r <= 20; r++) {
+    for (let c = 0; c < 32; c++) {
+      waterGrid[r * setup.gridCols + c] = 255;
+    }
+  }
+
+  const result = placeBiomeSymbols({
+    ...setup,
+    waterGrid,
+    seed: 55443,
+    edgeFade: 0,
+    targetSlots: [1],
+    dryRun: false,
+  });
+
+  assert(result.symbols.length > 0, 'Symbols should be placed on land outside the water grid');
+
+  // Verify that no symbol is placed in the river cells
+  for (const sym of result.symbols) {
+    const c = Math.floor((sym.x / setup.mapWidth) * setup.gridCols);
+    const r = Math.floor((sym.y / setup.mapHeight) * setup.gridRows);
+    const idx = r * setup.gridCols + c;
+    assert(
+      waterGrid[idx] < 128,
+      `Symbol at (${sym.x}, ${sym.y}) (grid ${c}, ${r}) was placed on water cell!`
+    );
+  }
+});
+
+test('17. ridgeWeight prioritizes mountain ridge placement and scaleByElevation increases size at higher peaks', () => {
+  const setup = createTestSetup();
+
+  // Create a sharp ridge in slot 1: row 16 has elev 90, surrounding rows 10..22 have elev 50
+  for (let c = 0; c < 32; c++) {
+    setup.elevationGrid[16 * setup.gridCols + c] = 90;
+  }
+
+  const ridgeBiome: BiomeType = {
+    slot: 1,
+    name: '山脈',
+    color: '#8c7f74',
+    symbols: [
+      {
+        kind: 'builtin',
+        symbolType: 'mountain_rock',
+        weight: 10,
+        scaleMin: 0.8,
+        scaleMax: 1.2,
+        scaleByElevation: true,
+      },
+    ],
+    density: 80,
+    minDistance: 8,
+    flipRandom: true,
+    ridgeWeight: 0.8,
+  };
+
+  const result = placeBiomeSymbols({
+    ...setup,
+    biomeTypes: [ridgeBiome],
+    targetSlots: [1],
+    seed: 42195,
+    edgeFade: 0,
+  });
+
+  assert(result.symbols.length > 0, 'Symbols should be placed on ridge');
+
+  // Symbols near row 16 (ridge, elev 90) should have larger scale than symbols near row 2 (elev 50)
+  const highElevSymbols = result.symbols.filter((s) => {
+    const r = Math.floor((s.y / setup.mapHeight) * setup.gridRows);
+    return r >= 15 && r <= 17;
+  });
+  const lowElevSymbols = result.symbols.filter((s) => {
+    const r = Math.floor((s.y / setup.mapHeight) * setup.gridRows);
+    return r <= 5;
+  });
+
+  assert(highElevSymbols.length > 0, 'Should place symbols along the high ridge');
+  if (lowElevSymbols.length > 0) {
+    const avgHighScale = highElevSymbols.reduce((a, b) => a + b.scale, 0) / highElevSymbols.length;
+    const avgLowScale = lowElevSymbols.reduce((a, b) => a + b.scale, 0) / lowElevSymbols.length;
+    assert(
+      avgHighScale > avgLowScale,
+      `Higher elevation symbols should have larger average scale (${avgHighScale} vs ${avgLowScale})`
+    );
+  }
+});
+
+

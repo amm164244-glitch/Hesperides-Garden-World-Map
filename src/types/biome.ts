@@ -13,6 +13,7 @@ export interface BiomeSymbolRule {
   scaleMax: number;               // scaleMin 以上、3 まで(初期値 1.2)
   elevationMin?: number;          // 標高の最小値 (0〜100、任意。未設定なら制限なし)
   elevationMax?: number;          // 標高の最大値 (0〜100、任意。未設定なら制限なし)
+  scaleByElevation?: boolean;     // 標高に応じてスケールを自動調整 (山・主峰向け)
 }
 
 export interface BiomeType {
@@ -23,6 +24,7 @@ export interface BiomeType {
   density: number;                // 0〜100(%)。配置の濃さの目安。初期値 50
   minDistance: number;            // 地図座標でのシンボル間の最小距離。初期値 8、範囲 2〜60
   flipRandom: boolean;            // 左右反転をランダムにするか。初期値 true
+  ridgeWeight?: number;           // 0〜1。尾根・稜線に沿って優先配置する重み (山脈用、既定 0)
 }
 
 export const DEFAULT_BIOME_TYPES: BiomeType[] = [

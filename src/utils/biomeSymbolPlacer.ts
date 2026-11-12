@@ -11,6 +11,7 @@ export interface PlaceBiomeSymbolsParams {
   mapHeight: number;
   elevationGrid?: Float32Array;
   seaLevel: number;
+  waterGrid?: Uint8Array;
   biomeTypes: BiomeType[];
   customAssets?: CustomMapAsset[];
   targetSlots?: number[];
@@ -163,6 +164,7 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
     mapHeight,
     elevationGrid,
     seaLevel,
+    waterGrid,
     biomeTypes,
     customAssets = [],
     targetSlots = [],
@@ -277,6 +279,10 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
       for (let c = 0; c < gridCols; c++) {
         const idx = rowOff + c;
         if (biomeGrid[idx] === slot) {
+          // Exclude rivers and lakes
+          if (waterGrid && waterGrid[idx] >= 128) {
+            continue;
+          }
           const elev = elevationGrid ? elevationGrid[idx] : 50;
           if (elev >= seaLevel) {
             mask[idx] = 1;
@@ -425,8 +431,41 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
         break;
       }
 
-      // Density check: density / 100
-      const densityProb = (b.density ?? 50) / 100;
+      // Ridge weight & density check
+      const w = Math.max(0, Math.min(1, b.ridgeWeight ?? 0));
+      let ridgeFactor = 1.0;
+
+      if (w > 0 && elevationGrid) {
+        const c = Math.max(0, Math.min(gridCols - 1, Math.floor((pt.x / mapWidth) * gridCols)));
+        const r = Math.max(0, Math.min(gridRows - 1, Math.floor((pt.y / mapHeight) * gridRows)));
+        const cellElev = elevationGrid[r * gridCols + c];
+
+        // Sample 8 surrounding points in a circle of radius 6 cells to find local average
+        const rad = 6;
+        let sum = 0;
+        let validSamples = 0;
+        const offsets = [
+          [rad, 0], [-rad, 0], [0, rad], [0, -rad],
+          [4, 4], [-4, 4], [4, -4], [-4, -4]
+        ];
+        for (let oIdx = 0; oIdx < offsets.length; oIdx++) {
+          const sc = c + offsets[oIdx][0];
+          const sr = r + offsets[oIdx][1];
+          if (sc >= 0 && sc < gridCols && sr >= 0 && sr < gridRows) {
+            sum += elevationGrid[sr * gridCols + sc];
+            validSamples++;
+          }
+        }
+        const localAvg = validSamples > 0 ? sum / validSamples : cellElev;
+        const elevDiff = cellElev - localAvg;
+        const ridgeness = elevDiff > 0 ? smoothstep(0, 7.0, elevDiff) : 0;
+
+        // Modulate candidate acceptance probability along mountain ridges
+        ridgeFactor = (1 - w * 0.8) + (w * 2.3) * ridgeness;
+      }
+
+      const baseDensity = (b.density ?? 50) / 100;
+      const densityProb = Math.min(1.0, baseDensity * ridgeFactor);
       if (rng.next() >= densityProb) {
         continue;
       }
@@ -481,7 +520,25 @@ export function placeBiomeSymbols(params: PlaceBiomeSymbolsParams): PlaceBiomeSy
 
       const scaleMin = chosenRule.scaleMin ?? 0.8;
       const scaleMax = chosenRule.scaleMax ?? 1.2;
-      const scale = scaleMin + rng.next() * (scaleMax - scaleMin);
+      let scale = scaleMin + rng.next() * (scaleMax - scaleMin);
+
+      if (chosenRule.scaleByElevation) {
+        let t = 0.5;
+        if (
+          chosenRule.elevationMin !== undefined &&
+          chosenRule.elevationMax !== undefined &&
+          chosenRule.elevationMax > chosenRule.elevationMin
+        ) {
+          t = Math.max(0, Math.min(1, (cellElev - chosenRule.elevationMin) / (chosenRule.elevationMax - chosenRule.elevationMin)));
+        } else if (chosenRule.elevationMin !== undefined) {
+          t = Math.max(0, Math.min(1, (cellElev - chosenRule.elevationMin) / Math.max(1, 100 - chosenRule.elevationMin)));
+        } else {
+          t = Math.max(0, Math.min(1, (cellElev - seaLevel) / Math.max(1, 100 - seaLevel)));
+        }
+        const baseScale = scaleMin + t * (scaleMax - scaleMin);
+        const jitter = 1 + (rng.next() * 0.16 - 0.08); // ±8% natural variation
+        scale = baseScale * jitter;
+      }
       const flipX = b.flipRandom ? rng.next() < 0.5 : false;
       const rotation = -0.06 + rng.next() * 0.12;
       const variant = Math.floor(rng.next() * 3);

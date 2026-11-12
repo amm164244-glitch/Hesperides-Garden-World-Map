@@ -874,12 +874,15 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
     showRipples,
   ]);
 
+  const renderWebGLRef = useRef(renderWebGL);
+  renderWebGLRef.current = renderWebGL;
+
   // Re-render WebGL when viewport or view settings change
   useEffect(() => {
     renderWebGL();
   }, [renderWebGL]);
 
-  // Update textures when target map or water bodies change, and immediately re-render WebGL
+  // Update textures ONLY when target map data or water bodies change
   useEffect(() => {
     if (rendererRef.current) {
       rendererRef.current.updateGridTextures(
@@ -888,9 +891,9 @@ export const MapCanvas: React.FC<MapCanvasProps> = ({
         currentRows,
         waterGrid
       );
-      renderWebGL();
+      renderWebGLRef.current();
     }
-  }, [currentElevation, currentCols, currentRows, waterGrid, renderWebGL]);
+  }, [currentElevation, currentCols, currentRows, waterGrid]);
 
   // Biome color lookup table for dynamic custom biome slots (1-255)
   const biomeColorTable = useMemo(() => {

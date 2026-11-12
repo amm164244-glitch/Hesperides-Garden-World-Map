@@ -11,6 +11,8 @@ import {
   MapPin,
   ChevronDown,
   ChevronUp,
+  Wand2,
+  Mountain,
 } from 'lucide-react';
 import { BiomeType } from '../types/biome';
 import { CustomMapAsset, MapSymbolInstance } from '../types/symbols';
@@ -26,6 +28,11 @@ import {
   PlacementWorkerRequest,
   PlacementWorkerResponse,
 } from '../workers/placementWorker';
+import {
+  generateBiomeGridFromTerrain,
+  calculateLandElevPercentiles,
+} from '../utils/biomeAutoGenerator';
+import { applyDefaultRulesToBiomeTypes } from '../utils/biomeTypes';
 
 export interface BiomePlacePanelProps {
   selectedBiomeId: number;
@@ -42,6 +49,12 @@ export interface BiomePlacePanelProps {
   existingSymbols: MapSymbolInstance[];
   onApplySymbols: (symbols: MapSymbolInstance[], description: string) => void;
   activeRegionId: string | null;
+  waterGrid?: Uint8Array;
+  onApplyBiomeAndSymbols?: (
+    newBiomeGrid: Uint8Array,
+    newSymbols: MapSymbolInstance[],
+    description: string
+  ) => void;
 }
 
 const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
@@ -59,9 +72,12 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
   existingSymbols,
   onApplySymbols,
   activeRegionId,
+  waterGrid,
+  onApplyBiomeAndSymbols,
 }) => {
   // Panel collapsed state
   const [isSectionOpen, setIsSectionOpen] = useState<boolean>(true);
+  const [regenerateBiomeFromTerrain, setRegenerateBiomeFromTerrain] = useState<boolean>(true);
 
   // Settings State
   const [targetType, setTargetType] = useState<'all' | 'selected'>('all');
@@ -190,13 +206,17 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
       const region = computeVisibleRegion();
 
       const worker = getOrCreateWorker();
+      const percentiles = elevationGrid ? calculateLandElevPercentiles(elevationGrid, seaLevel, waterGrid) : undefined;
+      const populatedBiomeTypes = applyDefaultRulesToBiomeTypes(biomeTypes, seaLevel, percentiles);
 
       if (worker) {
         // Safe transferable copy of grids to prevent detachment of caller arrays
         const biomeCopy = new Uint8Array(activeBiomeGrid);
         const elevCopy = elevationGrid ? new Float32Array(elevationGrid) : undefined;
+        const waterCopy = waterGrid ? new Uint8Array(waterGrid) : undefined;
         const transferables: Transferable[] = [biomeCopy.buffer];
         if (elevCopy) transferables.push(elevCopy.buffer);
+        if (waterCopy) transferables.push(waterCopy.buffer);
 
         const req: PlacementWorkerRequest = {
           id: `dryRun_${reqId}`,
@@ -208,7 +228,8 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             mapHeight,
             elevationGrid: elevCopy,
             seaLevel,
-            biomeTypes,
+            waterGrid: waterCopy,
+            biomeTypes: populatedBiomeTypes,
             customAssets,
             targetSlots,
             region,
@@ -252,7 +273,8 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             mapHeight,
             elevationGrid,
             seaLevel,
-            biomeTypes,
+            waterGrid,
+            biomeTypes: populatedBiomeTypes,
             customAssets,
             targetSlots,
             region,
@@ -283,6 +305,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
     activeBiomeGrid,
     elevationGrid,
     seaLevel,
+    waterGrid,
     gridCols,
     gridRows,
     mapWidth,
@@ -324,6 +347,8 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
 
       const reqId = ++activeReqIdRef.current;
       const region = computeVisibleRegion();
+      const percentiles = elevationGrid ? calculateLandElevPercentiles(elevationGrid, seaLevel, waterGrid) : undefined;
+      const populatedBiomeTypes = applyDefaultRulesToBiomeTypes(biomeTypes, seaLevel, percentiles);
 
       const worker = getOrCreateWorker();
 
@@ -331,8 +356,10 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
         // Transferable copies
         const biomeCopy = new Uint8Array(activeBiomeGrid);
         const elevCopy = elevationGrid ? new Float32Array(elevationGrid) : undefined;
+        const waterCopy = waterGrid ? new Uint8Array(waterGrid) : undefined;
         const transferables: Transferable[] = [biomeCopy.buffer];
         if (elevCopy) transferables.push(elevCopy.buffer);
+        if (waterCopy) transferables.push(waterCopy.buffer);
 
         const req: PlacementWorkerRequest = {
           id: `place_${reqId}`,
@@ -344,7 +371,8 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             mapHeight,
             elevationGrid: elevCopy,
             seaLevel,
-            biomeTypes,
+            waterGrid: waterCopy,
+            biomeTypes: populatedBiomeTypes,
             customAssets,
             targetSlots,
             region,
@@ -422,7 +450,8 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               mapHeight,
               elevationGrid,
               seaLevel,
-              biomeTypes,
+              waterGrid,
+              biomeTypes: populatedBiomeTypes,
               customAssets,
               targetSlots,
               region,
@@ -458,6 +487,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
       activeBiomeGrid,
       elevationGrid,
       seaLevel,
+      waterGrid,
       gridCols,
       gridRows,
       mapWidth,
@@ -476,6 +506,124 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
       onApplySymbols,
     ]
   );
+
+  // One-Click: Auto-generate biome grid and place mountain and forest symbols from terrain
+  const handleAutoGenerateTerrainSymbols = useCallback(() => {
+    if (!elevationGrid) return;
+
+    setIsPlacing(true);
+    setProgressInfo({ progress: 10, message: '地形解析 & バイオーム準備中...' });
+    setStatusMessage(null);
+
+    setTimeout(() => {
+      try {
+        const percentiles = calculateLandElevPercentiles(elevationGrid, seaLevel, waterGrid);
+        const populatedBiomeTypes = applyDefaultRulesToBiomeTypes(biomeTypes, seaLevel, percentiles);
+
+        let targetBiomeGrid: Uint8Array;
+        if (regenerateBiomeFromTerrain || !activeBiomeGrid) {
+          setProgressInfo({ progress: 25, message: '地形からバイオームを自動分類中...' });
+          targetBiomeGrid = generateBiomeGridFromTerrain({
+            elevationGrid,
+            gridCols,
+            gridRows,
+            seaLevel,
+            mapWidth,
+            mapHeight,
+            waterGrid,
+            seed,
+            latitudeMode: activeRegionId ? 'uniform' : 'planet',
+            availableSlots: populatedBiomeTypes.map((b) => b.slot),
+            existingBiomeGrid: activeBiomeGrid,
+            preservePainted: false,
+          });
+        } else {
+          targetBiomeGrid = activeBiomeGrid;
+        }
+
+        setProgressInfo({ progress: 45, message: '山脈と森林のシンボルを自動配置中...' });
+
+        // Mountain and forest target slots: 7 (Rock/Mountain), 1 (Conifer), 2 (Broadleaf), 4 (Desert)
+        const targetSlotsToPlace = [7, 1, 2, 4];
+        const region = computeVisibleRegion();
+
+        const result = placeBiomeSymbols({
+          biomeGrid: targetBiomeGrid,
+          gridCols,
+          gridRows,
+          mapWidth,
+          mapHeight,
+          elevationGrid,
+          seaLevel,
+          waterGrid,
+          biomeTypes: populatedBiomeTypes,
+          customAssets,
+          targetSlots: targetSlotsToPlace,
+          region,
+          existingSymbols,
+          mode: 'replace',
+          seed,
+          edgeFade,
+          maxCount,
+          dryRun: false,
+          onProgress: (p, msg) => {
+            setProgressInfo({ progress: 45 + Math.round(p * 0.5), message: msg });
+          },
+        });
+
+        const placedCount = result.stats.totalPlaced;
+
+        // Apply with atomic Undo history
+        if (regenerateBiomeFromTerrain && onApplyBiomeAndSymbols) {
+          onApplyBiomeAndSymbols(
+            targetBiomeGrid,
+            result.symbols,
+            `地形から山・森を自動配置 (${placedCount}個)`
+          );
+        } else {
+          onApplySymbols(
+            result.symbols,
+            `地形から山・森を自動配置 (${placedCount}個)`
+          );
+        }
+
+        setIsPlacing(false);
+        setProgressInfo(null);
+        setStatusMessage({
+          text: `自動配置完了: ${placedCount}個の山・森シンボルを配置しました。(Undo可能)`,
+          type: 'success',
+        });
+      } catch (err: any) {
+        console.error('Auto terrain symbol placement failed:', err);
+        setIsPlacing(false);
+        setProgressInfo(null);
+        setStatusMessage({
+          text: `自動配置エラー: ${err?.message || '不明なエラー'}`,
+          type: 'error',
+        });
+      }
+    }, 20);
+  }, [
+    elevationGrid,
+    seaLevel,
+    waterGrid,
+    biomeTypes,
+    regenerateBiomeFromTerrain,
+    activeBiomeGrid,
+    gridCols,
+    gridRows,
+    mapWidth,
+    mapHeight,
+    seed,
+    activeRegionId,
+    computeVisibleRegion,
+    customAssets,
+    existingSymbols,
+    edgeFade,
+    maxCount,
+    onApplyBiomeAndSymbols,
+    onApplySymbols,
+  ]);
 
   // Execute deletion of auto-placed symbols
   const handleExecuteDeleteAuto = useCallback(() => {
@@ -523,13 +671,63 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
 
       {isSectionOpen && (
         <div className="flex flex-col gap-2.5 pt-1">
-          {/* Missing Biome Grid Warning */}
-          {!hasBiomeGrid && (
+          {/* One-Button Auto-Generate Terrain Symbols */}
+          <div className="bg-gradient-to-b from-amber-950/70 to-stone-900/90 border border-amber-600/60 p-2.5 rounded-lg flex flex-col gap-2 shadow-inner">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-amber-300 text-xs flex items-center gap-1.5">
+                <Wand2 className="w-3.5 h-3.5 text-amber-400" />
+                <span>地形から山・森を自動配置</span>
+              </span>
+              <span className="text-[10px] text-amber-400/90 bg-amber-950/70 px-1.5 py-0.5 rounded border border-amber-700/60 font-medium">
+                1クリック
+              </span>
+            </div>
+
+            <p className="text-[10.5px] text-stone-300 leading-relaxed">
+              標高・斜面・緯度・水域からバイオームを判定し、尾根沿いに連なる山脈と平野の森林を自動配置します。
+            </p>
+
+            <label className="flex items-center gap-2 cursor-pointer select-none text-[11px] text-stone-200 hover:text-white pt-0.5">
+              <input
+                type="checkbox"
+                checked={regenerateBiomeFromTerrain}
+                onChange={(e) => setRegenerateBiomeFromTerrain(e.target.checked)}
+                className="rounded bg-stone-800 border-stone-600 text-amber-500 focus:ring-0 w-3.5 h-3.5 accent-amber-500 cursor-pointer"
+              />
+              <span>バイオームを地形から再生成</span>
+            </label>
+
+            <button
+              type="button"
+              disabled={!elevationGrid || isPlacing}
+              onClick={handleAutoGenerateTerrainSymbols}
+              className={`w-full py-2 px-3 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition ${
+                !elevationGrid || isPlacing
+                  ? 'bg-stone-800 text-stone-500 cursor-not-allowed border border-stone-800'
+                  : 'bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 active:from-amber-700 active:to-amber-600 text-stone-950 border border-amber-300 shadow-amber-950/40 cursor-pointer'
+              }`}
+            >
+              {isPlacing ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>地形解析 & 配置中...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-stone-950" />
+                  <span>地形から山・森を自動配置 (Undo可能)</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Missing Biome Grid Warning for manual custom placement */}
+          {!hasBiomeGrid && !regenerateBiomeFromTerrain && (
             <div className="bg-amber-950/50 border border-amber-600/70 p-2 rounded-lg flex items-start gap-1.5 text-amber-200 text-[11px] leading-relaxed">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold block">このマップには地形タイプが塗られていません</span>
-                <span>上部のブラシやバケツで地形タイプを塗ってから実行してください。</span>
+                <span className="font-semibold block">手動配置用の地形タイプが塗られていません</span>
+                <span>上部の「地形から山・森を自動配置」を実行するか、ブラシで塗ってください。</span>
               </div>
             </div>
           )}
