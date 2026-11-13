@@ -2168,6 +2168,7 @@ export default function App() {
               gridRows={activeRegionalMap ? activeRegionalMap.gridRows : mapData.gridRows}
               mapWidth={activeRegionalMap ? activeRegionalMap.width : mapData.width}
               mapHeight={activeRegionalMap ? activeRegionalMap.height : mapData.height}
+              seed={mapData.seed}
               viewport={viewport}
               existingSymbols={currentSymbols}
               onApplySymbols={handleApplyAutoSymbols}

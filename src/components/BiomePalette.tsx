@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   Paintbrush,
   PaintBucket,
@@ -11,11 +11,14 @@ import {
   Check,
   AlertTriangle,
   Palette,
+  Sparkles,
+  Loader2,
 } from 'lucide-react';
 import { BiomeType, DEFAULT_BIOME_TYPES } from '../types/biome';
 import { BrushMode, Viewport } from '../types/map';
 import { CustomMapAsset, CustomSymbolCategory, MapSymbolInstance } from '../types/symbols';
 import { BiomePlacePanel } from './BiomePlacePanel';
+import { generateBiomeGridFromTerrain } from '../utils/biomeAutoGenerator';
 
 export interface BiomePaletteProps {
   brushMode: BrushMode;
@@ -48,6 +51,7 @@ export interface BiomePaletteProps {
   gridRows?: number;
   mapWidth?: number;
   mapHeight?: number;
+  seed?: number;
   viewport?: Viewport;
   existingSymbols?: MapSymbolInstance[];
   onApplySymbols?: (symbols: MapSymbolInstance[], description: string) => void;
@@ -87,6 +91,7 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
   gridRows,
   mapWidth,
   mapHeight,
+  seed = 42,
   viewport,
   existingSymbols,
   onApplySymbols,
@@ -97,8 +102,58 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
   customCategories,
 }) => {
   const [showConfirmClear, setShowConfirmClear] = useState<boolean>(false);
+  const [isGeneratingBiome, setIsGeneratingBiome] = useState<boolean>(false);
   const activeBiomeTypes = biomeTypes && biomeTypes.length > 0 ? biomeTypes : DEFAULT_BIOME_TYPES;
   const currentBiome = activeBiomeTypes.find((b) => b.slot === selectedBiomeId);
+
+  const handleAutoClassifyBiomeGrid = useCallback(() => {
+    if (!elevationGrid || !onApplyBiomeAndSymbols) return;
+
+    setIsGeneratingBiome(true);
+    setTimeout(() => {
+      try {
+        const newGrid = generateBiomeGridFromTerrain({
+          elevationGrid,
+          gridCols: gridCols ?? 1024,
+          gridRows: gridRows ?? 512,
+          seaLevel: seaLevel ?? 35,
+          mapWidth: mapWidth ?? 2000,
+          mapHeight: mapHeight ?? 1000,
+          waterGrid,
+          seed,
+          latitudeMode: activeRegionId ? 'uniform' : 'planet',
+          availableSlots: activeBiomeTypes.map((b) => b.slot),
+          existingBiomeGrid: activeBiomeGrid,
+          preservePainted: false,
+        });
+
+        // Apply new biome grid without modifying symbols
+        onApplyBiomeAndSymbols(
+          newGrid,
+          existingSymbols ?? [],
+          '地形からバイオームを自動分類 (塗り)'
+        );
+      } catch (err) {
+        console.error('Failed to auto classify biome grid:', err);
+      } finally {
+        setIsGeneratingBiome(false);
+      }
+    }, 20);
+  }, [
+    elevationGrid,
+    onApplyBiomeAndSymbols,
+    gridCols,
+    gridRows,
+    seaLevel,
+    mapWidth,
+    mapHeight,
+    waterGrid,
+    seed,
+    activeRegionId,
+    activeBiomeTypes,
+    activeBiomeGrid,
+    existingSymbols,
+  ]);
 
   return (
     <div className="w-80 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-2.5rem)] overflow-y-auto bg-stone-900/95 backdrop-blur-md text-stone-200 p-3 rounded-xl border border-stone-700/80 shadow-2xl flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-150">
@@ -118,6 +173,33 @@ const BiomePaletteComponent: React.FC<BiomePaletteProps> = ({
           <X className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Direct One-Click Auto-Classify Terrain Biome (Coloring Only) */}
+      {elevationGrid && onApplyBiomeAndSymbols && (
+        <button
+          type="button"
+          disabled={isGeneratingBiome}
+          onClick={handleAutoClassifyBiomeGrid}
+          className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-sm border ${
+            isGeneratingBiome
+              ? 'bg-stone-800 text-stone-500 border-stone-700 cursor-not-allowed'
+              : 'bg-emerald-950/70 hover:bg-emerald-900/90 text-emerald-300 hover:text-emerald-100 border-emerald-600/70 hover:border-emerald-500 active:bg-emerald-950 cursor-pointer shadow-emerald-950/30'
+          }`}
+          title="標高・水・緯度から陸地を自動でバイオーム分類して色塗りします（シンボルは配置しません）"
+        >
+          {isGeneratingBiome ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+              <span>バイオーム分類中...</span>
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span>地形からバイオームを自動生成 (塗り)</span>
+            </>
+          )}
+        </button>
+      )}
 
       {/* Mode Selector (Paint / Fill / Erase) */}
       <div className="grid grid-cols-3 gap-1 bg-stone-950/70 p-1 rounded-lg border border-stone-800/80">

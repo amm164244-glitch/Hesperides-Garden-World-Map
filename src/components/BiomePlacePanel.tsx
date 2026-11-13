@@ -19,7 +19,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { BiomeSymbolRule, BiomeType } from '../types/biome';
-import { CustomMapAsset, CustomSymbolCategory, MapSymbolInstance, MapSymbolType } from '../types/symbols';
+import { CustomMapAsset, CustomSymbolCategory, MapSymbolInstance } from '../types/symbols';
 import { Viewport } from '../types/map';
 import {
   placeBiomeSymbols,
@@ -36,7 +36,7 @@ import {
   generateBiomeGridFromTerrain,
   calculateLandElevPercentiles,
 } from '../utils/biomeAutoGenerator';
-import { applyDefaultRulesToBiomeTypes, buildDefaultSymbolRules } from '../utils/biomeTypes';
+import { applyDefaultRulesToBiomeTypes } from '../utils/biomeTypes';
 
 export interface BiomePlacePanelProps {
   selectedBiomeId: number;
@@ -105,13 +105,10 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
     return biomeTypes.find((b) => b.slot === 7) || null;
   }, [biomeTypes]);
 
-  // Current mountain symbol rules (or default fallback rules if empty)
+  // Current mountain symbol rules (returns rules explicitly configured or added)
   const currentMountainRules: BiomeSymbolRule[] = useMemo(() => {
-    if (mountainBiome && mountainBiome.symbols && mountainBiome.symbols.length > 0) {
-      return mountainBiome.symbols;
-    }
-    return buildDefaultSymbolRules(7, seaLevel);
-  }, [mountainBiome, seaLevel]);
+    return mountainBiome?.symbols || [];
+  }, [mountainBiome]);
 
   // Handler to update mountain symbol rules (slot 7)
   const handleUpdateMountainRules = useCallback((newRules: BiomeSymbolRule[]) => {
@@ -143,12 +140,11 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
     handleUpdateMountainRules(nextRules);
   }, [currentMountainRules, handleUpdateMountainRules]);
 
-  // Handler to reset mountains to default rules
-  const handleResetMountainDefaults = useCallback(() => {
-    const defaultRules = buildDefaultSymbolRules(7, seaLevel);
-    handleUpdateMountainRules(defaultRules);
+  // Handler to clear mountain rules
+  const handleClearMountainRules = useCallback(() => {
+    handleUpdateMountainRules([]);
     setMountainScaleFactor(1.0);
-  }, [seaLevel, handleUpdateMountainRules]);
+  }, [handleUpdateMountainRules]);
 
   // Handler to scale mountain symbols
   const handleApplyMountainScaleMultiplier = useCallback((multiplier: number) => {
@@ -637,10 +633,30 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
           targetBiomeGrid = activeBiomeGrid;
         }
 
-        setProgressInfo({ progress: 45, message: '山脈と森林のシンボルを自動配置中...' });
+        // Target slots to place: only biomes with explicitly configured symbols
+        const targetSlotsToPlace = populatedBiomeTypes
+          .filter((b) => b.symbols && b.symbols.length > 0)
+          .map((b) => b.slot);
 
-        // Mountain and forest target slots: 7 (Rock/Mountain), 1 (Conifer), 2 (Broadleaf), 4 (Desert)
-        const targetSlotsToPlace = [7, 1, 2, 4];
+        if (targetSlotsToPlace.length === 0) {
+          // No symbols configured in any biome: update only the biome grid if requested
+          if (regenerateBiomeFromTerrain && onApplyBiomeAndSymbols) {
+            onApplyBiomeAndSymbols(
+              targetBiomeGrid,
+              existingSymbols,
+              'バイオーム自動生成'
+            );
+          }
+          setIsPlacing(false);
+          setProgressInfo(null);
+          setStatusMessage({
+            text: 'バイオームの自動生成が完了しました。（シンボル未設定のためシンボルは配置していません）',
+            type: 'success',
+          });
+          return;
+        }
+
+        setProgressInfo({ progress: 45, message: '設定済みシンボルを自動配置中...' });
         const region = computeVisibleRegion();
 
         const result = placeBiomeSymbols({
@@ -687,7 +703,7 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
         setIsPlacing(false);
         setProgressInfo(null);
         setStatusMessage({
-          text: `自動配置完了: ${placedCount}個の山・森シンボルを配置しました。(Undo可能)`,
+          text: `自動配置完了: ${placedCount}個のシンボルを配置しました。(Undo可能)`,
           type: 'success',
         });
       } catch (err: any) {
@@ -790,18 +806,20 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
                   <span>配置する山のシンボル ({currentMountainRules.length}種)</span>
                 </span>
                 <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={handleResetMountainDefaults}
-                    className="text-[10px] text-stone-400 hover:text-stone-200 px-1 py-0.5 rounded hover:bg-stone-800 transition"
-                    title="山のシンボルを標準（雪冠峰・岩峰・岩稜・丘陵）に戻す"
-                  >
-                    リセット
-                  </button>
+                  {currentMountainRules.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleClearMountainRules}
+                      className="text-[10px] text-stone-400 hover:text-stone-200 px-1.5 py-0.5 rounded hover:bg-stone-800 transition"
+                      title="山のシンボルを全消去して空にする"
+                    >
+                      クリア
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => setIsMountainPickerOpen(true)}
-                    className="text-[10px] text-amber-300 hover:text-amber-100 font-semibold px-1.5 py-0.5 rounded bg-amber-900/60 hover:bg-amber-800/80 border border-amber-600/60 transition flex items-center gap-1"
+                    className="text-[10px] text-amber-300 hover:text-amber-100 font-semibold px-1.5 py-0.5 rounded bg-amber-900/60 hover:bg-amber-800/80 border border-amber-600/60 transition flex items-center gap-1 cursor-pointer"
                   >
                     <Plus className="w-3 h-3" />
                     <span>シンボル追加</span>
@@ -810,52 +828,58 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
               </div>
 
               {/* Symbol chips list */}
-              <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-0.5">
-                {currentMountainRules.map((rule, idx) => {
-                  let label = '山シンボル';
-                  let iconThumb = '⛰️';
-                  let assetUrl: string | undefined;
+              {currentMountainRules.length === 0 ? (
+                <div className="text-[10.5px] text-stone-400 py-2 px-2.5 bg-stone-900/70 rounded-lg border border-stone-800 text-center">
+                  山のシンボルは設定されていません（「+ シンボル追加」から配置したいシンボルを追加できます）
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-0.5">
+                  {currentMountainRules.map((rule, idx) => {
+                    let label = '山シンボル';
+                    let iconThumb = '⛰️';
+                    let assetUrl: string | undefined;
 
-                  if (rule.kind === 'builtin') {
-                    const typeMap: Record<string, string> = {
-                      mountain_snow: '雪冠主峰',
-                      mountain_rock: '岩峰',
-                      mountain_ridge: '岩稜',
-                      hill_mound: '丘陵群',
-                      volcano: '火山',
-                    };
-                    label = typeMap[rule.symbolType || ''] || rule.symbolType || '山';
-                    iconThumb = rule.symbolType === 'volcano' ? '🌋' : rule.symbolType === 'hill_mound' ? '🟢' : '⛰️';
-                  } else if (rule.kind === 'custom') {
-                    const asset = customAssets.find((a) => a.id === rule.customAssetId);
-                    label = asset?.name || 'カスタム';
-                    assetUrl = asset?.dataUrl;
-                  }
+                    if (rule.kind === 'builtin') {
+                      const typeMap: Record<string, string> = {
+                        mountain_snow: '雪冠主峰',
+                        mountain_rock: '岩峰',
+                        mountain_ridge: '岩稜',
+                        hill_mound: '丘陵群',
+                        volcano: '火山',
+                      };
+                      label = typeMap[rule.symbolType || ''] || rule.symbolType || '山';
+                      iconThumb = rule.symbolType === 'volcano' ? '🌋' : rule.symbolType === 'hill_mound' ? '🟢' : '⛰️';
+                    } else if (rule.kind === 'custom') {
+                      const asset = customAssets.find((a) => a.id === rule.customAssetId);
+                      label = asset?.name || 'カスタム';
+                      assetUrl = asset?.dataUrl;
+                    }
 
-                  return (
-                    <div
-                      key={idx}
-                      className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-stone-900/90 border border-stone-700/80 text-[10.5px] text-stone-200 shadow-xs"
-                    >
-                      {assetUrl ? (
-                        <img src={assetUrl} alt={label} className="w-3.5 h-3.5 object-contain rounded-xs" />
-                      ) : (
-                        <span className="text-[11px]">{iconThumb}</span>
-                      )}
-                      <span className="truncate max-w-[70px]">{label}</span>
-                      <span className="text-[9px] text-amber-400 font-mono">w{rule.weight}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveMountainSymbol(idx)}
-                        className="text-stone-500 hover:text-rose-400 p-0.5 transition"
-                        title="この山シンボルを除外"
+                    return (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-stone-900/90 border border-stone-700/80 text-[10.5px] text-stone-200 shadow-xs"
                       >
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+                        {assetUrl ? (
+                          <img src={assetUrl} alt={label} className="w-3.5 h-3.5 object-contain rounded-xs" />
+                        ) : (
+                          <span className="text-[11px]">{iconThumb}</span>
+                        )}
+                        <span className="truncate max-w-[70px]">{label}</span>
+                        <span className="text-[9px] text-amber-400 font-mono">w{rule.weight}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveMountainSymbol(idx)}
+                          className="text-stone-500 hover:text-rose-400 p-0.5 transition"
+                          title="この山シンボルを除外"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Mountain Scale (Size) Slider */}
               <div className="flex flex-col gap-1 pt-1 border-t border-amber-900/40">
@@ -1375,53 +1399,9 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0 text-xs">
-              {/* Built-in Mountain Symbols */}
-              <div className="space-y-2">
-                <div className="font-bold text-amber-300 border-b border-stone-800 pb-1">
-                  標準の山脈・丘陵シンボル
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { type: 'mountain_snow' as MapSymbolType, name: '峻厳な雪冠主峰', icon: '🏔️', defaultMin: 0.85, defaultMax: 1.15, elevationMin: 70 },
-                    { type: 'mountain_rock' as MapSymbolType, name: '鋭利な岩峰', icon: '⛰️', defaultMin: 0.78, defaultMax: 1.05, elevationMin: 55 },
-                    { type: 'mountain_ridge' as MapSymbolType, name: '連続する岩稜', icon: '🗻', defaultMin: 0.72, defaultMax: 0.95, elevationMin: 48 },
-                    { type: 'hill_mound' as MapSymbolType, name: 'なだらかな丘陵群', icon: '🟢', defaultMin: 0.55, defaultMax: 0.80 },
-                    { type: 'volcano' as MapSymbolType, name: '孤高の火山・噴火口', icon: '🌋', defaultMin: 0.80, defaultMax: 1.10 },
-                  ].map((item) => (
-                    <button
-                      key={item.type}
-                      type="button"
-                      onClick={() => {
-                        handleAddMountainSymbol({
-                          kind: 'builtin',
-                          symbolType: item.type,
-                          weight: 5,
-                          scaleMin: Number((item.defaultMin * mountainScaleFactor).toFixed(2)),
-                          scaleMax: Number((item.defaultMax * mountainScaleFactor).toFixed(2)),
-                          elevationMin: item.elevationMin,
-                          scaleByElevation: item.elevationMin !== undefined,
-                        });
-                        setIsMountainPickerOpen(false);
-                      }}
-                      className="flex items-center gap-2 p-2 bg-stone-950/70 hover:bg-stone-800 border border-stone-800 hover:border-amber-500 rounded-lg text-left transition group cursor-pointer"
-                    >
-                      <span className="text-xl shrink-0">{item.icon}</span>
-                      <div className="truncate">
-                        <div className="font-semibold text-stone-200 group-hover:text-amber-200 truncate">
-                          {item.name}
-                        </div>
-                        <div className="text-[10px] text-stone-500 font-mono">
-                          {item.defaultMin}x 〜 {item.defaultMax}x
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               {/* Custom Registered / Imported Symbols */}
-              {customAssets.length > 0 && (
-                <div className="space-y-2 pt-2 border-t border-stone-800">
+              {customAssets.length > 0 ? (
+                <div className="space-y-2">
                   <div className="flex items-center justify-between font-bold text-emerald-300 border-b border-stone-800 pb-1">
                     <span className="flex items-center gap-1.5">
                       <ImageIcon className="w-3.5 h-3.5" />
@@ -1463,6 +1443,13 @@ const BiomePlacePanelComponent: React.FC<BiomePlacePanelProps> = ({
                       </button>
                     ))}
                   </div>
+                </div>
+              ) : (
+                <div className="p-6 text-center text-stone-400 bg-stone-950/50 border border-stone-800 rounded-xl space-y-2">
+                  <p className="font-semibold text-stone-200">登録されたカスタムシンボルがありません</p>
+                  <p className="text-[11px] text-stone-400 leading-relaxed">
+                    シンボルスタジオや画像インポートからシンボルを登録すると、ここに表示されて山脈に配置できるようになります。
+                  </p>
                 </div>
               )}
             </div>

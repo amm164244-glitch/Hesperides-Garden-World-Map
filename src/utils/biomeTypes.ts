@@ -282,179 +282,34 @@ export interface LandElevPercentilesLike {
  * Builds default symbol placement rules for standard biome types.
  * Generates natural fantasy-map style parameters (overlapping ridges, mountain peaks, clustered trees).
  */
+/**
+ * Builds default symbol placement rules for standard biome types.
+ * Symbols are never auto-injected by default. Users explicitly configure or choose symbols.
+ */
 export function buildDefaultSymbolRules(
-  slot: number,
-  seaLevel: number = 35,
-  percentiles?: LandElevPercentilesLike
+  _slot: number,
+  _seaLevel: number = 35,
+  _percentiles?: LandElevPercentilesLike
 ): BiomeSymbolRule[] {
-  const p70 = percentiles?.p70 ?? 25;
-  const p88 = percentiles?.p88 ?? 45;
-  const p96 = percentiles?.p96 ?? 60;
-
-  switch (slot) {
-    case 7: {
-      // Rocky Mountain: High peaks, main peaks, connecting ridges, and foothill mounds
-      return [
-        {
-          kind: 'builtin',
-          symbolType: 'mountain_snow',
-          weight: 4,
-          scaleMin: 0.85,
-          scaleMax: 1.15,
-          elevationMin: Number((seaLevel + p88 * 0.90).toFixed(1)),
-          elevationMax: Number((seaLevel + p96).toFixed(1)),
-          scaleByElevation: true,
-        },
-        {
-          kind: 'builtin',
-          symbolType: 'mountain_rock',
-          weight: 6,
-          scaleMin: 0.78,
-          scaleMax: 1.05,
-          elevationMin: Number((seaLevel + p70 * 0.70).toFixed(1)),
-          elevationMax: Number((seaLevel + p96).toFixed(1)),
-          scaleByElevation: true,
-        },
-        {
-          kind: 'builtin',
-          symbolType: 'mountain_ridge',
-          weight: 5,
-          scaleMin: 0.72,
-          scaleMax: 0.95,
-          elevationMin: Number((seaLevel + p70 * 0.55).toFixed(1)),
-          elevationMax: Number((seaLevel + p88).toFixed(1)),
-          scaleByElevation: true,
-        },
-        {
-          kind: 'builtin',
-          symbolType: 'hill_mound',
-          weight: 3,
-          scaleMin: 0.55,
-          scaleMax: 0.80,
-          elevationMax: Number((seaLevel + p88).toFixed(1)),
-        },
-      ];
-    }
-    case 1: {
-      // Coniferous Forest: Individual spruce dominates; cluster trees reduced for visible gaps
-      return [
-        {
-          kind: 'builtin',
-          symbolType: 'tree_pine',
-          weight: 5,
-          scaleMin: 0.42,
-          scaleMax: 0.58,
-        },
-        {
-          kind: 'builtin',
-          symbolType: 'tree_pine_cluster',
-          weight: 1,
-          scaleMin: 0.48,
-          scaleMax: 0.62,
-        },
-      ];
-    }
-    case 2: {
-      // Broadleaf Forest: Individual oaks dominate; cluster trees reduced for visible gaps
-      return [
-        {
-          kind: 'builtin',
-          symbolType: 'tree_oak',
-          weight: 5,
-          scaleMin: 0.42,
-          scaleMax: 0.58,
-        },
-        {
-          kind: 'builtin',
-          symbolType: 'tree_oak_cluster',
-          weight: 1,
-          scaleMin: 0.48,
-          scaleMax: 0.62,
-        },
-      ];
-    }
-    case 4: {
-      // Desert / Wasteland: Sparse dead trees
-      return [
-        {
-          kind: 'builtin',
-          symbolType: 'tree_dead',
-          weight: 2,
-          scaleMin: 0.45,
-          scaleMax: 0.70,
-        },
-      ];
-    }
-    case 6: {
-      // Snow / Tundra: Sparse pine trees in sub-arctic tundra / taiga edge
-      return [
-        {
-          kind: 'builtin',
-          symbolType: 'tree_pine',
-          weight: 2,
-          scaleMin: 0.40,
-          scaleMax: 0.55,
-        },
-      ];
-    }
-    default:
-      // Slots 3 (Grassland), 5 (Wetland) have no default symbols
-      return [];
-  }
+  // All slots default to [] (no symbols auto-configured).
+  // Users must explicitly add symbol rules to biomes.
+  return [];
 }
 
 /**
- * Returns a cloned array of BiomeTypes where biomes with empty symbols
- * are populated with default rules and tuned density/minDistance parameters.
- * Biomes with existing user-configured symbols are untouched.
+ * Returns a cloned array of BiomeTypes.
+ * Biomes with existing user-configured symbols are preserved.
+ * Biomes with empty symbols remain empty (no symbols are auto-injected).
  */
 export function applyDefaultRulesToBiomeTypes(
   biomeTypes: BiomeType[],
-  seaLevel: number = 35,
-  percentiles?: LandElevPercentilesLike
+  _seaLevel: number = 35,
+  _percentiles?: LandElevPercentilesLike
 ): BiomeType[] {
   return biomeTypes.map((b) => {
-    if (b.symbols && b.symbols.length > 0) {
-      return { ...b, symbols: [...b.symbols] };
-    }
-
-    const defaultRules = buildDefaultSymbolRules(b.slot, seaLevel, percentiles);
-    if (defaultRules.length === 0) {
-      return { ...b, symbols: [] };
-    }
-
-    let defaultDensity = b.density;
-    let defaultMinDistance = b.minDistance;
-    let defaultRidgeWeight = b.ridgeWeight;
-    let defaultCoastBuffer = b.coastBuffer;
-
-    if (b.slot === 7) {
-      defaultDensity = 90;
-      defaultMinDistance = 16;
-      defaultRidgeWeight = 0.25;
-    } else if (b.slot === 1) {
-      defaultDensity = 65;
-      defaultMinDistance = 5.2;
-      defaultCoastBuffer = 12;
-    } else if (b.slot === 2) {
-      defaultDensity = 60;
-      defaultMinDistance = 5.2;
-      defaultCoastBuffer = 12;
-    } else if (b.slot === 4) {
-      defaultDensity = 15;
-      defaultMinDistance = 18;
-    } else if (b.slot === 6) {
-      defaultDensity = 6;
-      defaultMinDistance = 24;
-    }
-
     return {
       ...b,
-      symbols: defaultRules,
-      density: defaultDensity,
-      minDistance: defaultMinDistance,
-      ridgeWeight: defaultRidgeWeight ?? b.ridgeWeight,
-      coastBuffer: defaultCoastBuffer ?? b.coastBuffer,
+      symbols: b.symbols ? [...b.symbols] : [],
     };
   });
 }
